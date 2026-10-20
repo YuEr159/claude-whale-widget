@@ -74,16 +74,34 @@ test('桌面端面板能画出来，控件都在', async ($, on) => {
   expect(await ui.find({ key: 'whale-days' })).toBeUndefined()
   await ui.press({ key: 'whale-tab-models' })
   expect(await ui.find({ key: 'whale-days' })).toBeDefined()
-  await ui.press({ key: 'whale-tab-overview' })
+  // 口径与开关在「设置」页签里，概览页上不该有它们。
+  await ui.press({ key: 'whale-tab-settings' })
   expect(await ui.find({ key: 'whale-turn-cost' })).toBeDefined()
   // 口径是多选：每个口径一个 Button，不再是一个 Select。
   expect(await ui.find({ key: 'whale-metric-diff' })).toBeDefined()
   expect(await ui.find({ key: 'whale-band-toggle' })).toBeDefined()
+  // 离开了设置页，它们就不在树里——不再挂在面板最下方与三页并列。
+  await ui.press({ key: 'whale-tab-overview' })
+  expect(await ui.find({ key: 'whale-turn-cost' })).toBeUndefined()
 
   await ui.unmount()
 })
 
-test('页签与内容在同一个外框内，选中的那个换成更亮的底', async ($, on) => {
+/**
+ * 页签的可点区域必须覆盖整块可见的地方。
+ *
+ * 回归：页签曾是一个带圆角边框的 `Box` 包着一个 `Button`。引擎文档写明
+ * `Button` 在桌面端画成原生按钮，命中区只包住它自己的内容，而 Box 的边框
+ * 在按钮之外——于是「看着是个框，点上去只有文字有反应」。补内边距也没用，
+ * 那只是让内容变宽，边框仍在命中区外。
+ *
+ * 现在的做法是让按钮自己就是那块方块：外面没有任何带边框的 Box。
+ * 下面断言的就是这个结构——按钮的祖先里不许出现 `borderStyle`。
+ *
+ * （测试宿主不暴露几何信息，所以这里守的是结构前提，不是像素尺寸：
+ * 只要按钮自己承担了视觉，它画多大就能点多大。）
+ */
+test('页签与口径按钮自己就是那块方块：外面没有带边框的 Box', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -96,110 +114,86 @@ test('页签与内容在同一个外框内，选中的那个换成更亮的底',
     viewport: { columns: 100, rows: 40 },
   })
 
-  /** 从整棵树里找某个 key 的环状盒子，返回它的 props。 */
-  const boxOf = (node: any, key: string): any => {
+  /** 找 key 对应的节点，连同它的祖先链。 */
+  const pathOf = (node: any, key: string, trail: any[] = []): any[] | undefined => {
     if (!node || typeof node !== 'object') return undefined
-    if (node.props?.key === key) return node
+    const here = [...trail, node]
+    if (node.props?.key === key) return here
     for (const kid of node.children ?? []) {
-      const hit = boxOf(kid, key)
+      const hit = pathOf(kid, key, here)
       if (hit) return hit
     }
     return undefined
   }
-  const propsOf = async (key: string) => boxOf(await ui.drawn(), key)?.props
 
-  const overviewTab = await propsOf('whale-tabbox-overview')
-  const modelsTab = await propsOf('whale-tabbox-models')
-  const contextTab = await propsOf('whale-tabbox-context')
-  expect(overviewTab).toBeDefined()
-  expect(modelsTab).toBeDefined()
-  expect(contextTab).toBeDefined()
-  // 每个页签各自带一个边框；激活的那个更粗。
-  expect(overviewTab.borderStyle).toBe('bold')
-  expect(modelsTab.borderStyle).toBe('round')
-  expect(contextTab.borderStyle).toBe('round')
-  // 默认落在概览页：概览的底色更亮，另两个的是大框那一档。
-  expect(overviewTab.backgroundColor).not.toBe(modelsTab.backgroundColor)
-  const overviewActive = overviewTab.backgroundColor
+  const assertBare = async (key: string) => {
+    const path = pathOf(await ui.drawn(), key)
+    expect(path).toBeDefined()
+    const button = path![path!.length - 1]
+    // 是 Button，不是 Box。
+    expect(button.type).toBe('Button')
+    // 按钮**外面不套任何带边框的 Box**。唯一允许有边框的祖先是页签与其他页
+    // 共用的那个大框（页签本来就是它的内容）；除此之外一律不许有边框——
+    // 那正是过去那层「看着是框、点不动」的壳。
+    const outers = path!.slice(0, -1).filter(node => node.props?.borderStyle !== undefined)
+    expect(outers.length).toBeLessThanOrEqual(1)
+    if (outers.length === 1) {
+      expect(outers[0].props.borderStyle).toBe('round')
+    }
+    // 按钮自己有一块底色：未选中时也是一块方块，不是只剩文字。
+    const text = (button.children ?? []).find((kid: any) => kid && typeof kid === 'object')
+    expect(text?.props?.backgroundColor).toBeDefined()
+  }
 
+  for (const id of ['overview', 'models', 'context', 'settings']) {
+    await assertBare(`whale-tab-${id}`)
+  }
+
+  // 口径按钮同一种结构，且在设置页里。
+  await ui.press({ key: 'whale-tab-settings' })
+  for (const metric of ['window', 'cost', 'context', 'session', 'diff']) {
+    await assertBare(`whale-metric-${metric}`)
+  }
+  await assertBare('whale-turn-cost')
+  await assertBare('whale-band-toggle')
+
+  await ui.unmount()
+})
+
+test('选中的页签与未选中的都有底色，只是明暗不同', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  /** 取页签按钮里那层 Text 的 props。 */
+  const textPropsOf = async (key: string): Promise<any> => {
+    const found = await ui.find({ key })
+    const button: any = found
+    const kids = button?.children ?? []
+    const text = kids.find((kid: any) => kid && typeof kid === 'object')
+    return text?.props
+  }
+
+  const active = await textPropsOf('whale-tab-overview')
   await ui.press({ key: 'whale-tab-models' })
-  const modelsAfter = await propsOf('whale-tabbox-models')
-  const overviewAfter = await propsOf('whale-tabbox-overview')
-  // 切过去之后，亮的那一档换到了模型页签上——不是两个都亮着。
-  expect(modelsAfter.backgroundColor).toBe(overviewActive)
-  expect(modelsAfter.borderStyle).toBe('bold')
-  expect(overviewAfter.backgroundColor).not.toBe(overviewActive)
-  expect(overviewAfter.borderStyle).toBe('round')
+  const nowActive = await textPropsOf('whale-tab-models')
+  const nowIdle = await textPropsOf('whale-tab-overview')
 
-  // 第三个页签同样能切过去，且切过去之后前两个都回到未激活态。
-  await ui.press({ key: 'whale-tab-context' })
-  const contextAfter = await propsOf('whale-tabbox-context')
-  expect(contextAfter.backgroundColor).toBe(overviewActive)
-  expect((await propsOf('whale-tabbox-models')).borderStyle).toBe('round')
-
-  await ui.unmount()
-})
-
-test('页签与用量条口径按钮：框里带留白，留白在按钮的命中区里', async ($, on) => {
-  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
-
-  const ui = await $.ui.mount({
-    plugin: PLUGIN,
-    surface: 'desktop',
-    component: 'Pane',
-    requestId: 'whale',
-    props: PANE_PROPS,
-    viewport: { columns: 100, rows: 40 },
-  })
-
-  const find = (node: any, key: string): any => {
-    if (!node || typeof node !== 'object') return undefined
-    if (node.props?.key === key) return node
-    for (const kid of node.children ?? []) {
-      const hit = find(kid, key)
-      if (hit) return hit
-    }
-    return undefined
-  }
-  /** 按钮画出来的字：字符串子节点，或 `label`。 */
-  const textOf = (node: any): string => {
-    const kids = node.children ?? []
-    const str = kids.find((kid: any) => typeof kid === 'string')
-    if (typeof str === 'string') return str
-    return node.props?.label ?? ''
-  }
-
-  const tree = await ui.drawn()
-  // 页签的每个小块：Box 带边框，里面按钮的文字两侧各有一个 NBSP。
-  // 留白必须落在按钮里——写成 Box 的 paddingX 时，点在左右边缘按钮收不到。
-  for (const id of ['overview', 'models', 'context']) {
-    const box = find(tree, `whale-tabbox-${id}`)
-    expect(box).toBeDefined()
-    // Box 自己不带 paddingX：留白在按钮内部。
-    expect(box.props?.paddingX).toBeUndefined()
-    const button = find(box, `whale-tab-${id}`)
-    expect(button).toBeDefined()
-    const text = textOf(button)
-    expect(text.startsWith('\u00a0')).toBe(true)
-    expect(text.endsWith('\u00a0')).toBe(true)
-  }
-
-  // 用量条口径按钮用的是同一种小框。
-  for (const metric of ['window', 'context', 'cost', 'session', 'diff']) {
-    const box = find(tree, `chipbox-whale-metric-${metric}`)
-    expect(box).toBeDefined()
-    expect(box.props?.paddingX).toBeUndefined()
-    const button = find(box, `whale-metric-${metric}`)
-    const text = textOf(button)
-    expect(text.startsWith('\u00a0')).toBe(true)
-  }
-  // 口径按钮只有「选中」与「未选中」两种：选中的框更亮。
-  const onBox = find(tree, 'chipbox-whale-metric-window')
-  const offBox = find(tree, 'chipbox-whale-metric-diff')
-  expect(onBox.props.backgroundColor).not.toBe(offBox.props.backgroundColor)
-  expect(onBox.props.borderStyle).toBe('bold')
-  expect(offBox.props.borderStyle).toBe('round')
+  // 三块都有底色（未选中的不是「没有框」），选中的那一块底色不同、且加粗。
+  expect(active.backgroundColor).toBeDefined()
+  expect(nowIdle.backgroundColor).toBeDefined()
+  expect(nowActive.backgroundColor).toBe(active.backgroundColor)
+  expect(nowActive.bold).toBe(true)
+  expect(nowIdle.bold).toBe(false)
+  expect(nowIdle.dimColor).toBe(true)
 
   await ui.unmount()
 })
@@ -278,7 +272,8 @@ test('终端 surface 面板没有 Svg 也能画（退化成文字鲸鱼）', asy
 
   // 刷新按钮已取消：数据由定时扫描自动更新，不需要手动触发。
   expect(await ui.find({ key: 'whale-refresh' })).toBeUndefined()
-  // 终端面板该有的控件仍在。
+  // 终端面板该有的控件仍在——口径与开关现在在「设置」页签里。
+  await ui.press({ key: 'whale-tab-settings' })
   expect(await ui.find({ key: 'whale-turn-cost' })).toBeDefined()
 
   await ui.unmount()
@@ -323,12 +318,52 @@ test('用量条画出代码改动，增删各用主题的 diff 色', async ($, o
 })
 
 /**
- * 「代码改动」是一个并列口径，选中后用量条只显示改动。
+ * 默认口径（没勾「代码改动」）下，用量条不显示增删。
+ *
+ * 这是「效果反了」那条回归的另一半：旧代码在**未选中**时才画带色的增删
+ * 后缀，选中时反倒拼进纯字符串、颜色全丢。现在只有一个方向——勾上才画，
+ * 且始终带色。`+128 -34` 写不进 `totals`（宿主只允许插件的 hooks 模块写
+ * `$.state`），所以这里断言的是「不该出现」的那一半。
+ */
+test('没勾「代码改动」时用量条不显示增删', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: {
+      hasSurvey: false,
+      isWorking: false,
+      maxRows: 10,
+      bodyColumns: 100,
+      scroll: { offset: 0, bodyRows: 10 },
+      view: {},
+    },
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  // 默认只有 window 一个口径：既没有增删色，也没有 diff 文案。
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree).not.toContain('diffAdded')
+  expect(tree).not.toContain('diffRemoved')
+  expect(tree).not.toContain('本会话还没有代码改动')
+
+  await ui.unmount()
+})
+
+/**
+ * 「代码改动」选中后用量条才显示改动，且改动始终带 diffAdded / diffRemoved
+ * 两种颜色。
+ *
+ * 回归：之前写反了——选中时改动被拼进纯字符串摘要、颜色全丢，未选中时反倒
+ * 作为带色后缀出现，于是「选上反而更难读」。
  *
  * 没有改动时的那句文案是这条链路唯一可观测的产物：`totals` 在测试里写不进去
  * （宿主只允许插件的 hooks 模块写 `$.state`），所以有改动的那一半由
- * `bandSummary` / `bandDiffText` 的纯函数用例覆盖，这里验证它确实接上了
- * 渲染链路。
+ * `bandDiffText` 的纯函数用例覆盖，这里验证它确实接上了渲染链路。
  */
 test('切到「代码改动」口径后，用量条改说没有改动', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
@@ -337,6 +372,7 @@ test('切到「代码改动」口径后，用量条改说没有改动', async ($
   on('session.usage', async () => ({ value: undefined } as never))
 
   // 先经面板把口径切过去：同一份 prefs 会被用量条读到。
+  // 「代码改动」在设置页里，先翻过去。
   const pane = await $.ui.mount({
     plugin: PLUGIN,
     surface: 'desktop',
@@ -345,6 +381,7 @@ test('切到「代码改动」口径后，用量条改说没有改动', async ($
     props: PANE_PROPS,
     viewport: { columns: 120, rows: 40 },
   })
+  await pane.press({ key: 'whale-tab-settings' })
   await pane.press({ key: 'whale-metric-diff' })
   await pane.unmount()
 

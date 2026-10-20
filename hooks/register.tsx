@@ -453,22 +453,25 @@ export const register: Register = (on, options) => {
     // 这就是「随代码改动实时变化」的全部机制，不需要额外的定时器。
     const heldTotals = await $.state.get({ plugin: 'whale-usage', key: 'totals' } as const)
     const totals = heldTotals.value ?? EMPTY_TOTALS
-    const diff = { added: totals.linesAdded, removed: totals.linesRemoved }
     // 空数组按默认处理：一条空白用量条比显示得多更糟。面板侧同一份判断
     // 写在 `metrics` 那段，两处口径必须一致。
     const metrics =
       Array.isArray(prefsNow.bandMetrics) && prefsNow.bandMetrics.length > 0
         ? prefsNow.bandMetrics
         : DEFAULT_PREFS.bandMetrics
-    const summary = bandSummary(view, metrics, now, diff)
+    const summary = bandSummary(view, metrics, now)
 
     const { Box, Text, Button } = $.ui.resolve(e)
     // 注意：这里不能在 Text 里用 `<>` 或嵌套 Text。
     // 引擎的 `Fragment` 实现是「一个纵向 Box」，塞进 Text 就是
     // `Box inside an inline element`，整棵树被拒、引擎改画它自己的，
     // 用量条会直接消失。增删要分色，就在同一行里并排几个 Text。
-    // 选中「代码改动」时改动已经在 summary 里，这里不再重复追加。
+    //
+    // 「代码改动」选上之后**才有**增删，且始终带 diffAdded / diffRemoved
+    // 两种颜色。之前写反了：选中时它被拼进摘要、颜色全丢，未选中时反倒
+    // 作为后缀带着颜色出现——选上反而更难读，这就是「效果反了」。
     const showsDiff = metrics.includes('diff')
+    const hasDiff = totals.linesAdded > 0 || totals.linesRemoved > 0
     return (
       <Box
         key="whale-band"
@@ -479,12 +482,14 @@ export const register: Register = (on, options) => {
         gap={1}
       >
         <Text dimColor>{summary}</Text>
-        {/* 没选「代码改动」时把增删作为后缀。为零的一边不画
+        {/* 选上「代码改动」但还没改过：明说，不留空。 */}
+        {showsDiff && !hasDiff && <Text dimColor>本会话还没有代码改动</Text>}
+        {/* 选上才画，且两个方向各用一支色。为零的一边不画
             （`+5` 比 `+5 -0` 干净）。 */}
-        {!showsDiff && totals.linesAdded > 0 && (
+        {showsDiff && totals.linesAdded > 0 && (
           <Text color="diffAdded">{`+${totals.linesAdded}`}</Text>
         )}
-        {!showsDiff && totals.linesRemoved > 0 && (
+        {showsDiff && totals.linesRemoved > 0 && (
           <Text color="diffRemoved">{`-${totals.linesRemoved}`}</Text>
         )}
         <Button
@@ -659,7 +664,17 @@ export const register: Register = (on, options) => {
         {contextTurns.length === 0 ? (
           <Text dimColor>还没有逐轮数据</Text>
         ) : (
-          <>
+          // 图与图例一起装进一块圆角里：它们说的是同一件事（这一屏每轮的
+          // 构成），分开铺在页面底色上会像是两块碰巧挨着的内容。底色比
+          // 大框深一档，读起来是「嵌进去的一块」，而不是又浮起来一层。
+          <Box
+            key="whale-context-inset"
+            flexDirection="column"
+            borderStyle="round"
+            borderColor={theme.inset.borderColor}
+            backgroundColor={theme.inset.backgroundColor}
+            paddingX={1}
+          >
             {Svg ? (
               <Svg
                 source={contextChartSvg(
@@ -698,7 +713,7 @@ export const register: Register = (on, options) => {
                 </Box>
               ))}
             </Box>
-          </>
+          </Box>
         )}
       </>
     )
@@ -725,58 +740,54 @@ export const register: Register = (on, options) => {
       </>
     )
 
-    // 页签：用量概览 / 模型分布 / 本会话上下文占比。
+    // 页签：用量概览 / 模型分布 / 本会话上下文占比 / 设置。
     //
-    // 三个页签共处一个大框，各自带一个圆角小块，选中的那个换成更亮的底与
-    // 更亮的边——不用 `[概览]` 那种方括号，因为页签本身已经有框了，再套一层
-    // 括号会像双重边框。
+    // **不要在外面套带边框的 Box**。引擎文档写明 `Button` 在桌面端画成
+    // 原生按钮，命中区只包住它自己的内容；Box 的边框在按钮之外，那一圈
+    // 永远点不到——这正是「看着是个框、点上去只有文字有反应」的原因。
+    // 只补内边距没用：内容变宽了，边框仍然在命中区外。
     //
-    // 左右留白放在 **Button 内部**（children 里补 NBSP），不能写成 Box 的
-    // `paddingX`：那样 padding 落在按钮外面，点在小块的左右边缘时按钮收不到，
-    // 看起来「框大、能点的地儿小」。留白必须在按钮的命中区里。
+    // 所以按钮自己就是那块可见的方块：底色说「选中了没有」，整块都能点。
+    // 字符界面里圆角边框与整块可点不可兼得，这里选后者。
+    const tabIds = [
+      { id: 'overview', label: '用量概览' },
+      { id: 'models', label: '模型分布' },
+      { id: 'context', label: '本会话上下文占比' },
+      { id: 'settings', label: '设置' },
+    ] as const
     const pageTabs = (
       <Box flexDirection="row" gap={1} marginBottom={1} flexWrap="wrap">
-        {(
-          [
-            { id: 'overview', label: '用量概览' },
-            { id: 'models', label: '模型分布' },
-            { id: 'context', label: '本会话上下文占比' },
-          ] as const
-        ).map(tab => {
+        {tabIds.map(tab => {
           const isActive = page === tab.id
           return (
-            <Box
-              key={`whale-tabbox-${tab.id}`}
-              // 激活态三处一起变：底色往亮走、边框换更亮的一档、边框再变粗。
-              // 只用底色不够——浅色主题下往白走最多到 #ffffff，与未激活的
-              // #e3e7f7 只差 1.23，几乎看不出来。
-              borderStyle={isActive ? 'bold' : 'round'}
-              borderColor={isActive ? theme.tabActive.borderColor : fill.borderColor}
-              backgroundColor={
-                isActive ? theme.tabActive.backgroundColor : fill.backgroundColor
-              }
+            <Button
+              key={`whale-tab-${tab.id}`}
+              plain
+              label={tab.label}
+              onPress={() => {
+                void (async () => {
+                  const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                  await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                    ...(latest.value ?? DEFAULT_PREFS),
+                    panelPage: tab.id,
+                  })
+                })()
+              }}
             >
-              <Button
-                key={`whale-tab-${tab.id}`}
-                plain
-                label={tab.label}
+              {/* 左右各一格 NBSP 留白（普通空格会被裁掉），落在按钮命中区里。
+                  未选中的也有底色——它仍然是一块方块，只是暗下去，而不是
+                  「框不见了、只剩文字」。 */}
+              <Text
+                backgroundColor={
+                  isActive ? theme.tabActive.backgroundColor : fill.backgroundColor
+                }
+                color={isActive ? theme.tabActive.borderColor : undefined}
                 dimColor={!isActive}
-                onPress={() => {
-                  void (async () => {
-                    const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                      ...(latest.value ?? DEFAULT_PREFS),
-                      panelPage: tab.id,
-                    })
-                  })()
-                }}
+                bold={isActive}
               >
-                {/* 左右各 1 格留白（U+00A0，普通空格会被裁掉），落在按钮自己的
-                    命中区里。用字符串而不是 `<Text dimColor>`：Button 的 dimColor
-                    管的就是自己画出来的字，再套一层 Text 会让高亮回不来。 */}
                 {' ' + tab.label + ' '}
-              </Button>
-            </Box>
+              </Text>
+            </Button>
           )
         })}
       </Box>
@@ -997,26 +1008,48 @@ export const register: Register = (on, options) => {
               </Text>
               {modelRange}
             </Box>
-            {Svg ? (
-              <Svg
-                source={modelStackSvg(stack.bars, modelChartWidth, stack.yMax, stack.models, chart, grain)}
-                alt={modelStackCaption(stack.bars, grain)}
-                width={modelChartWidth}
-                height={110}
-              />
-            ) : (
+            {/* 图、图例、图注一起装进一块圆角：它们说的是同一件事（这一段
+                时间每个模型用了多少），分开铺在页面底色上会像是三块碰巧挨着
+                的内容。标题与「范围」留在外面——那是这一页的名字与控件，
+                不属于图本身。 */}
+            <Box
+              flexDirection="column"
+              borderStyle="round"
+              borderColor={theme.inset.borderColor}
+              backgroundColor={theme.inset.backgroundColor}
+              paddingX={1}
+              marginTop={1}
+            >
+              {Svg ? (
+                <Svg
+                  source={modelStackSvg(stack.bars, modelChartWidth, stack.yMax, stack.models, chart, grain)}
+                  alt={modelStackCaption(stack.bars, grain)}
+                  width={modelChartWidth}
+                  height={110}
+                />
+              ) : (
+                <Text dimColor>{modelStackCaption(stack.bars, grain)}</Text>
+              )}
+              <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
+                {stack.models.map(model => (
+                  <Box key={`whale-mlegend-${model}`} flexDirection="row" gap={1}>
+                    <Text color={modelColorOf(model)}>■</Text>
+                    <Text dimColor>{clip(model, 18)}</Text>
+                  </Box>
+                ))}
+              </Box>
               <Text dimColor>{modelStackCaption(stack.bars, grain)}</Text>
-            )}
-            <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
-              {stack.models.map(model => (
-                <Box key={`whale-mlegend-${model}`} flexDirection="row" gap={1}>
-                  <Text color={modelColorOf(model)}>■</Text>
-                  <Text dimColor>{clip(model, 18)}</Text>
-                </Box>
-              ))}
             </Box>
-            <Text dimColor>{modelStackCaption(stack.bars, grain)}</Text>
-            <Box flexDirection="column" marginTop={1}>
+            {/* 明细表单独一块圆角：它和图是两种读法（形状 vs 具体数字），
+                分开才看得出是两张表，而不是一张图拖了一条尾巴。 */}
+            <Box
+              flexDirection="column"
+              borderStyle="round"
+              borderColor={theme.inset.borderColor}
+              backgroundColor={theme.inset.backgroundColor}
+              paddingX={1}
+              marginTop={1}
+            >
               {/* 表头与数据行共用同一组列宽，所以各列能对齐。 */}
               <Box flexDirection="row" gap={1}>
                 <Text dimColor>{padCell('模型', nameWidth + 2)}</Text>
@@ -1039,28 +1072,34 @@ export const register: Register = (on, options) => {
         )}
       </>
     )
-    // 小框按钮：与上面的页签同一套语言——圆角小块、激活时底色变亮 + 边框
-    // 变粗变亮。行内还有其他元素，所以「留白」放在 Button 的 children 里，
-    // 不能写成 Box 的 paddingX（那样 padding 会落在命中区外面）。
+    // 小框按钮：与页签同一套做法——按钮自己就是那块可见的方块，外面不套
+    // 带边框的 Box。Box 的边框落在按钮命中区之外，点上去只有文字有反应。
+    //
+    // 选中与未选中都保留底色，区别在明暗：未选中也仍是一块方块，只是暗下去。
+    // 之前未选中时只剩文字、框（哪怕画着）点不动，看起来像「只是把颜色剥夺了」。
     const chip = (
       key: string,
       label: string,
       isActive: boolean,
       onPress: () => void,
     ) => (
-      <Box
-        key={`chipbox-${key}`}
-        borderStyle={isActive ? 'bold' : 'round'}
-        borderColor={isActive ? theme.tabActive.borderColor : fill.borderColor}
-        backgroundColor={isActive ? theme.tabActive.backgroundColor : fill.backgroundColor}
-      >
-        <Button key={key} plain label={label} dimColor={!isActive} onPress={onPress}>
+      <Button key={key} plain label={label} onPress={onPress}>
+        <Text
+          backgroundColor={isActive ? theme.tabActive.backgroundColor : fill.backgroundColor}
+          color={isActive ? theme.tabActive.borderColor : undefined}
+          dimColor={!isActive}
+          bold={isActive}
+        >
           {' ' + label + ' '}
-        </Button>      </Box>
+        </Text>
+      </Button>
     )
 
-    const controls = (
-      <Box flexDirection="column" gap={1} marginTop={1}>
+    // 设置页：用量条口径（多选）与两个开关。它们曾排在面板最下方，
+    // 与上面的三页内容并列，读起来像第四块没名字的区域；收进「设置」页签
+    // 之后，每一块内容都归属于一个明确的页。
+    const settingsPage = (
+      <Box flexDirection="column" gap={1}>
         {/* 用量条口径是多选：每项一个方块按钮，选中的那块变亮。至少保留一项——
             全取消会让用量条变成一条空行，看起来像坏了。 */}
         <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
@@ -1083,7 +1122,7 @@ export const register: Register = (on, options) => {
           })}
         </Box>
         <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-          <Text dimColor>开关</Text>
+          <Text dimColor>面板</Text>
           {chip('whale-turn-cost', '轮次费用提示', prefsNow.isTurnCostOn ?? false, () => {
             void (async () => {
               const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
@@ -1119,7 +1158,7 @@ export const register: Register = (on, options) => {
         <Text bold>Claude 用量</Text>
         {windows}
         {session}
-        {/* 三个页签与各自内容共用一个外框：页签是这个框的「标签栏」，
+        {/* 四个页签与各自内容共用一个外框：页签是这个框的「标签栏」，
             内容是当前页的读数。它们属于同一个视觉单元，分开画成两个框会
             让人以为页签是面板级导航、内容又是另一块卡片。 */}
         <Box
@@ -1131,9 +1170,14 @@ export const register: Register = (on, options) => {
           marginTop={1}
         >
           {pageTabs}
-          {page === 'context' ? contextPage : page === 'models' ? modelsPage : overviewPage}
+          {page === 'settings'
+            ? settingsPage
+            : page === 'context'
+              ? contextPage
+              : page === 'models'
+                ? modelsPage
+                : overviewPage}
         </Box>
-        {controls}
         {/* 数据新鲜度贴在最底下：它是「上面那些数字有多可信」的脚注，
             放在开场反而挡在真正要看的数字前面。 */}
         {historyHead}

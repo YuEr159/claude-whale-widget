@@ -90,10 +90,10 @@ export function bandDiffText(diff: BandDiff | undefined): string {
  *
  * 多选时**按 `BAND_METRIC_OPTIONS` 的固定次序**拼，与勾选先后无关——条子上
  * 的数字位置一旦随点击顺序漂移，读者就得每次重新找。同一类只出现一次。
- * `diff` 是一个并列口径：选中它时把代码改动写进摘要，还没有改动就明说。
- * 其余口径下这里**不拼**改动——增删要用两种颜色区分（diffAdded /
- * diffRemoved），拼成纯字符串就没法上色了；改由调用方在同一个 Text 里
- * 用嵌套 Text 追加。
+ *
+ * `diff` 不在这里拼：增删要用两种颜色区分（diffAdded / diffRemoved），
+ * 拼成纯字符串就没法上色，选中它反而只剩一片灰字。它由调用方在同一个
+ * 行里用两个带色的 `Text` 追加，本函数只管其余口径。
  *
  * 之所以能做到「实时」：用量条在渲染时读了 `totals`，而 `$.state.set`
  * 会重绘读过该值的绘制点——Edit / Write 一写入，条子就跟着重画，
@@ -103,7 +103,6 @@ export function bandSummary(
   view: UsageView,
   metrics: readonly BandMetric[],
   now: number,
-  diff?: BandDiff,
 ): string {
   const five = pct(view.fiveHour?.percentUsed)
   const seven = pct(view.sevenDay?.percentUsed)
@@ -114,8 +113,6 @@ export function bandSummary(
 
   const one = (metric: BandMetric): string => {
     switch (metric) {
-      case 'diff':
-        return bandDiffText(diff) || '本会话还没有代码改动'
       case 'session':
         return `本会话 ${usdEstimate(view.costUsd)}`
       case 'cost':
@@ -145,6 +142,8 @@ export function bandSummary(
   const seenText = new Set<string>()
   const parts: string[] = []
   for (const option of BAND_METRIC_OPTIONS) {
+    // `diff` 由渲染层分色追加，这里跳过。
+    if (option.value === 'diff') continue
     if (!metrics.includes(option.value) || seen.has(option.value)) continue
     seen.add(option.value)
     const text = one(option.value)
@@ -169,13 +168,19 @@ export function bubbleLines(view: UsageView, now: number): string[] {
  *
  * 这几项的次序就是拼接口径的次序——读者选了「额度窗口」与「代码改动」时，
  * 条子上先出现额度、再出现改动，不会因为勾选先后而变。标签必须与
- * `bandSummary` 里 `one()` 真正画出来的内容对上，否则勾「上下文占用」却
- * 看到 `5h 23% · 7d 41%` 那种错位。
+ * `bandSummary` 里 `one()` 真正画出来的内容对上：
+ *
+ *   - `cost` 画 `上下文 62%`，所以它的标签是「上下文占用」；
+ *   - `context` 画 `5h 24% · 7d 41%`，所以它的标签是「5h + 7d」。
+ *
+ * 这两条曾经被我按相反的对应关系改错过一次，结果是勾「上下文占用」却看到
+ * 额度百分比、关掉它条子毫无变化。`tests/unit.test.ts` 里有一条断言把
+ * 每个标签和它实际画出的内容锁在一起。
  */
 export const BAND_METRIC_OPTIONS: ReadonlyArray<{ value: BandMetric; label: string }> = [
   { value: 'window', label: '额度窗口' },
-  { value: 'context', label: '上下文占用' },
-  { value: 'cost', label: '5h + 7d' },
+  { value: 'cost', label: '上下文占用' },
+  { value: 'context', label: '5h + 7d' },
   { value: 'session', label: '本会话花费' },
   { value: 'diff', label: '代码改动' },
 ]
