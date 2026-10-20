@@ -27,7 +27,7 @@ import type {
 import { costOf } from './pricing.ts'
 import { clip, pct, tokens, countdown } from './format.ts'
 import { UNPRICED, provenanceNotesFor, usdEstimate } from './provenance.ts'
-import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
 import { CHART_LEGEND, contextChartSvg, pageOf, turnChartSvg } from './chart-art.ts'
 import {
   barText,
@@ -377,9 +377,13 @@ export const register: Register = (on, options) => {
     const totals = heldTotals.value ?? EMPTY_TOTALS
     const diff = { added: totals.linesAdded, removed: totals.linesRemoved }
     const summary = bandSummary(view, prefsNow.bandMetric, now, diff)
-    const diffText = bandDiffText(diff)
 
     const { Box, Text, Button } = $.ui.resolve(e)
+    // 注意：这里不能在 Text 里用 `<>` 或嵌套 Text。
+    // 引擎的 `Fragment` 实现是「一个纵向 Box」，塞进 Text 就是
+    // `Box inside an inline element`，整棵树被拒、引擎改画它自己的，
+    // 用量条会直接消失。增删要分色，就在同一行里并排几个 Text。
+    const isDiffMetric = prefsNow.bandMetric === 'diff'
     return (
       <Box
         key="whale-band"
@@ -389,25 +393,15 @@ export const register: Register = (on, options) => {
         width={e.props.bodyColumns}
         gap={1}
       >
-        <Text dimColor>
-          {summary}
-          {/* 选中「代码改动」口径时，改动已经在 summary 里，这里不再重复。
-              其余口径下把它作为后缀，增删各用主题的 diff 色，一眼分得清。
-              为零的一边不画（`+5` 比 `+5 -0` 干净）。 */}
-          {prefsNow.bandMetric !== 'diff' && diffText !== '' ? (
-            <>
-              {'  '}
-              {totals.linesAdded > 0 && (
-                <Text color="diffAdded">{`+${totals.linesAdded}`}</Text>
-              )}
-              {totals.linesRemoved > 0 && (
-                <Text color="diffRemoved">
-                  {`${totals.linesAdded > 0 ? ' ' : ''}-${totals.linesRemoved}`}
-                </Text>
-              )}
-            </>
-          ) : null}
-        </Text>
+        <Text dimColor>{summary}</Text>
+        {/* 选中「代码改动」口径时，改动已经在 summary 里，这里不再重复。
+            其余口径下把它作为后缀。为零的一边不画（`+5` 比 `+5 -0` 干净）。 */}
+        {!isDiffMetric && totals.linesAdded > 0 && (
+          <Text color="diffAdded">{`+${totals.linesAdded}`}</Text>
+        )}
+        {!isDiffMetric && totals.linesRemoved > 0 && (
+          <Text color="diffRemoved">{`-${totals.linesRemoved}`}</Text>
+        )}
         <Button
           key="whale-open"
           plain
