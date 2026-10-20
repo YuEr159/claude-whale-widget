@@ -75,6 +75,11 @@ node --test tests/node.run.mjs          # 不依赖 CLI 的等价测试
 | 用的是第三方模型（DeepSeek、Qwen 等） | token 照常统计，金额显示「未收录模型」，不会拿官方价格硬套 |
 | 本机没有 Node | 本地历史一栏报错，其余数据照常 |
 
+## 素材来源
+
+小鲸鱼原图来自 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MIT），
+按显示尺寸重采样后内嵌进 SVG。完整署名与许可见 [NOTICE.md](NOTICE.md)。
+
 ## 隐私
 
 **这一版不读日志正文，不上传任何数据。** 详见 [PRIVACY.md](PRIVACY.md)。
@@ -102,7 +107,8 @@ claude plugin validate .
 hooks/hooks.json             入口声明
 hooks/register.tsx           全部 hook：命令、渲染、轮次、定时扫描
 hooks/usage-view.ts          纯计算：用量 → 界面文字
-hooks/whale-art.ts           SVG 小鲸鱼与表情
+hooks/whale-art.ts           小鲸鱼画面（内嵌原图 + 代码绘制的气泡）
+hooks/whale-asset.ts         原图的两档 base64 资产
 hooks/pricing.ts             官方模型价格表
 hooks/format.ts              金额 / 百分比 / 倒计时格式化
 scripts/usage-scan.mjs       本地日志聚合（由 node 执行）

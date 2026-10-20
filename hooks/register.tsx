@@ -212,7 +212,7 @@ export const register: Register = (on, options) => {
     return (
       <Box key="whale-band" flexDirection="row" alignItems="center" gap={1}>
         <Svg
-          source={whaleSvg(mood, [summary], { isAnimating: false })}
+          source={whaleSvg(mood, [summary], { isAnimating: false, isCompact: true })}
           alt={`小鲸鱼：${summary}`}
           width={46}
           height={24}
