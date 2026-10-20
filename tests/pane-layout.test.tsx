@@ -11,7 +11,7 @@ const props = (cols: number) => ({
   view: {},
 })
 
-test('宽面板用两栏：鲸鱼在左、数据在右，且鲸鱼明显放大', async ($, on) => {
+test('面板里鲸鱼固定在右下角，且在控制行之后', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -25,23 +25,25 @@ test('宽面板用两栏：鲸鱼在左、数据在右，且鲸鱼明显放大',
   })
 
   const tree = await ui.drawn() as any
-  // 顶层是纵向 Box，第一个子元素是横向 Box（两栏）
   expect(tree.type).toBe('Box')
   expect(tree.props.flexDirection).toBe('column')
-  const row = tree.children[0]
-  expect(row.type).toBe('Box')
-  expect(row.props.flexDirection).toBe('row')
 
-  // 左栏里有 Svg，且宽度比原来的 150 大
-  const svg = await ui.find({ type: 'Svg' })
+  // 最后一行是靠右的横向 Box，里面只有鲸鱼
+  const kids = tree.children ?? []
+  const last = kids[kids.length - 1]
+  expect(last?.type).toBe('Box')
+  expect(last?.props?.flexDirection).toBe('row')
+  expect(last?.props?.justifyContent).toBe('flex-end')
+
+  const svg = last?.children?.find((kid: any) => kid?.type === 'Svg')
   expect(svg).toBeDefined()
-  const w = Number(svg?.props.width)
+  const w = Number(svg?.props?.width)
   expect(w).toBeGreaterThan(150)
 
   await ui.unmount()
 })
 
-test('窄面板退回单列，鲸鱼仍按宽度缩放', async ($, on) => {
+test('窄面板同样是鲸鱼在最后一行靠右', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -56,9 +58,11 @@ test('窄面板退回单列，鲸鱼仍按宽度缩放', async ($, on) => {
 
   const tree = await ui.drawn() as any
   expect(tree.props.flexDirection).toBe('column')
-  // 单列时第一层子元素不该是横向两栏
-  const row = tree.children[0]
-  expect(row.type).toBe('Text') // 标题在最上
+
+  const kids = tree.children ?? []
+  const last = kids[kids.length - 1]
+  expect(last?.props?.justifyContent).toBe('flex-end')
+  expect(last?.children?.some((kid: any) => kid?.type === 'Svg')).toBe(true)
 
   await ui.unmount()
 })

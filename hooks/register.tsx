@@ -307,15 +307,10 @@ export const register: Register = (on, options) => {
     // 收窄 e.surface 后，元素表才是该 surface 的确切类型。
     if (e.surface !== 'desktop') {
       const { Box, Text, Button } = $.ui.resolve(e)
-      // 终端没有图形元素：文字靠右，鲸鱼用 emoji 占位
+      // 终端没有图形元素：文字靠左，鲸鱼 emoji 单独占最左一格。
       return (
-        <Box
-          key="whale-band"
-          flexDirection="row"
-          alignItems="center"
-          justifyContent="flex-end"
-          gap={1}
-        >
+        <Box key="whale-band" flexDirection="row" alignItems="center" gap={1}>
+          <Text>{emblemOf(mood)}</Text>
           <Text dimColor>{summary}</Text>
           <Button
             key="whale-open"
@@ -323,36 +318,35 @@ export const register: Register = (on, options) => {
             label="面板"
             onPress={() => void $.ui.open({ id: PANE, title: '小鲸鱼' })}
           />
-          <Text>{emblemOf(mood)}</Text>
         </Box>
       )
     }
 
     const { Box, Text, Button, Svg } = $.ui.resolve(e)
 
-    // 鲸鱼排在最右：整行撑满 bodyColumns 后靠右对齐，鲸鱼就是这一行最靠右
-    // 的元素，紧贴输入框上方区域的右下角。
+    // 鲸鱼单独占左侧一块，压在输入框左下角——也就是原生小章鱼的位置。
+    // 摘要文字放到右边，两者之间用 flexGrow 撑开，鲸鱼不会被文字挤动。
     return (
       <Box
         key="whale-band"
         flexDirection="row"
         alignItems="center"
-        justifyContent="flex-end"
         width={e.props.bodyColumns}
         gap={1}
       >
+        <Svg
+          source={whaleSvg(mood, [summary], { isAnimating: false, isCompact: true })}
+          alt={`小鲸鱼：${summary}`}
+          width={46}
+          height={24}
+        />
+        <Box key="whale-band-fill" flexGrow={1} />
         <Text dimColor>{summary}</Text>
         <Button
           key="whale-open"
           plain
           label="面板"
           onPress={() => void $.ui.open({ id: PANE, title: '小鲸鱼' })}
-        />
-        <Svg
-          source={whaleSvg(mood, [summary], { isAnimating: false, isCompact: true })}
-          alt={`小鲸鱼：${summary}`}
-          width={46}
-          height={24}
         />
       </Box>
     )
@@ -397,11 +391,10 @@ export const register: Register = (on, options) => {
     const data = record.data
     const today = data?.today
 
-    // 宽面板用两栏（鲸鱼左、数据右），窄面板退回单列。
+    // 面板尺寸：鲸鱼固定在右下角，宽度按面板宽度缩放但不吃掉整行。
+    // Svg 的 width/height 是 CSS 像素，bodyColumns 是字符列；等宽字体一列约 8px。
     const width = e.props.bodyColumns
     const isWide = width >= 60
-    // Svg 的 width/height 是 CSS 像素，bodyColumns 是字符列；等宽字体一列约 8px。
-    // 两栏时鲸鱼占左栏约 45%，单列时可占到 80%，最后夹在 150–300px 之间。
     const pxWidth = width * 8
     const byColumns = Math.floor(isWide ? pxWidth * 0.45 : pxWidth * 0.8)
     const whaleWidth = Math.max(150, Math.min(byColumns, 300))
@@ -721,23 +714,23 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // 两栏：左鲸鱼、右数据；单列：鲸鱼在上、数据在下。
-    // 详细视图把「按模型」「上下文明细」接在本地历史之后，控制行始终留在最下。
+    // 鲸鱼固定在面板右下角：数据一栏在上，鲸鱼独占最后一行并靠右。
+    // 详细视图把「按模型」「上下文明细」接在本地历史之后，控制行留在数据与鲸鱼之间。
     if (isWide) {
       return (
         <Box flexDirection="column">
-          <Box flexDirection="row" gap={2} alignItems="flex-start">
-            <Box flexDirection="column">{whale}</Box>
-            <Box flexDirection="column" flexGrow={1}>
-              <Text bold>Claude 用量</Text>
-              {windows}
-              {session}
-              {byModelSection}
-              {contextSection}
-              {history}
-            </Box>
+          <Box flexDirection="column">
+            <Text bold>Claude 用量</Text>
+            {windows}
+            {session}
+            {byModelSection}
+            {contextSection}
+            {history}
           </Box>
           {controls}
+          <Box flexDirection="row" justifyContent="flex-end" width="100%">
+            {whale}
+          </Box>
         </Box>
       )
     }
@@ -745,15 +738,15 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Text bold>Claude 用量</Text>
-        <Box flexDirection="row" alignItems="center" gap={1}>
-          {whale}
-        </Box>
         {windows}
         {session}
         {byModelSection}
         {contextSection}
         {history}
         {controls}
+        <Box flexDirection="row" justifyContent="flex-end" width="100%">
+          {whale}
+        </Box>
       </Box>
     )
   })

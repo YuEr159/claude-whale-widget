@@ -11,7 +11,7 @@ const PROPS = {
   view: {},
 } as const
 
-test('常驻条撑满整行并把鲸鱼排在最右', async ($, on) => {
+test('常驻条撑满整行，鲸鱼压在左侧——原生小章鱼的位置', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -24,19 +24,22 @@ test('常驻条撑满整行并把鲸鱼排在最右', async ($, on) => {
   })
 
   const tree = await ui.drawn() as any
-  // 外层 Box 必须撑满 bodyColumns 并靠右
+  // 外层 Box 必须撑满 bodyColumns，但不再整体靠右
   expect(tree.props.width).toBe(100)
-  expect(tree.props.justifyContent).toBe('flex-end')
+  expect(tree.props.justifyContent).toBeUndefined()
 
-  // 最后一个子元素应是 Svg（鲸鱼），而不是文字或按钮
+  // 第一个子元素就是 Svg（鲸鱼），紧贴左侧
   const kids = tree.children ?? []
-  const last = kids[kids.length - 1]
-  expect(last?.type).toBe('Svg')
+  expect(kids[0]?.type).toBe('Svg')
+
+  // 其后是一个撑开空间的空 Box，把摘要推到右侧
+  const spacer = kids.find((kid: any) => kid?.type === 'Box' && kid?.props?.flexGrow === 1)
+  expect(spacer).toBeDefined()
 
   await ui.unmount()
 })
 
-test('终端版本同样靠右，鲸鱼 emoji 在最后', async ($, on) => {
+test('终端版本鲸鱼 emoji 在最左，文字随后', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -49,7 +52,9 @@ test('终端版本同样靠右，鲸鱼 emoji 在最后', async ($, on) => {
   })
 
   const tree = await ui.drawn() as any
-  expect(tree.props.justifyContent).toBe('flex-end')
+  expect(tree.props.justifyContent).toBeUndefined()
+  const kids = tree.children ?? []
+  expect(kids[0]?.type).toBe('Text')
 
   await ui.unmount()
 })
