@@ -308,20 +308,3 @@ export function windowSourceText(detail: ContextDetail): string {
     : '自动压缩已关'
   return `窗口 ${tokens(detail.rawMaxTokens)}（${source}） · ${compact}`
 }
-
-/** 面板详细程度。 */
-export type PanelDetail = 'simple' | 'detail'
-
-/** 面板里「详细程度」的选项。 */
-export const PANEL_DETAIL_OPTIONS: ReadonlyArray<{ value: PanelDetail; label: string }> = [
-  { value: 'detail', label: '详细' },
-  { value: 'simple', label: '简洁' },
-]
-
-/** 默认详细，贴近原生面板。 */
-export const DEFAULT_PANEL_DETAIL: PanelDetail = 'detail'
-
-/** 老状态里没有这个字段时按默认值读。 */
-export function detailOf(prefs: Partial<Prefs>): PanelDetail {
-  return prefs.panelDetail === 'simple' ? 'simple' : DEFAULT_PANEL_DETAIL
-}

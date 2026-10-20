@@ -11,6 +11,8 @@ import type {
   LocalDay,
   LocalModel,
   LocalOverview,
+  ModelDay,
+  ModelDayCell,
   TurnDay,
 } from '../types'
 import { tokens } from './format.ts'
@@ -210,6 +212,202 @@ export function barText(share: number, width = 12): string {
   return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`
 }
 
+// ---------------- 模型页：逐日堆叠柱 ----------------
+
+/** 模型页柱状图里最多分几段；超出部分并成「其他」。 */
+export const MODEL_STACK_KEEP = 6
+
+/** 柱内的一段：某个模型在当天占的 token。 */
+export type ModelStackSegment = {
+  model: string
+  /** 这一段 token 占当天总 token 的比例（0–1）。 */
+  ratio: number
+  tokens: number
+}
+
+/** 一根按天的模型柱。 */
+export type ModelStackBar = {
+  day: string
+  segments: ModelStackSegment[]
+  /** 当天总 token。 */
+  total: number
+}
+
+/**
+ * 把逐日逐模型用量折成堆叠柱。
+ *
+ * 段序按**窗口内的总量**降序固定下来，不按天各自排序：同一天的柱子之间要能
+ * 横向比颜色，颜色与模型的对应就必须跨天稳定。超出 `keep` 段的模型并成
+ * 「其他」，避免柱子被十几个小段切成看不清的碎片。
+ *
+ * 模型名先经 `canonicalModelName` 归并：`deepseek-flash` 与 `DeepSeek-Flash`
+ * 是同一款，分开画会让图例出现两个看起来一样的名字。
+ *
+ * @param days   逐日逐模型用量
+ * @param windowDays 一共看多少天；缺的日子补 0
+ * @param keep   最多保留几个模型，其余并入「其他」
+ */
+export function modelStackBars(
+  days: ModelDay[],
+  windowDays: number,
+  keep = MODEL_STACK_KEEP,
+): { bars: ModelStackBar[]; models: string[]; peak: number; yMax: number } {
+  if (windowDays <= 0) return { bars: [], models: [], peak: 0, yMax: 0 }
+
+  // 归并后再按天聚合：同一天里同一款模型可能有两三个写法。
+  const byDay = new Map<string, Map<string, number>>()
+  for (const item of days) {
+    let perModel = byDay.get(item.day)
+    if (!perModel) {
+      perModel = new Map()
+      byDay.set(item.day, perModel)
+    }
+    for (const cell of item.models) {
+      const tokens = Math.max(0, cell.input) + Math.max(0, cell.output)
+      if (tokens <= 0) continue
+      const name = canonicalModelName(cell.model)
+      perModel.set(name, (perModel.get(name) ?? 0) + tokens)
+    }
+  }
+
+  const anchor = days.length > 0 ? days[days.length - 1]!.day : localDayKey(new Date())
+  const anchorDate = new Date(`${anchor}T00:00:00`)
+  if (Number.isNaN(anchorDate.getTime())) return { bars: [], models: [], peak: 0, yMax: 0 }
+
+  const ordered: Array<{ day: string; cells: Map<string, number> }> = []
+  for (let offset = windowDays - 1; offset >= 0; offset -= 1) {
+    const date = new Date(anchorDate)
+    date.setDate(date.getDate() - offset)
+    const key = localDayKey(date)
+    ordered.push({ day: key, cells: byDay.get(key) ?? new Map() })
+  }
+
+  // 窗口内的模型总量决定段序与去留。
+  const totals = new Map<string, number>()
+  for (const { cells } of ordered) {
+    for (const [model, value] of cells) {
+      totals.set(model, (totals.get(model) ?? 0) + value)
+    }
+  }
+  const models = [...totals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, Math.max(1, keep))
+    .map(([model]) => model)
+  const kept = new Set(models)
+
+  const bars: ModelStackBar[] = ordered.map(({ day, cells }) => {
+    let other = 0
+    for (const [model, value] of cells) {
+      if (!kept.has(model)) other += value
+    }
+    const total = [...cells.values()].reduce((sum, value) => sum + value, 0)
+    const segments: ModelStackSegment[] = []
+    for (const model of models) {
+      const value = cells.get(model) ?? 0
+      if (value > 0) segments.push({ model, tokens: value, ratio: total > 0 ? value / total : 0 })
+    }
+    if (other > 0) {
+      segments.push({ model: '其他', tokens: other, ratio: total > 0 ? other / total : 0 })
+    }
+    return { day, segments, total }
+  })
+
+  const peak = bars.reduce((top, bar) => Math.max(top, bar.total), 0)
+  // 纵轴自适应，与上下文柱同一口径：峰值 1.1 倍向上取整到 5 的倍数。
+  const raw = peak * 1.1
+  const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))))
+  const yMax = Math.max(magnitude, Math.ceil(raw / (magnitude / 2)) * (magnitude / 2))
+  return { bars, models: [...models, ...(bars.some(bar => bar.segments.some(s => s.model === '其他')) ? ['其他'] : [])], peak, yMax }
+}
+
+/** 模型柱的图注：`最近 7 天 · 共 1.2亿 tok · 峰值 3.4千万 tok`。 */
+export function modelStackCaption(bars: ModelStackBar[]): string {
+  if (bars.length === 0) return '还没有逐模型数据'
+  const total = bars.reduce((sum, bar) => sum + bar.total, 0)
+  const peak = bars.reduce((top, bar) => Math.max(top, bar.total), 0)
+  return `最近 ${bars.length} 天 · 共 ${tokens(total)} tok · 峰值 ${tokens(peak)} tok`
+}
+
+/**
+ * 把同一款模型的几种写法归成一个展示名。
+ *
+ * 网关会给同一个模型换着写法记：`deepseek-flash`、`DeepSeek-Flash`、
+ * `deepseek-v4-flash`、`deepseek-v4-1-flash` 其实都是 Flash，拆成四行只会让
+ * 读者以为是四个不同的模型。归并按「厂商 + 档位」两级：先认出厂商，再认出
+ * 档位（flash / pro / max …），都认不出就保留原名。
+ *
+ * 返回的名字同时用作聚合键，所以必须稳定：同一种写法永远得到同一个名字。
+ */
+export function canonicalModelName(model: string): string {
+  const id = model.trim().toLowerCase()
+  if (id.length === 0) return model
+  // DeepSeek：型号中间的版本号（v4 / v4.1 / v3）对「哪一档」没有影响，去掉。
+  if (/deepseek/.test(id)) {
+    if (/flash/.test(id)) return 'DeepSeek Flash'
+    if (/\bpro\b|v4-pro/.test(id)) return 'DeepSeek Pro'
+    return 'DeepSeek'
+  }
+  if (/^glm|zhipu/.test(id)) {
+    if (/flash/.test(id)) return 'GLM Flash'
+    return 'GLM'
+  }
+  if (/^kimi|moonshot/.test(id)) return 'Kimi'
+  if (/^qwen|tongyi/.test(id)) {
+    // qwen3.8-27b 这种带参数量的写法：参数量是同一档的不同尺寸，保留，
+    // 但把前缀规整成统一大小写，免得 Qwen / qwen 分成两行。
+    const size = /(\d+b)\b/.exec(id)?.[1]
+    return size ? `Qwen ${size.toUpperCase()}` : 'Qwen'
+  }
+  return model
+}
+
+/** 模型页下方的一行：模型名、输入 / 输出 token、金额。 */
+export type ModelDetailRow = {
+  model: string
+  /** 输入 token，含缓存读写。 */
+  input: number
+  /** 输出 token。 */
+  output: number
+  /** 估算美元；`null` 表示这一款里没有任何一个有公开价格。 */
+  cost: number | null
+  /** 归并进来的原始写法，用于提示这一行代表哪几个 id。 */
+  aliases: string[]
+  messages: number
+}
+
+/**
+ * 模型页下方的明细行。
+ *
+ * 先把同一款模型的几种写法归并（见 `canonicalModelName`），再逐行给出
+ * 输入 / 输出与金额。归并后金额是把各写法的估算值相加——每个写法各按自己的
+ * 价格表算过，所以相加不会串味；全都没价才记 `null`。
+ *
+ * 输入口径与柱子的 `input` 一致（含缓存读写），这样柱子的段高与这一行的
+ * 数字能对上；分开写「缓存」会让读者在两套口径之间换算。
+ */
+export function modelDetailRows(models: LocalModel[]): ModelDetailRow[] {
+  const merged = new Map<string, ModelDetailRow>()
+  for (const entry of models) {
+    if (isPlaceholderModel(entry.model)) continue
+    const name = canonicalModelName(entry.model)
+    let row = merged.get(name)
+    if (!row) {
+      row = { model: name, input: 0, output: 0, cost: null, aliases: [], messages: 0 }
+      merged.set(name, row)
+    }
+    row.input += entry.input + entry.cacheRead + entry.cacheWrite
+    row.output += entry.output
+    row.messages += entry.messages
+    if (entry.isPriced) row.cost = (row.cost ?? 0) + entry.cost
+    if (!row.aliases.includes(entry.model)) row.aliases.push(entry.model)
+  }
+  return [...merged.values()]
+    // 有价格但这一款其实没用过（0 输入 0 输出）：金额算出来是 $0，画上去
+    // 会让人以为「免费」，其实是「没有数据」。这种情况按未收录处理。
+    .map(row => (row.cost !== null && row.input + row.output === 0 ? { ...row, cost: null } : row))
+    .sort((a, b) => b.input + b.output - (a.input + a.output))
+}
+
 /** 概览底部那一行总计：`共 47.3亿 tok · $12.34`。 */
 export function overviewFooter(overview: LocalOverview | undefined, totalCost: number): string {
   if (!overview) return '还没有统计数据'
@@ -261,18 +459,33 @@ export function contextParts(rows: ReadonlyArray<{ name: string; tokens: number;
 }
 
 /** 分类的展示名与配色键，面板与图例共用一份。 */
+/**
+ * 上下文各分类的显示名与配色。
+ *
+ * **配色以 DeepSeek 品牌蓝（#4D6BFE）为核心的冷色阶**，六个分类沿色相环
+ * 铺开、明度也各差一档，相邻两类不会糊在一起。全部落在蓝–青–紫一段，
+ * 没有黄橙红，因此与 Claude 品牌色（暖橙）形成冷暖对比，放在 Claude 的
+ * 面板里不串色。
+ *
+ * 这里给的是**十六进制而不是主题键**。主题键（如 `'claude'`）会跟随用户
+ * 主题解析成橙色之类的暖色，那正好和「冷色 + 与 Claude 色对比」的目标相反；
+ * 而且同一张图在桌面端（SVG，十六进制）与终端（主题键）会读出不同含义。
+ * 两边共用这一套固定色值，跨表面、跨主题都一致。
+ *
+ * 与 `chart-art.ts` 的 `PART_COLORS` 必须逐项相同。
+ */
 export const CONTEXT_PART_LABELS: ReadonlyArray<{
   kind: ContextPartKind
   label: string
   color: string
 }> = [
-  { kind: 'system', label: '系统提示', color: 'promptBorder' },
-  { kind: 'tools', label: '工具定义', color: 'suggestion' },
-  { kind: 'memory', label: '记忆文件', color: 'remember' },
-  { kind: 'mcp', label: 'MCP 工具', color: 'ide' },
-  { kind: 'agents', label: '自定义 agent', color: 'permission' },
-  { kind: 'messages', label: '对话消息', color: 'claude' },
-  { kind: 'other', label: '其他', color: 'subtle' },
+  { kind: 'system', label: '系统提示', color: '#A78BFA' },
+  { kind: 'tools', label: '工具定义', color: '#22C3D6' },
+  { kind: 'memory', label: '记忆文件', color: '#7AA2F7' },
+  { kind: 'mcp', label: 'MCP 工具', color: '#C084FC' },
+  { kind: 'agents', label: '自定义 agent', color: '#1E6F8C' },
+  { kind: 'messages', label: '对话消息', color: '#4D6BFE' },
+  { kind: 'other', label: '其他', color: '#7C8394' },
 ]
 
 /** 分类的展示名；未列出的键原样返回。 */
@@ -312,68 +525,112 @@ export type StackBar = {
   tokens: number
   /** 这一轮是否有分类构成；没有时柱子退回单色「已用」。 */
   hasParts: boolean
+  /** 这一轮之前刚发生过压缩：图上要在它左缘竖一条虚线。 */
+  isAfterCompact: boolean
 }
 
 /**
  * 把逐轮上下文占比折成堆叠柱。
  *
- * 每一根柱子代表一轮：柱高固定为窗口的 100%，内部按「已用 / 压缩缓冲 / 空闲」
- * 分段堆叠。这样一眼能看出两件事：柱子左侧的已用段有多高（上下文占比），
- * 以及占比随轮次的走势。
- *
  * 有构成数据（`turn.parts`）时，「已用」那一段再按内容类别细分——这正是
  * dsh-context 的核心读法：不只看到窗口满了多少，还看到被什么占满。
  * 缺构成的老记录退回单色，两种柱子可以画在同一张图里。
  *
+ * **纵轴自适应**：默认不再把每根柱子撑到窗口的 100%。那样做时每根柱子一样高，
+ * 真正想看的差别只剩柱内一小截，而下方一大片是「空闲」——既浪费画布，又要靠
+ * 颜色去分辨「没用到」。改成按这一屏的峰值定纵轴后，高柱就是用量大，
+ * 矮柱就是用量小，空出来的地方本身就在表达「还有余量」。
+ *
+ * 因此自适应模式下**不再输出 `free` 段**：它在旧几何里扮演「把柱子补满到
+ * 100%」的角色，自适应后这个角色由空白承担，再画会把柱子又撑回去。
+ *
  * @param turns      逐轮记录，按时间升序
  * @param maxBars    最多画几根（从最新的往回取）
  * @param bufferPct  压缩缓冲占窗口的百分比；未知时为 0
+ * @param options    `yMax`：纵轴上限，`'auto'` 按峰值算（默认）；给数字则用它，
+ *                   给 100 即旧行为（柱子撑满窗口，含空闲段）
  */
 export function contextStack(
   turns: ContextTurn[],
   maxBars = 24,
   bufferPct = 0,
-): { bars: StackBar[]; peak: number } {
+  options: { yMax?: number | 'auto' } = {},
+): { bars: StackBar[]; peak: number; yMax: number } {
   const recent = turns.slice(-Math.max(1, maxBars))
   const clamped = (value: number) => Math.max(0, Math.min(100, value))
 
-  const bars = recent.map(turn => {
+  // 先算出每轮「已用 + 缓冲」的合计，用来定纵轴；分段本身在同一遍里生成。
+  const rows = recent.map(turn => {
     const used = clamped(turn.percent)
     const buffer = clamped(bufferPct)
     // 已用与缓冲不能相加超过 100%，否则柱子在视觉上会溢出。
     const shownBuffer = Math.min(buffer, Math.max(0, 100 - used))
-    const free = Math.max(0, 100 - used - shownBuffer)
+    return { turn, used, shownBuffer }
+  })
 
-    const segments: StackSegment[] = []
-    const parts = turn.parts?.filter(part => part.tokens > 0) ?? []
-    if (parts.length === 0) {
-      segments.push({ ratio: used / 100, kind: 'used' })
-    } else {
-      // 用 token 占比而不是「percent 平均分」：一次请求里系统提示几十 k、
-      // 对话消息几百 k，平均分会把它们画成一样宽，正好抹掉要看的差别。
-      const partTotal = parts.reduce((sum, part) => sum + part.tokens, 0)
-      if (partTotal > 0) {
-        for (const part of parts) {
-          segments.push({ ratio: (part.tokens / partTotal) * (used / 100), kind: part.kind })
-        }
-      } else {
-        segments.push({ ratio: used / 100, kind: 'used' })
+  const rawPeak = rows.reduce((top, row) => Math.max(top, row.used + row.shownBuffer), 0)
+  const isAuto = (options.yMax ?? 'auto') === 'auto'
+
+  if (isAuto) {
+    // 纵轴上限取峰值的 1.1 倍再向上取整到 5 的倍数：最高的柱子顶到画布
+    // 九成左右，留一点头，读数不会被裁在边上。下限 10% 避免全是 0 时
+    // 除出巨大的相对高度。
+    const ceiling = Math.max(10, Math.ceil((rawPeak * 1.1) / 5) * 5)
+    const yMax = Math.min(100, ceiling)
+
+    const bars = rows.map(({ turn, used, shownBuffer }) => {
+      const segments = partSegments(turn, used, yMax)
+      if (shownBuffer > 0) segments.push({ ratio: shownBuffer / yMax, kind: 'buffer' })
+      return {
+        label: String(turn.seq),
+        segments: segments.filter(segment => segment.ratio > 0),
+        percent: used,
+        tokens: turn.tokens,
+        hasParts: (turn.parts?.filter(part => part.tokens > 0).length ?? 0) > 0,
+        isAfterCompact: turn.afterCompact === true,
       }
-    }
-    if (shownBuffer > 0) segments.push({ ratio: shownBuffer / 100, kind: 'buffer' })
-    if (free > 0) segments.push({ ratio: free / 100, kind: 'free' })
+    })
 
+    const peak = bars.reduce((top, bar) => (bar.percent > top ? bar.percent : top), 0)
+    return { bars, peak, yMax }
+  }
+
+  const yMax = Math.max(1, Math.min(100, options.yMax as number))
+  const bars = rows.map(({ turn, used, shownBuffer }) => {
+    const free = Math.max(0, 100 - used - shownBuffer)
+    const segments = partSegments(turn, used, yMax)
+    if (shownBuffer > 0) segments.push({ ratio: shownBuffer / yMax, kind: 'buffer' })
+    // 固定纵轴时才画空闲段（旧行为）：它把柱子补满，便于横向比「用了多少」。
+    if (free > 0 && yMax >= 100) segments.push({ ratio: free / yMax, kind: 'free' })
     return {
       label: String(turn.seq),
       segments: segments.filter(segment => segment.ratio > 0),
       percent: used,
       tokens: turn.tokens,
-      hasParts: parts.length > 0,
+      hasParts: (turn.parts?.filter(part => part.tokens > 0).length ?? 0) > 0,
+      isAfterCompact: turn.afterCompact === true,
     }
   })
 
   const peak = bars.reduce((top, bar) => (bar.percent > top ? bar.percent : top), 0)
-  return { bars, peak }
+  return { bars, peak, yMax }
+}
+
+/**
+ * 一轮的「已用」怎么分段：有构成就按各类 token 占比细分，没有就整段单色。
+ *
+ * 用 token 占比而不是「percent 平均分」：一次请求里系统提示几十 k、
+ * 对话消息几百 k，平均分会把它们画成一样宽，正好抹掉要看的差别。
+ */
+function partSegments(turn: ContextTurn, used: number, yMax: number): StackSegment[] {
+  const parts = turn.parts?.filter(part => part.tokens > 0) ?? []
+  if (parts.length === 0) return [{ ratio: used / yMax, kind: 'used' }]
+  const partTotal = parts.reduce((sum, part) => sum + part.tokens, 0)
+  if (partTotal <= 0) return [{ ratio: used / yMax, kind: 'used' }]
+  return parts.map(part => ({
+    ratio: (part.tokens / partTotal) * (used / yMax),
+    kind: part.kind,
+  }))
 }
 
 /**
@@ -417,16 +674,25 @@ export function rasterizeStacks(
  */
 export function stackColor(kind: StackSegment['kind'] | null): string | undefined {
   if (kind === null) return undefined
-  if (kind === 'used') return 'claude'
-  if (kind === 'buffer') return 'subtle'
-  if (kind === 'free') return 'inactive'
+  // 骨架三段也用固定色，与 SVG 侧一致：`'claude'` 会解析成橙色，
+  // 那是 Claude 的品牌色，放在这套冷色里会跳出来打架。
+  if (kind === 'used') return '#4D6BFE'
+  if (kind === 'buffer') return '#33407A'
+  if (kind === 'free') return '#23273a'
   return contextPartColor(kind)
 }
 
 /** 堆叠柱图的说明文字：`最近 24 轮 · 峰值 42%`。 */
-export function stackCaption(barCount: number, peak: number): string {
+/**
+ * 堆叠柱的说明文字：`最近 12 轮 · 峰值 46%`。
+ *
+ * `yMax` 只给终端用：那边没有 Svg，画不出左侧纵轴，纵轴上限只能写在文字里。
+ * 桌面端已经有轴上的 `0` 与上界刻度，不必再重复一次。
+ */
+export function stackCaption(barCount: number, peak: number, yMax?: number): string {
   if (barCount === 0) return '还没有逐轮数据（跑一轮对话后出现）'
-  return `最近 ${barCount} 轮 · 峰值 ${Math.round(peak)}%`
+  const axis = yMax !== undefined ? ` · 纵轴 ${Math.round(yMax)}%` : ''
+  return `最近 ${barCount} 轮 · 峰值 ${Math.round(peak)}%${axis}`
 }
 
 /** 图例的一项。 */
@@ -452,42 +718,40 @@ export function stackLegendOf(bars: StackBar[]): StackLegendItem[] {
   const items: StackLegendItem[] = []
   // 老记录没有分类构成，用单色「已用」画；它和新记录的分类柱可以同屏，
   // 所以图例里允许两者并存。
-  if (present.has('used')) items.push({ kind: 'used', label: '已用（无构成）', color: 'claude' })
+  if (present.has('used')) items.push({ kind: 'used', label: '已用（无构成）', color: '#4D6BFE' })
   for (const part of CONTEXT_PART_LABELS) {
     // `other` 是兜底键，没出现就不列；其余分类同理，出现才列。
     if (!present.has(part.kind)) continue
     items.push({ kind: part.kind, label: part.label, color: part.color })
   }
-  if (present.has('buffer')) items.push({ kind: 'buffer', label: '压缩缓冲', color: 'subtle' })
-  if (present.has('free')) items.push({ kind: 'free', label: '空闲', color: 'inactive' })
+  if (present.has('buffer')) items.push({ kind: 'buffer', label: '压缩缓冲', color: '#33407A' })
+  if (present.has('free')) items.push({ kind: 'free', label: '空闲', color: '#23273a' })
   return items
 }
 
-// ---------------- 轮次历史（GitHub 式柱状图） ----------------
+// ---------------- 轮次历史（热图矩阵） ----------------
 
-/** 一根按天的轮次柱。 */
+/** 一天的量：轮次（用户输入次数）与消息数。 */
 export type TurnBar = {
   day: string
   turns: number
-  /** 占最大值的比例，用于画柱高。 */
+  messages: number
+  /** 轮次占最大值的比例，供字符版画柱高。 */
   ratio: number
 }
 
 /**
- * 把逐日轮次折成柱状图，对应 GitHub 贡献图那一排「每天一根柱」的读法。
+ * 把逐日用量补齐成连续的日序列，给热图矩阵用。
  *
- * 与贡献图的区别：这里用**柱高**表示轮次（贡献图用色块深浅），因为高度差
- * 比深浅更容易一眼看出起伏。
+ * 热图按「色深」读数，缺的日子必须补 0 并保留一格，否则时间轴会被压缩变形。
  *
- * 缺的日子补 0，保证柱子的横向间距均匀——否则跳过的空档会让时间轴变形。
- *
- * @param days       逐日轮次
+ * @param days       逐日轮次与消息数
  * @param windowDays 一共要看多少天；不足的向前补 0
  * @param endDay     右端是哪一天（`YYYY-MM-DD`）；省略时取最后一条记录所在日
  */
 export function turnBars(days: TurnDay[], windowDays: number, endDay?: string): TurnBar[] {
   if (windowDays <= 0) return []
-  const byDay = new Map(days.map(item => [item.day, item.turns]))
+  const byDay = new Map(days.map(item => [item.day, item]))
 
   // 右端：显式指定 > 最后一次记录所在日 > 系统今天。
   const anchor = endDay ?? (days.length > 0 ? days[days.length - 1]!.day : localDayKey(new Date()))
@@ -499,57 +763,12 @@ export function turnBars(days: TurnDay[], windowDays: number, endDay?: string): 
     const date = new Date(anchorDate)
     date.setDate(date.getDate() - offset)
     const key = localDayKey(date)
-    bars.push({ day: key, turns: byDay.get(key) ?? 0, ratio: 0 })
+    const hit = byDay.get(key)
+    bars.push({ day: key, turns: hit?.turns ?? 0, messages: hit?.messages ?? 0, ratio: 0 })
   }
 
   const max = bars.reduce((top, bar) => (bar.turns > top ? bar.turns : top), 0)
   return bars.map(bar => ({ ...bar, ratio: max > 0 ? bar.turns / max : 0 }))
-}
-
-/**
- * 把轮次历史按「天」切成页，而不是按记录条数：`turnsDaily` 只含有轮次的日子，
- * 按条数切会让每页覆盖的天数忽长忽短，柱子宽窄跳动。
- *
- * `offset` 是往左（历史）翻了几页，0 表示最右边、贴住最新一天。
- */
-export function turnPages(
-  days: TurnDay[],
-  windowDays: number,
-  offset: number,
-): { endDay: string; maxOffset: number; page: number; pages: number } {
-  const size = Math.max(1, Math.floor(windowDays))
-  const today = localDayKey(new Date())
-  if (days.length === 0) {
-    return { endDay: today, maxOffset: 0, page: 1, pages: 1 }
-  }
-
-  const latest = days[days.length - 1]!.day
-  const earliest = days[0]!.day
-  const span = dayGap(earliest, latest) + 1
-  const pages = Math.max(1, Math.ceil(span / size))
-  const clamped = Math.max(0, Math.min(Math.floor(offset), pages - 1))
-  return {
-    endDay: shiftDay(latest, -clamped * size),
-    maxOffset: pages - 1,
-    page: pages - clamped,
-    pages,
-  }
-}
-
-/** 两个 `YYYY-MM-DD` 相差几天；日期非法时返回 0。 */
-function dayGap(from: string, to: string): number {
-  const a = new Date(`${from}T00:00:00`).getTime()
-  const b = new Date(`${to}T00:00:00`).getTime()
-  if (Number.isNaN(a) || Number.isNaN(b)) return 0
-  return Math.max(0, Math.round((b - a) / 86_400_000))
-}
-
-/** 把 `YYYY-MM-DD` 往前（负数）或往后挪几天。 */
-function shiftDay(day: string, delta: number): string {
-  const date = new Date(`${day}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return day
-  date.setDate(date.getDate() + delta)
-  return localDayKey(date)
 }
 
 /** 本地时区的 `YYYY-MM-DD`，与扫描脚本的切天口径一致。 */
@@ -584,10 +803,10 @@ export function rasterizeTurnBars(
   return grid
 }
 
-/** 轮次柱的历史范围说明：`最近 30 天 · 峰值 684 轮`。 */
+/** 热图的历史范围说明：`最近 180 天 · 1,234 轮 · 38,264 条消息`。 */
 export function turnBarsCaption(bars: TurnBar[]): string {
   if (bars.length === 0) return '还没有轮次数据'
-  const max = bars.reduce((top, bar) => (bar.turns > top ? bar.turns : top), 0)
-  const total = bars.reduce((sum, bar) => sum + bar.turns, 0)
-  return `最近 ${bars.length} 天 · ${total} 轮 · 峰值 ${max} 轮`
+  const turns = bars.reduce((sum, bar) => sum + bar.turns, 0)
+  const messages = bars.reduce((sum, bar) => sum + bar.messages, 0)
+  return `最近 ${bars.length} 天 · ${turns} 轮 · ${messages.toLocaleString('en-US')} 条消息`
 }

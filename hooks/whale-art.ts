@@ -144,28 +144,42 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
  * @param mood 情绪，决定气泡配色
  * @param lines 气泡里最多三行文字（第一行标签、第二行金额、第三行提示）
  * @param options `isAnimating` 为真时鲸鱼轻微上下浮动（SMIL，无需脚本）；
- *   `isBubbleOpen` 为假时整块气泡（含尾巴与小泡）不画，只留鲸鱼
+ *   `isBubbleOpen` 为假时整块气泡（含尾巴与小泡）不画，只留鲸鱼；
+ *   `isPressed` 为真时鲸鱼被压扁一点，作为按下的反馈
  */
 export function whaleSvg(
   mood: WhaleMood,
   lines: readonly string[],
-  options: { isAnimating?: boolean; isCompact?: boolean; isBubbleOpen?: boolean } = {},
+  options: {
+    isAnimating?: boolean
+    isCompact?: boolean
+    isBubbleOpen?: boolean
+    isPressed?: boolean
+  } = {},
 ): string {
   const isAnimating = options.isAnimating ?? true
   const isBubbleOpen = options.isBubbleOpen ?? true
+  const isPressed = options.isPressed ?? false
   // 常驻条很小（显示约 46×24 像素），用小图省内存；面板用大图保证清晰。
   const asset = options.isCompact ? WHALE_ASSETS.small : WHALE_ASSETS.large
   // 呼吸：整体上下浮动 ±4px。SMIL 在无脚本沙箱里也能跑。
   const float = isAnimating
     ? `<animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" dur="3.6s" repeatCount="indefinite" additive="sum"/>`
     : ''
+  // 按下的形变：以脚底中心为锚点横向撑开、纵向压扁（挤压但不失体积），
+  // 同时整体下沉一点，读起来像被手指按了一下。动画由一次状态切换驱动——
+  // 沙箱里没有脚本，不能靠 CSS `:active`，只能让插件重画一次再弹回。
+  const squeeze = isPressed
+    ? `<animateTransform attributeName="transform" type="translate" values="0 0; 0 6" dur="0.14s" fill="freeze"/>`
+    : ''
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" role="img">` +
     (isBubbleOpen ? bubbleSvg(lines, mood) : '') +
     // 鲸鱼：原图右下角贴边，尺寸 300×300。位置与气泡是否展开无关。
-    `<g transform="translate(318 16)">` +
+    `<g transform="translate(318 16)${isPressed ? ' translate(150 292) scale(1.06 0.92) translate(-150 -292)' : ''}">` +
     float +
+    squeeze +
     `<image x="0" y="0" width="300" height="300" preserveAspectRatio="xMaxYMax meet" href="data:image/png;base64,${asset}"/>` +
     `</g>` +
     `</svg>`

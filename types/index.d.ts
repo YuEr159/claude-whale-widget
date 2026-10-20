@@ -45,11 +45,14 @@ export type LocalOverview = {
   totalTokens: number
 }
 
-/** 一天的轮次（用户输入次数），给 GitHub 式的柱状图用。 */
+/** 一天的轮次与消息数，给热图矩阵用。 */
 export type TurnDay = {
   /** `YYYY-MM-DD`，本地时区。 */
   day: string
+  /** 用户真正输入的次数（不含工具结果回填）。 */
   turns: number
+  /** assistant 消息条数（按 message.id 去重）；同一轮里可能有多条。 */
+  messages?: number
 }
 
 /**
@@ -74,6 +77,14 @@ export type ContextTurn = {
   parts?: ContextPart[]
   /** 本轮窗口的总 token（即 breakdown 的 `rawMaxTokens`），给构成换算百分比用。 */
   windowTokens?: number
+  /**
+   * 这一轮之前发生过一次压缩。
+   *
+   * 压缩是两轮之间的动作，落到图上就是「这根柱子前面竖一条虚线」：压缩后
+   * 上下文会骤降，读者看到柱子突然变矮时，得能知道那是压缩造成的，而不是
+   * 自己少用了。
+   */
+  afterCompact?: boolean
 }
 
 /** 上下文中一类内容的占用。 */
@@ -100,12 +111,32 @@ export type ContextPartKind =
   | 'messages'
   | 'other'
 
+/** 某一天里一个模型的用量。 */
+export type ModelDayCell = {
+  model: string
+  /** 输入 token：新输入 + 缓存读 + 缓存写。 */
+  input: number
+  /** 输出 token。 */
+  output: number
+  /** 按价格表估算的美元；未收录价格时为 0。 */
+  cost: number
+}
+
+/** 某一天的逐模型用量；只含有用量的模型。 */
+export type ModelDay = {
+  /** `YYYY-MM-DD`，本地时区。 */
+  day: string
+  models: ModelDayCell[]
+}
+
 /** `scripts/usage-scan.mjs` 一次输出的全部内容。 */
 export type LocalUsage = {
   files: number
   overview: LocalOverview
   /** 逐日轮次；只含有轮次的日子。 */
   turnsDaily: TurnDay[]
+  /** 逐日逐模型用量，给模型页的堆叠柱状图用。 */
+  modelDaily: ModelDay[]
   windowDays: number
   today: LocalDay
   total: Omit<LocalDay, 'day'>
@@ -122,24 +153,33 @@ export type ScanRecord = {
   data: LocalUsage | null
 }
 
+/** 轮次热图的读数口径：当天轮次或当天消息数。 */
+export type HeatMetric = 'turns' | 'messages'
+
+/** 用量条能显示的数字类别；可多选，按 `BAND_METRIC_OPTIONS` 的次序拼接。 */
+export type BandMetric = 'window' | 'session' | 'cost' | 'context' | 'diff'
+
 /** 界面偏好，持久化到 `$.store`。 */
 export type Prefs = {
   /** 输入框上方的用量条是否显示。 */
   isBandVisible: boolean
-  /** 用量条里显示哪一类数字。`diff` 是代码改动行数。 */
-  bandMetric: 'window' | 'session' | 'cost' | 'context' | 'diff'
+  /**
+   * 用量条里显示哪几类数字。
+   *
+   * 多选、按固定次序拼接：读者选择「额度窗口 + 代码改动」时，条子上会同时
+   * 出现两者。空数组按「什么都不显示」处理，但界面不允许全取消——至少保留
+   * 一项，否则那条用量条就成了一条空行。
+   */
+  bandMetrics: BandMetric[]
   /** 本地历史扫描统计最近多少天。 */
   historyDays: number
   /** 是否在每轮结束后弹出本轮消耗提示（默认关，避免每轮打断）。 */
-  isTurnCostOn: boolean
-  /** 本地数据多久重新扫描一次；0 表示只在手动刷新时扫。 */
+  isTurnCostOn: boolean  /** 本地数据多久重新扫描一次；0 表示只在手动刷新时扫。 */
   scanIntervalMs: number
-  /** 面板显示详细视图还是只保留概览。 */
-  panelDetail: 'simple' | 'detail'
   /** 本地用量看哪一页：概览卡片 + 热力图，还是逐模型排行。 */
   panelPage: 'overview' | 'models'
-  /** 轮次图往左翻了多少屏；0 表示贴住最新一天。 */
-  turnOffset: number
+  /** 轮次热图的色深口径：当天轮次，还是当天消息数。 */
+  heatMetric: HeatMetric
   /** 上下文图往左翻了多少屏；0 表示贴住最新一轮。 */
   contextOffset: number
   /**
@@ -150,6 +190,13 @@ export type Prefs = {
    * 都从收起开始，界面更安静，也避免挡住下面的内容。
    */
   isBubbleOpen: boolean
+  /**
+   * 小鲸鱼此刻是否正被按下（显示压扁的形变）。
+   *
+   * 只活一瞬：点击时置真、约 140ms 后置回假。沙箱里的 SVG 没有脚本，
+   * 也不能用 CSS `:active`，所以按压反馈只能靠「改状态 → 重绘一次」实现。
+   */
+  isWhalePressed: boolean
 }
 
 /** 一轮对话的消耗（turn.complete 时记下，供提示用）。 */

@@ -68,10 +68,10 @@ test('桌面端面板能画出来，控件都在', async ($, on) => {
     viewport: { columns: 100, rows: 40 },
   })
 
-  expect(await ui.find({ key: 'whale-refresh' })).toBeDefined()
+  // 刷新按钮已取消：数据由定时扫描自动更新，不需要手动触发。
+  expect(await ui.find({ key: 'whale-refresh' })).toBeUndefined()
   expect(await ui.find({ key: 'whale-days' })).toBeDefined()
   expect(await ui.find({ key: 'whale-turn-cost' })).toBeDefined()
-  expect(await ui.find({ key: 'whale-panel-detail' })).toBeDefined()
   expect(await ui.find({ key: 'whale-metric' })).toBeDefined()
   expect(await ui.find({ key: 'whale-band-toggle' })).toBeDefined()
 
@@ -150,7 +150,10 @@ test('终端 surface 面板没有 Svg 也能画（退化成文字鲸鱼）', asy
     viewport: { columns: 100, rows: 40 },
   })
 
-  expect(await ui.find({ key: 'whale-refresh' })).toBeDefined()
+  // 刷新按钮已取消：数据由定时扫描自动更新，不需要手动触发。
+  expect(await ui.find({ key: 'whale-refresh' })).toBeUndefined()
+  // 终端面板该有的控件仍在。
+  expect(await ui.find({ key: 'whale-turn-cost' })).toBeDefined()
 
   await ui.unmount()
 })

@@ -22,8 +22,26 @@ function price(input: number, output: number): ModelPrice {
 }
 
 /**
- * 按模型 id 前缀匹配，长的排前面（claude-opus-5-5 先于 claude-opus-5）。
- * 只收录第一方官方模型；第三方中转模型不在此表，按「未计价」处理并在界面标注。
+ * 第三方模型的定价形状：缓存读价单独给，缓存写入不计费。
+ *
+ * 这一族模型的缓存折扣比例与 Anthropic 完全不同（DeepSeek 2%、Qwen 45%、
+ * Kimi 88%），所以不能套 `price()` 的 1.25x / 0.1x 换算，必须逐家给数字。
+ * 它们也都不单独收缓存写入费。
+ *
+ * @param input     输入价（美元 / 每百万 token）
+ * @param output    输出价
+ * @param cacheRead 缓存命中价
+ */
+function thirdPartyPrice(input: number, output: number, cacheRead: number): ModelPrice {
+  return { input, output, cacheRead, cacheWrite: 0 }
+}
+
+/**
+ * 按模型 id 匹配，长的排前面（claude-opus-5-5 先于 claude-opus-5）。
+ *
+ * 官方 Anthropic 模型用前缀匹配；DeepSeek 的型号名在网关里写法不统一
+ * （`deepseek-flash`、`DeepSeek-Flash`、`deepseek-v4-flash`、`DeepSeek-V4.1-Flash-1017`
+ * 都出现过），所以单独用「含 deepseek 且含 flash」的规则识别，大小写不敏感。
  */
 const TABLE: ReadonlyArray<readonly [prefix: string, price: ModelPrice]> = [
   ['claude-fable-5-1', price(10, 50)],
@@ -53,11 +71,29 @@ const TABLE: ReadonlyArray<readonly [prefix: string, price: ModelPrice]> = [
   ['claude-3-haiku', price(0.25, 1.25)],
 ]
 
-/** 返回模型价格；未收录（含第三方模型、`<synthetic>`、`auto`）返回 undefined。 */
+/** 带有独立定价规则的第三方模型；顺序即匹配优先级。 */
+const THIRD_PARTY: ReadonlyArray<readonly [test: RegExp, price: ModelPrice]> = [
+  // DeepSeek Flash（V4 Flash / V4.1 Flash）。官方价：输入 $0.15 / 输出 $0.60
+  // 每百万 token（非高峰），缓存命中 $0.003。
+  [/deepseek.*flash|flash.*deepseek/i, thirdPartyPrice(0.15, 0.6, 0.003)],
+  // Qwen3.8 27B（OpenRouter 基础价）：输入 $0.04 / 输出 $1.35 / 缓存读 $0.018。
+  // 注意缓存读是输入价的 45%，不是 Anthropic 的 10%，所以必须显式给。
+  [/qwen3\.8-27b|qwen-3\.8-27b/, thirdPartyPrice(0.04, 1.35, 0.018)],
+  // Kimi K3（OpenRouter 基础价）：输入 $0.239 / 输出 $11.936 / 缓存读 $0.21。
+  // 缓存读是输入价的 88%——Kimi 的缓存只是省一点点，不是数量级的折扣。
+  [/kimi[-_ ]?k3\b|moonshot.*k3/, thirdPartyPrice(0.239, 11.936, 0.21)],
+]
+
+/** 返回模型价格；未收录（含 `<synthetic>`、`auto`）返回 undefined。 */
 export function priceOf(model: string): ModelPrice | undefined {
   const id = model.toLowerCase()
   for (const [prefix, p] of TABLE) {
     if (id.startsWith(prefix)) return p
+  }
+  // 第三方模型没有统一的前缀写法（网关会加 `deepseek-ai/` 之类的命名空间），
+  // 所以用包含式规则，大小写不敏感。
+  for (const [test, p] of THIRD_PARTY) {
+    if (test.test(id)) return p
   }
   return undefined
 }

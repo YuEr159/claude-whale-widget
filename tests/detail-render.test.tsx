@@ -54,7 +54,7 @@ const usage = {
   cost: { usd: 2.5 },
 }
 
-test('详细面板画出原生 /usage 的各节与上下文窗口信息', async ($, on) => {
+test('面板画出原生 /usage 的额度窗口与金额', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
   // 测试环境没有 session.usage 的实现，这里补一个。
@@ -76,35 +76,31 @@ test('详细面板画出原生 /usage 的各节与上下文窗口信息', async 
   expect(tree).toContain('Current week (all models)')
   expect(tree).toContain('Current week (Sonnet only)')
 
-  // 上下文一节只留窗口上限与压缩阈值；逐行清单与 10×10 网格交给柱状图。
-  expect(tree).toContain('模型自身上限')
-  expect(tree).toContain('自动压缩于')
-  expect(tree).not.toContain('Autocompact buffer')
-  expect(tree).not.toContain('⛁')
-
   // 金额带估算标记：面板里没有一笔钱来自账单。
   expect(tree).toContain('≈$')
-  // 数据来源脚注：详细视图才出现，且只解释这一屏真正有的数字
-  //（这里没有本地扫描结果，所以不提「本地历史」）。
-  expect(tree).toContain('带 ≈ 的金额')
+  // 面板底部那三行来源脚注已经撤掉了：它们反复解释同一批数字，读者每开
+  // 一次面板都要划过去。金额的「≈」自己就说明了它是估算。
+  expect(tree).not.toContain('带 ≈ 的金额')
   expect(tree).not.toContain('上下文明细')
   expect(tree).not.toContain('本地历史')
 
-  // 记忆文件 / MCP / agent / 技能计数
-  expect(tree).toContain('记忆文件 ')
-  expect(tree).toContain('MCP 工具 ')
-  expect(tree).toContain('技能 ')
+  // 上下文那一整段文字已经删掉了：窗口上限、压缩阈值、加载项数量都不再上屏，
+  // 柱状图与热图自己说明问题。
+  expect(tree).not.toContain('模型自身上限')
+  expect(tree).not.toContain('自动压缩于')
+  expect(tree).not.toContain('记忆文件 ')
+  expect(tree).not.toContain('MCP 工具 ')
+  expect(tree).not.toContain('Autocompact buffer')
+  expect(tree).not.toContain('⛁')
 
   await ui.unmount()
 })
 
-test('切到简洁后面板不再请求 breakdown，也不再画明细', async ($, on) => {
+test('面板只有一种形态：请求 breakdown、画出额度与估算金额', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
-  mock.store(on, {})
   // 测试的 hook 不能写 `$.state`（宿主规则只允许插件的 hooks 模块写），
   // 也不能靠 hook `state.get` 预置——引擎会把那样的应答丢掉。
-  // 可靠的做法是走面板自己的控件：选中「简洁」，由插件自己写偏好、自己重绘。
   const calls: unknown[] = []
   on('session.usage', async (_: unknown, e: any) => {
     calls.push(e)
@@ -120,25 +116,15 @@ test('切到简洁后面板不再请求 breakdown，也不再画明细', async (
     viewport: { columns: 120, rows: 40 },
   })
 
-  // 初始是详细：请求了 breakdown，也画了窗口信息与来源脚注。
-  const before = JSON.stringify(await ui.drawn())
+  const tree = JSON.stringify(await ui.drawn())
+  // 面板恒为完整形态：请求 breakdown、画出额度、金额带估算标记。
   expect(calls.length).toBe(1)
   expect(JSON.stringify(calls[0])).toContain('breakdown')
-  expect(before).toContain('模型自身上限')
-  expect(before).toContain('带 ≈ 的金额')
-
-  // 切到简洁：下一次取用量不再带 breakdown，窗口信息与脚注都不再出现。
-  await ui.select({ key: 'whale-panel-detail', value: 'simple' })
-  const after = JSON.stringify(await ui.drawn())
-  expect(calls.length).toBeGreaterThan(1)
-  expect(JSON.stringify(calls[calls.length - 1])).not.toContain('breakdown')
-  expect(after).not.toContain('模型自身上限')
-  expect(after).not.toContain('带 ≈ 的金额')
-  // 金额的估算标记是数据属性，不随视图简繁改变。
-  expect(after).toContain('≈$')
-  // 额度窗口仍在，但简洁模式退回一行摘要，不再逐条列原生标题。
-  expect(after).toContain('5h')
-  expect(after).not.toContain('Current session')
+  expect(tree).toContain('≈$')
+  // 原生 /usage 的逐条窗口标题也一直列着。
+  expect(tree).toContain('Current session')
+  // 「面板详细程度」这个开关已经不存在了：不该再有那个选择器。
+  expect(await ui.find({ key: 'whale-panel-detail' })).toBeUndefined()
 
   await ui.unmount()
 })

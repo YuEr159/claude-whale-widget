@@ -6,12 +6,11 @@
 import { test, expect } from 'claude-code/testing'
 
 import { costOf, priceOf } from '../hooks/pricing'
-import { clip, countdown, pct, tokens, usd } from '../hooks/format'
+import { clip, countdown, displayWidth, padCell, pct, tokens, usd } from '../hooks/format'
 import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view'
 import {
   addModelSpend,
   countPatchLines,
-  detailOf,
   duration,
   limitRows,
   meterText,
@@ -24,8 +23,10 @@ import { WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale
 import {
   barText,
   calendarHeat,
+  canonicalModelName,
   hourLabel,
   maskModel,
+  modelDetailRows,
   modelRows,
   overviewCards,
   heatLevel,
@@ -38,10 +39,10 @@ import {
   rasterizeTurnBars,
   turnBars,
   turnBarsCaption,
-  turnPages,
 } from '../hooks/usage-overview'
-import { contextChartSvg, pageOf, turnChartSvg } from '../hooks/chart-art'
-import { UNPRICED, provenanceNotesFor, usdEstimate } from '../hooks/provenance'
+import { contextChartSvg, pageOf, turnHeatSvg } from '../hooks/chart-art'
+import { UNPRICED, usdEstimate } from '../hooks/provenance'
+import { FILLS, isLightTheme, panelFillFor } from '../hooks/panel-fill'
 
 test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -50,11 +51,57 @@ test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
   expect(Math.abs((opus?.cacheWrite ?? 0) - 5)).toBeLessThan(1e-9)
   expect(Math.abs((opus?.cacheRead ?? 0) - 0.4)).toBeLessThan(1e-9)
 
-  // 第三方模型、合成消息、通配都不该套用官方价格
-  expect(priceOf('deepseek-v4-flash')).toBeUndefined()
-  expect(priceOf('qwen3.8-27b')).toBeUndefined()
+  // 完全没有接触过的模型、合成消息、通配都不该套用任何价格
+  expect(priceOf('some-gateway-model')).toBeUndefined()
   expect(priceOf('<synthetic>')).toBeUndefined()
   expect(priceOf('auto')).toBeUndefined()
+})
+
+test('DeepSeek Flash 单独一套价格，且型号写法大小写模糊识别', () => {
+  // 官方非高峰价：输入 $0.15 / 输出 $0.60；缓存命中 $0.003，不收缓存写入费。
+  const flash = priceOf('deepseek-flash')
+  expect(flash).toBeDefined()
+  expect(flash?.input).toBe(0.15)
+  expect(flash?.output).toBe(0.6)
+  expect(flash?.cacheRead).toBe(0.003)
+  expect(flash?.cacheWrite).toBe(0)
+
+  for (const id of [
+    'DeepSeek-Flash',
+    'DEEPSEEK-FLASH',
+    'deepseek-v4-flash',
+    'DeepSeek-V4.1-Flash-1017',
+    'deepseek-ai/DeepSeek-Flash',
+  ]) {
+    expect(priceOf(id)?.input).toBe(0.15)
+  }
+  // 不是 Flash 的 DeepSeek 型号仍按未收录处理。
+  expect(priceOf('deepseek-v4-pro')).toBeUndefined()
+})
+
+test('Qwen 3.8 27B 与 Kimi K3 按 OpenRouter 基础价收录', () => {
+  const qwen = priceOf('qwen3.8-27b')
+  expect(qwen?.input).toBe(0.04)
+  expect(qwen?.output).toBe(1.35)
+  // 缓存读是输入价的 45%，不是 Anthropic 的 10%。
+  expect(qwen?.cacheRead).toBe(0.018)
+  expect(qwen?.cacheWrite).toBe(0)
+  expect(priceOf('qwen/qwen3.8-27b')?.input).toBe(0.04)
+
+  const kimi = priceOf('kimi-k3')
+  expect(kimi?.input).toBe(0.239)
+  expect(kimi?.output).toBe(11.936)
+  expect(kimi?.cacheRead).toBe(0.21)
+  expect(priceOf('moonshotai/kimi-k3')?.output).toBe(11.936)
+  expect(priceOf('Kimi-K3')?.input).toBe(0.239)
+
+  const cost = costOf('qwen3.8-27b', {
+    input: 1_000_000,
+    output: 1_000_000,
+    cacheWrite: 0,
+    cacheRead: 1_000_000,
+  })
+  expect(Math.abs((cost ?? 0) - (0.04 + 1.35 + 0.018))).toBeLessThan(1e-9)
 })
 
 test('长的模型前缀优先匹配', () => {
@@ -318,12 +365,6 @@ test('形状不对的 breakdown 返回 undefined', () => {
   expect(toContextDetail({ categories: [], rawMaxTokens: 100 })).toBeDefined()
 })
 
-test('面板详细程度：缺字段按默认详细读', () => {
-  expect(detailOf({})).toBe('detail')
-  expect(detailOf({ panelDetail: 'simple' })).toBe('simple')
-  expect(detailOf({ panelDetail: 'detail' })).toBe('detail')
-})
-
 
 test('用量条摘要按偏好切换口径', () => {
   const view = toUsageView({
@@ -335,10 +376,17 @@ test('用量条摘要按偏好切换口径', () => {
     context: { window: 1_000_000, percent: 12 },
   })
   const now = Date.parse('2026-10-20T12:00:00Z')
-  expect(bandSummary(view, 'window', now)).toContain('5h 40%')
-  expect(bandSummary(view, 'session', now)).toBe('本会话 ≈$2.00')
-  expect(bandSummary(view, 'cost', now)).toBe('上下文 12%')
-  expect(bandSummary(view, 'context', now)).toBe('5h 40% · 7d 70%')
+  expect(bandSummary(view, ['window'], now)).toContain('5h 40%')
+  expect(bandSummary(view, ['session'], now)).toBe('本会话 ≈$2.00')
+  expect(bandSummary(view, ['cost'], now)).toBe('上下文 12%')
+  expect(bandSummary(view, ['context'], now)).toBe('5h 40% · 7d 70%')
+  // 多选：按 `BAND_METRIC_OPTIONS` 的固定次序拼接，与勾选先后无关。
+  expect(bandSummary(view, ['context', 'window'], now)).toBe(
+    '5h 40% · 2h00m 后重置 · 5h 40% · 7d 70%',
+  )
+  expect(bandSummary(view, ['window', 'context', 'window'], now)).toBe(
+    '5h 40% · 2h00m 后重置 · 5h 40% · 7d 70%',
+  )
 })
 
 test('代码改动可以单独成段，其余口径不带它', () => {
@@ -351,11 +399,11 @@ test('代码改动可以单独成段，其余口径不带它', () => {
   const diff = { added: 128, removed: 34 }
 
   // 选中「代码改动」：这一条就是改动本身。
-  expect(bandSummary(view, 'diff', now, diff)).toBe('+128 -34')
+  expect(bandSummary(view, ['diff'], now, diff)).toBe('+128 -34')
   // 还没有改动时明说，不留空条。
-  expect(bandSummary(view, 'diff', now, { added: 0, removed: 0 })).toBe('本会话还没有代码改动')
+  expect(bandSummary(view, ['diff'], now, { added: 0, removed: 0 })).toBe('本会话还没有代码改动')
   // 其余口径的摘要不含改动——增删要分色，由渲染层追加，不拼进字符串。
-  expect(bandSummary(view, 'window', now, diff)).not.toContain('+128')
+  expect(bandSummary(view, ['window'], now, diff)).not.toContain('+128')
   expect(bandDiffText(diff)).toBe('+128 -34')
   expect(bandDiffText({ added: 0, removed: 0 })).toBe('')
 })
@@ -371,7 +419,7 @@ test('没有额度窗口时用量条退回上下文 + 会话花费', () => {
     cost: { usd: 0.5 },
     context: { window: 200_000, percent: 33 },
   })
-  expect(bandSummary(view, 'window', 0)).toBe('上下文 33% · 本会话 ≈$0.50')
+  expect(bandSummary(view, ['window'], 0)).toBe('上下文 33% · 本会话 ≈$0.50')
 })
 
 test('用量条口径选项覆盖全部取值', () => {
@@ -480,14 +528,17 @@ test('上下文堆叠柱：每轮一根，段内比例受夹取', () => {
     { seq: 2, percent: 55, tokens: 2000, at: 1 },
     { seq: 3, percent: 90, tokens: 3000, at: 2 },
   ]
-  const { bars, peak } = contextStack(turns, 24, 10)
+  const { bars, peak, yMax } = contextStack(turns, 24, 10)
   expect(bars).toHaveLength(3)
   expect(peak).toBe(90)
   expect(bars[0]?.percent).toBe(20)
-  // 每根柱子的分段比例之和应为 1（不含被裁掉的 0 段）
+  // 纵轴自适应：峰值 90+10=100 → ×1.1 取整到 5 的倍数 → 夹到 100。
+  expect(yMax).toBe(100)
+  // 柱子高度是「已用 + 缓冲」占纵轴的比例，不再恒为 1。
   for (const bar of bars) {
     const total = bar.segments.reduce((sum, s) => sum + s.ratio, 0)
-    expect(Math.abs(total - 1) < 1e-9).toBe(true)
+    expect(total).toBeLessThanOrEqual(1 + 1e-9)
+    expect(total).toBeGreaterThan(0)
   }
   // 已用超过 100 时被夹住，缓冲段不溢出
   const over = contextStack([{ seq: 9, percent: 130, tokens: 1, at: 0 }], 5, 10)
@@ -539,6 +590,51 @@ test('轮次柱光栅化：0 轮也画一格底，时间轴不断档', () => {
   expect(heightOf(1)).toBeGreaterThan(heightOf(0))
 })
 
+test('模型名归并：同一款模型的几种写法合成一行', () => {
+  for (const id of [
+    'deepseek-flash',
+    'DeepSeek-Flash',
+    'deepseek-v4-flash',
+    'deepseek-v4-1-flash',
+    'deepseek-ai/DeepSeek-Flash',
+  ]) {
+    expect(canonicalModelName(id)).toBe('DeepSeek Flash')
+  }
+  expect(canonicalModelName('deepseek-v4-pro')).toBe('DeepSeek Pro')
+  expect(canonicalModelName('GLM-5.3-Flash')).toBe('GLM Flash')
+  expect(canonicalModelName('GLM-5.3')).not.toBe('GLM Flash')
+  expect(canonicalModelName('kimi-k3')).toBe('Kimi')
+  // 认不出的原样保留。
+  expect(canonicalModelName('probe')).toBe('probe')
+})
+
+test('模型明细：归并后金额相加，全无价格才是 null', () => {
+  const rows = modelDetailRows([
+    { model: 'deepseek-flash', isPriced: true, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.15, messages: 10 },
+    { model: 'DeepSeek-Flash', isPriced: true, input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0, cost: 0.6, messages: 5 },
+    { model: 'qwen3.8-27b', isPriced: false, input: 500, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 1 },
+    { model: 'auto', isPriced: false, input: 900, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 9 },
+  ])
+
+  expect(rows).toHaveLength(2)
+  const flash = rows.find(row => row.model === 'DeepSeek Flash')
+  expect(flash?.input).toBe(1_000_000)
+  expect(flash?.output).toBe(1_000_000)
+  expect(Math.abs((flash?.cost ?? 0) - 0.75)).toBeLessThan(1e-9)
+  expect(rows.find(row => row.model === 'Qwen 27B')?.cost).toBeNull()
+})
+
+test('表格对齐：按显示宽度补空格，中文与英文混排也不歪', () => {
+  expect(displayWidth('模型')).toBe(4)
+  expect(displayWidth('DeepSeek Flash')).toBe(14)
+  const cells = ['模型', 'DeepSeek Flash', 'Qwen 27B', 'GLM Flash']
+  const widths = cells.map(text => displayWidth(padCell(text, 14)))
+  expect(new Set(widths).size).toBe(1)
+  expect(padCell('5', 4, 'right')).toBe('   5')
+  expect(padCell('5', 4, 'left')).toBe('5   ')
+  expect(displayWidth(clip('DeepSeek Flash', 6))).toBeLessThanOrEqual(6)
+})
+
 test('图表翻页：0 贴住最新一页，越翻越往历史走', () => {
   const items = Array.from({ length: 60 }, (_, index) => index)
   const newest = pageOf(items, 24, 0)
@@ -553,24 +649,25 @@ test('图表翻页：0 贴住最新一页，越翻越往历史走', () => {
   expect(oldest.page).toBe(1)
 })
 
-test('轮次图按天分页：窗口天数固定，右端随页移动', () => {
+test('轮次热图：窗口按天给定，缺的日子补 0', () => {
   const days = [
-    { day: '2026-09-21', turns: 3 },
-    { day: '2026-10-20', turns: 9 },
+    { day: '2026-09-21', turns: 3, messages: 30 },
+    { day: '2026-10-20', turns: 9, messages: 90 },
   ]
-  const newest = turnPages(days, 7, 0)
-  expect(newest.endDay).toBe('2026-10-20')
-  expect(newest.maxOffset).toBe(4)
-  expect(turnPages(days, 7, 1).endDay).toBe('2026-10-13')
-  expect(turnPages(days, 7, 99).page).toBe(1)
-
-  const bars = turnBars(days, 7, newest.endDay)
+  const bars = turnBars(days, 7)
   expect(bars).toHaveLength(7)
-  expect(bars[6]?.day).toBe('2026-10-20')
+  expect(bars[bars.length - 1]?.day).toBe('2026-10-20')
+  expect(bars[bars.length - 1]?.turns).toBe(9)
+  expect(bars[bars.length - 1]?.messages).toBe(90)
+  // 更长的窗口：缺的日子补 0，时间轴不断档。
+  const half = turnBars(days, 180)
+  expect(half).toHaveLength(180)
+  expect(half[half.length - 1]?.day).toBe('2026-10-20')
+  expect(half.filter(bar => bar.turns === 0)).toHaveLength(178)
 })
 
 test('两张图在空数据时也给出合法 SVG', () => {
-  for (const svg of [contextChartSvg([], 320), turnChartSvg([], 320, 7)]) {
+  for (const svg of [contextChartSvg([], 320), turnHeatSvg([], 320)]) {
     expect(svg.startsWith('<svg')).toBe(true)
     expect(svg.endsWith('</svg>')).toBe(true)
     expect(svg.includes('NaN')).toBe(false)
@@ -597,7 +694,7 @@ test('上下文分类：按行名归一，只取已用行', () => {
 })
 
 test('有构成时按内容分类堆叠，缺构成的老记录退回单色', () => {
-  const { bars } = contextStack([
+  const { bars, yMax } = contextStack([
     {
       seq: 1,
       percent: 50,
@@ -611,15 +708,16 @@ test('有构成时按内容分类堆叠，缺构成的老记录退回单色', ()
     { seq: 2, percent: 20, tokens: 500, at: 1 },
   ], 24, 10)
 
+  // 峰值 50+10=60 → ×1.1=66 → 取整到 5 的倍数 = 70。
+  expect(yMax).toBe(70)
   expect(bars[0]?.hasParts).toBe(true)
   expect(bars[1]?.hasParts).toBe(false)
-  expect(bars[0]?.segments.map(s => s.kind)).toEqual(['messages', 'system', 'buffer', 'free'])
-  expect(bars[1]?.segments.map(s => s.kind)).toEqual(['used', 'buffer', 'free'])
+  // 自适应纵轴下不画空闲段，它会把柱子重新补满、抵消自适应的意义。
+  expect(bars[0]?.segments.map(s => s.kind)).toEqual(['messages', 'system', 'buffer'])
+  expect(bars[1]?.segments.map(s => s.kind)).toEqual(['used', 'buffer'])
 
-  const sum = bars[0]?.segments.reduce((acc, s) => acc + s.ratio, 0) ?? 0
-  expect(Math.abs(sum - 1) < 1e-9).toBe(true)
-  // 300k / 400k 的已用部分 = 50% × 0.75 = 37.5%
-  expect(Math.abs((bars[0]?.segments[0]?.ratio ?? 0) - 0.375) < 1e-9).toBe(true)
+  // 300k / 400k 的已用部分 = 50% × 0.75 = 37.5%，再除以纵轴 70%。
+  expect(Math.abs((bars[0]?.segments[0]?.ratio ?? 0) - 0.375 * (100 / 70)) < 1e-9).toBe(true)
 })
 
 test('图例只列出现过的分类，顺序固定', () => {
@@ -634,10 +732,11 @@ test('图例只列出现过的分类，顺序固定', () => {
       { name: 'MCP tools', kind: 'mcp', tokens: 1 },
     ],
   }], 24, 20)
-  expect(stackLegendOf(bars).map(item => item.kind)).toEqual(['system', 'mcp', 'messages', 'buffer', 'free'])
+  // 自适应纵轴下不画空闲段，所以图例里也没有它。
+  expect(stackLegendOf(bars).map(item => item.kind)).toEqual(['system', 'mcp', 'messages', 'buffer'])
 
   const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
-  expect(stackLegendOf(legacy.bars).map(item => item.kind)).toEqual(['used', 'buffer', 'free'])
+  expect(stackLegendOf(legacy.bars).map(item => item.kind)).toEqual(['used', 'buffer'])
 })
 
 test('金额一律带估算标记，零与缺失值除外', () => {
@@ -647,15 +746,26 @@ test('金额一律带估算标记，零与缺失值除外', () => {
   expect(UNPRICED).toBe('未收录价格')
 })
 
-test('来源脚注只解释出现过的数字', () => {
-  expect(provenanceNotesFor(false, false).map(n => n.topic)).toEqual(['带 ≈ 的金额'])
-  expect(provenanceNotesFor(false, true).map(n => n.topic)).toEqual([
-    '带 ≈ 的金额',
-    '上下文柱子',
-  ])
-  expect(provenanceNotesFor(true, true).map(n => n.topic)).toEqual([
-    '带 ≈ 的金额',
-    '上下文柱子',
-    '本地历史',
-  ])
+test('压缩标记只落在压缩后的第一轮', () => {
+  const { bars } = contextStack(
+    [
+      { seq: 1, percent: 20, tokens: 1, at: 0 },
+      { seq: 2, percent: 80, tokens: 1, at: 1, afterCompact: true },
+      { seq: 3, percent: 30, tokens: 1, at: 2 },
+    ],
+    24,
+    0,
+  )
+  expect(bars.map(bar => bar.isAfterCompact)).toEqual([false, true, false])
+})
+
+test('面板底色跟着主题走，读不到时退回深色', () => {
+  expect(isLightTheme('light')).toBe(true)
+  expect(isLightTheme('light-daltonized')).toBe(true)
+  expect(isLightTheme('dark')).toBe(false)
+  expect(isLightTheme(undefined)).toBe(false)
+  expect(panelFillFor([{ key: 'theme', value: 'light' }]).backgroundColor).toBe(
+    FILLS.light.backgroundColor,
+  )
+  expect(panelFillFor(undefined).backgroundColor).toBe(FILLS.dark.backgroundColor)
 })
