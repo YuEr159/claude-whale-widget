@@ -12,7 +12,8 @@
  *   子代理的消耗 —— 只在它自己的 `turn.complete` 里，主线程不汇总。
  */
 import type { Prefs } from '../types'
-import { pct, tokens, usd } from './format.ts'
+import { pct, tokens } from './format.ts'
+import { usdEstimate } from './provenance.ts'
 
 // ---------------- /usage：额度窗口 ----------------
 
@@ -130,7 +131,7 @@ export type ModelSpend = {
   output: number
   cacheRead: number
   cacheWrite: number
-  /** 按官方价格估算；未收录模型为 null。 */
+  /** 按官方价格估算；未收录价格的为 null。 */
   cost: number | null
   turns: number
 }
@@ -157,7 +158,7 @@ export function addModelSpend(list: ModelSpend[], entry: ModelSpend): ModelSpend
 /** `Usage by model` 的一行：`opus-5-5 · 12.3万 tok · $1.20 · 8 轮`。 */
 export function modelLine(spend: ModelSpend): string {
   const total = spend.input + spend.output + spend.cacheRead + spend.cacheWrite
-  const money = spend.cost === null ? '未收录模型' : usd(spend.cost)
+  const money = spend.cost === null ? '未收录价格' : usdEstimate(spend.cost)
   return `${spend.model.replace('claude-', '')} · ${tokens(total)} tok · ${money} · ${spend.turns} 轮`
 }
 

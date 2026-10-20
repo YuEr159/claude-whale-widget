@@ -5,7 +5,8 @@
  * （插件校验器要求 `$` 只出现在 `$.noun.method(...)` 的调用点）。
  */
 import type { Prefs } from '../types'
-import { pct, countdown, usd } from './format.ts'
+import { pct, countdown } from './format.ts'
+import { usdEstimate } from './provenance.ts'
 
 export type RateLimitView = {
   kind: string
@@ -78,7 +79,7 @@ export function bandSummary(view: UsageView, metric: Prefs['bandMetric'], now: n
   const seven = pct(view.sevenDay?.percentUsed)
   switch (metric) {
     case 'session':
-      return `本会话 ${usd(view.costUsd)}`
+      return `本会话 ${usdEstimate(view.costUsd)}`
     case 'cost':
       return `上下文 ${pct(view.contextPercent)}`
     case 'context':
@@ -87,7 +88,7 @@ export function bandSummary(view: UsageView, metric: Prefs['bandMetric'], now: n
       // 没有订阅额度窗口时（第三方网关、API key 计费），退回上下文占用 + 会话花费，
       // 这两项在任何计费方式下都有读数。
       if (!view.fiveHour && !view.sevenDay) {
-        return `上下文 ${pct(view.contextPercent)} · 本会话 ${usd(view.costUsd)}`
+        return `上下文 ${pct(view.contextPercent)} · 本会话 ${usdEstimate(view.costUsd)}`
       }
       return view.fiveHour
         ? `5h ${five} · ${countdown(view.fiveHour.resetsAt, now)} 后重置`
@@ -99,7 +100,7 @@ export function bandSummary(view: UsageView, metric: Prefs['bandMetric'], now: n
 export function bubbleLines(view: UsageView, now: number): string[] {
   return [
     view.fiveHour ? `5 小时窗口 ${pct(view.fiveHour.percentUsed)}` : '额度窗口 —',
-    usd(view.costUsd),
+    usdEstimate(view.costUsd),
     view.fiveHour?.resetsAt ? `${countdown(view.fiveHour.resetsAt, now)} 后重置` : '',
   ].filter(line => line.length > 0)
 }

@@ -13,7 +13,8 @@ import type {
   LocalOverview,
   TurnDay,
 } from '../types'
-import { tokens, usd } from './format.ts'
+import { tokens } from './format.ts'
+import { usdEstimate } from './provenance.ts'
 
 /** 概览页的一张指标卡。 */
 export type StatCard = {
@@ -212,7 +213,7 @@ export function barText(share: number, width = 12): string {
 /** 概览底部那一行总计：`共 47.3亿 tok · $12.34`。 */
 export function overviewFooter(overview: LocalOverview | undefined, totalCost: number): string {
   if (!overview) return '还没有统计数据'
-  return `共 ${tokens(overview.totalTokens)} tok · ${usd(totalCost)}`
+  return `共 ${tokens(overview.totalTokens)} tok · ${usdEstimate(totalCost)}`
 }
 
 // ---------------- 上下文构成 ----------------

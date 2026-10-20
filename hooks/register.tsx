@@ -25,7 +25,8 @@ import type {
   TurnSpend,
 } from '../types'
 import { costOf } from './pricing.ts'
-import { clip, pct, tokens, usd, countdown } from './format.ts'
+import { clip, pct, tokens, countdown } from './format.ts'
+import { UNPRICED, provenanceNotesFor, usdEstimate } from './provenance.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
 import { CHART_LEGEND, contextChartSvg, pageOf, turnChartSvg } from './chart-art.ts'
 import {
@@ -295,7 +296,7 @@ export const register: Register = (on, options) => {
 
       const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
       if ((heldPrefs.value ?? DEFAULT_PREFS).isTurnCostOn) {
-        const label = cost === undefined ? '未收录模型' : usd(cost)
+        const label = cost === undefined ? UNPRICED : usdEstimate(cost)
         const inputTotal = usage.input_tokens + usage.cache_read_input_tokens
         $.ui.toast(
           `上一轮 ${label} · ${tokens(inputTotal)} 输入 / ${tokens(usage.output_tokens)} 输出`,
@@ -504,14 +505,14 @@ export const register: Register = (on, options) => {
     const session = (
       <>
         <Text>
-          花费 {usd(view.costUsd)} · 上下文 {pct(view.contextPercent)}
+          花费 {usdEstimate(view.costUsd)} · 上下文 {pct(view.contextPercent)}
           {view.contextTokens !== undefined
             ? ` ${tokens(view.contextTokens)}/${tokens(view.contextWindow)}`
             : ''}
         </Text>
         {turn && (
           <Text dimColor>
-            上一轮 {turn.cost === null ? '未收录模型' : usd(turn.cost)} · {clip(turn.model, 18)}
+            上一轮 {turn.cost === null ? UNPRICED : usdEstimate(turn.cost)} · {clip(turn.model, 18)}
             {turn.durationMs > 0 ? ` · ${duration(turn.durationMs)}` : ''}
           </Text>
         )}
@@ -862,7 +863,7 @@ export const register: Register = (on, options) => {
                 <Text>{clip(row.model, 26)}</Text>
                 <Text color="claude">{barText(row.share)}</Text>
                 <Text dimColor>{tokens(row.tokens)} tok</Text>
-                {row.cost !== null && <Text dimColor>{usd(row.cost)}</Text>}
+                {row.cost !== null && <Text dimColor>{usdEstimate(row.cost)}</Text>}
               </Box>
               <Text dimColor>
                 {row.messages.toLocaleString('en-US')} 条
@@ -987,6 +988,16 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
+    // 数据来源脚注：只列这一屏真正用到的几类，且只在详细视图出现——
+    // 简洁视图本来就不展示分类构成，解释它反而更乱。
+    const provenanceLines = isDetailed
+      ? provenanceNotesFor(
+          data !== null && data !== undefined,
+          contextTurns.length > 0,
+          contextDetail !== undefined,
+        )
+      : []
+
     // 鲸鱼固定在面板右下角：数据在上，鲸鱼独占最后一行并靠右。
     // 对齐用显式列宽（bodyColumns）而不是 `100%`：后者要等父容器先解析出宽度，
     // 面板被压缩时会跟着内容浮动。
@@ -1002,6 +1013,15 @@ export const register: Register = (on, options) => {
         {pageTabs}
         {page === 'models' ? modelsPage : overviewPage}
         {controls}
+        {provenanceLines.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            {provenanceLines.map(note => (
+              <Text key={`whale-prov-${note.topic}`} dimColor>
+                {note.topic}：{note.text}
+              </Text>
+            ))}
+          </Box>
+        )}
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
           {whale}
         </Box>
