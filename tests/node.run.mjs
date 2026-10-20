@@ -56,6 +56,7 @@ import {
   heatColumnCount,
   heatWindowDays,
   modelFill,
+  axisLabelOf,
   modelStackSvg,
   pageOf,
   turnHeatHeight,
@@ -947,6 +948,41 @@ test('三张图的 SVG 属性写法合法：不能出现空引号', () => {
       assert.equal(open, close, `SVG 标签不配平：${open} 开 / ${close} 闭`)
     }
   }
+})
+
+test('模型柱横轴标签：格式随粒度变，首尾一定标出', () => {
+  // 按天/周：只留 MM-DD，年份是噪音；按月留 YYYY-MM，只写月份跨年会歧义。
+  assert.equal(axisLabelOf('2026-10-20', 'day'), '10-20')
+  assert.equal(axisLabelOf('2026-10-19', 'week'), '10-19')
+  assert.equal(axisLabelOf('2026-10-01', 'month'), '2026-10')
+
+  const stacked = modelStackBars(
+    [{ day: '2026-10-20', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] }],
+    30,
+  )
+  const svg = modelStackSvg(stacked.bars, 700, stacked.yMax, stacked.models, CHART_PALETTES.dark, 'day')
+  // 首尾两个日期都要出现。
+  const first = axisLabelOf(stacked.bars[0].day, 'day')
+  const last = axisLabelOf(stacked.bars[stacked.bars.length - 1].day, 'day')
+  assert.ok(svg.includes('>' + first + '<'), `缺首个标签 ${first}`)
+  assert.ok(svg.includes('>' + last + '<'), `缺末个标签 ${last}`)
+  // 抽稀：30 根柱子、700px 下不可能把 30 个日期全画出来。
+  const count = (svg.match(/font-size="9"[^>]*>[0-9]{2}-[0-9]{2}</g) || []).length
+  assert.ok(count < 30, `标签数 ${count} 似乎没有抽稀`)
+  assert.ok(count >= 3, `标签数 ${count} 太少`)
+})
+
+test('按月那档的标签更宽，抽稀要更狠', () => {
+  const stacked = modelStackBars(
+    [{ day: '2026-10-20', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] }],
+    365,
+  )
+  const svg = modelStackSvg(stacked.bars, 700, stacked.yMax, stacked.models, CHART_PALETTES.dark, 'month')
+  const labels = (svg.match(/font-size="9"[^>]*>[0-9]{4}-[0-9]{2}</g) || []).length
+  const barCount = stacked.bars.length
+  // 按月一档柱子本来就少（约 12 根），标签数不该超过柱子数。
+  assert.ok(labels <= barCount, `标签 ${labels} 多于柱子 ${barCount}`)
+  assert.ok(labels >= 2, '至少要有首尾两个标签')
 })
 
 test('金额一律带估算标记，零与缺失值除外', () => {

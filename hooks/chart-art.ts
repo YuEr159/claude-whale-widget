@@ -14,7 +14,7 @@ import { CHART_PALETTES } from './panel-fill.ts'
 import type { ChartPalette } from './panel-fill.ts'
 import { tokens } from './format.ts'
 import { contextStack, turnBars } from './usage-overview.ts'
-import type { ModelStackBar, TurnBar } from './usage-overview.ts'
+import type { ModelGrain, ModelStackBar, TurnBar } from './usage-overview.ts'
 
 /**
  * 配色总纲：以 DeepSeek 的品牌蓝（#4D6BFE）为核心的一套**冷色阶**。
@@ -431,10 +431,16 @@ export function turnHeatSvg(
 }
 
 /**
- * 模型页的逐日堆叠柱：每天一根，柱内按模型堆叠。
+ * 模型页的逐日堆叠柱：一根柱代表一天 / 一周 / 一个月（看 `grain`），
+ * 柱内按模型堆叠。
  *
  * 与上下文柱同一套版式（左侧纵轴、0 与上界两处刻度），但纵轴单位是 token
- * 而不是百分比。柱子之间留一道细缝，读者才能数出「一天一根」。
+ * 而不是百分比。柱子之间留一道细缝，读者才能数出「一根柱代表多少时间」。
+ *
+ * 横轴标的是每根柱覆盖区间的起始日，格式随粒度变：按天只写 `10-20`
+ * （范围最多两个多月，年份是噪音）、按周写 `10-19`（读者能对上日历）、
+ * 按月写 `2026-10`（只写月份会有歧义，跨年时尤其）。柱子多时按可读间距
+ * 抽稀，但**首尾一定标出来**——读者要知道这一段到底是哪两天的。
  *
  * `order` 由调用方给出（与图例、下方明细行共用同一份），不在这里重新排序：
  * 两处各排一次，一旦算法不一致，颜色就会与模型错位。
@@ -445,9 +451,11 @@ export function modelStackSvg(
   yMax: number,
   order: string[],
   palette: ChartPalette = CHART_PALETTES.dark,
+  grain: ModelGrain = 'day',
 ): string {
-  const height = 96
-  const padding = { top: 10, right: 2, bottom: 14, left: 34 }
+  const height = 110
+  // 底部留出横轴标签的位置（一个月标签比一个日期宽，给 26px）。
+  const padding = { top: 10, right: 8, bottom: 26, left: 34 }
   const plotWidth = Math.max(1, width - padding.left - padding.right)
   const plotHeight = Math.max(1, height - padding.top - padding.bottom)
 
@@ -501,12 +509,45 @@ export function modelStackSvg(
     `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}>0</text>`,
   )
 
+  // 横轴标签：每根柱覆盖区间的起始日。抽稀按标签的**实际像素宽度**算，
+  // 不用固定值——`2026-10`（7 个字符）比 `10-20`（5 个）宽四成，用同一个
+  // 阈值会让按月那档在窄画布上挤成一团。9px 等宽字一字符约 5.4px，
+  // 再留 4px 空隙。
+  const sampleLabel = axisLabelOf(bars[0]?.day ?? '', grain)
+  const labelWidth = sampleLabel.length * 5.4 + 4
+  const labelStep = Math.max(1, Math.ceil(labelWidth / slot))
+  bars.forEach((bar, index) => {
+    if (index % labelStep !== 0 && index !== bars.length - 1) return
+    const center = padding.left + index * slot + slot / 2
+    // 两端贴着画布边缘，居中会溢出，所以首尾各改一次对齐方式。
+    const isFirst = index === 0
+    const isLast = index === bars.length - 1 && index !== 0
+    const anchor = isFirst ? 'start' : isLast ? 'end' : 'middle'
+    const x = isFirst ? padding.left : isLast ? width - padding.right : center
+    parts.push(
+      `<text x="${x.toFixed(2)}" y="${axisBottom + 13}" text-anchor="${anchor}" font-size="9" ${fillOf(palette.label, 1)}>${escapeXml(axisLabelOf(bar.day, grain))}</text>`,
+    )
+  })
+
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">` +
-    `<title>${escapeXml(`逐模型用量：最近 ${bars.length} 天，纵轴 0–${tokens(yMax)} tok`)}</title>` +
+    `<title>${escapeXml(`逐模型用量：最近 ${bars.length} ${grain === 'day' ? '天' : grain === 'week' ? '周' : '个月'}，纵轴 0–${tokens(yMax)} tok`)}</title>` +
     parts.join('') +
     `</svg>`
   )
+}
+
+/**
+ * 横轴标签的文字：把桶键（`YYYY-MM-DD`）按粒度缩成够读的最短形式。
+ *
+ * 按天只留 `MM-DD`：范围最长 60 天，年份是噪音。按周同理，但保留完整
+ * 月-日让读者能对上日历（一周的起点是哪天并不直观）。按月写 `YYYY-MM`，
+ * 只写月份在跨年时会歧义。
+ */
+export function axisLabelOf(day: string, grain: ModelGrain): string {
+  if (grain === 'month') return day.slice(0, 7)
+  const monthDay = day.slice(5)
+  return monthDay.length > 0 ? monthDay : day
 }
 
 // ---------------- 翻页 ----------------
