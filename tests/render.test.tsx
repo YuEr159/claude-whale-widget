@@ -110,12 +110,15 @@ test('页签与内容在同一个外框内，选中的那个换成更亮的底',
 
   const overviewTab = await propsOf('whale-tabbox-overview')
   const modelsTab = await propsOf('whale-tabbox-models')
+  const contextTab = await propsOf('whale-tabbox-context')
   expect(overviewTab).toBeDefined()
   expect(modelsTab).toBeDefined()
+  expect(contextTab).toBeDefined()
   // 每个页签各自带一个边框；激活的那个更粗。
   expect(overviewTab.borderStyle).toBe('bold')
   expect(modelsTab.borderStyle).toBe('round')
-  // 默认落在概览页：概览的底色更亮，模型的是大框那一档。
+  expect(contextTab.borderStyle).toBe('round')
+  // 默认落在概览页：概览的底色更亮，另两个的是大框那一档。
   expect(overviewTab.backgroundColor).not.toBe(modelsTab.backgroundColor)
   const overviewActive = overviewTab.backgroundColor
 
@@ -127,6 +130,76 @@ test('页签与内容在同一个外框内，选中的那个换成更亮的底',
   expect(modelsAfter.borderStyle).toBe('bold')
   expect(overviewAfter.backgroundColor).not.toBe(overviewActive)
   expect(overviewAfter.borderStyle).toBe('round')
+
+  // 第三个页签同样能切过去，且切过去之后前两个都回到未激活态。
+  await ui.press({ key: 'whale-tab-context' })
+  const contextAfter = await propsOf('whale-tabbox-context')
+  expect(contextAfter.backgroundColor).toBe(overviewActive)
+  expect((await propsOf('whale-tabbox-models')).borderStyle).toBe('round')
+
+  await ui.unmount()
+})
+
+test('页签与用量条口径按钮：框里带留白，留白在按钮的命中区里', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  const find = (node: any, key: string): any => {
+    if (!node || typeof node !== 'object') return undefined
+    if (node.props?.key === key) return node
+    for (const kid of node.children ?? []) {
+      const hit = find(kid, key)
+      if (hit) return hit
+    }
+    return undefined
+  }
+  /** 按钮画出来的字：字符串子节点，或 `label`。 */
+  const textOf = (node: any): string => {
+    const kids = node.children ?? []
+    const str = kids.find((kid: any) => typeof kid === 'string')
+    if (typeof str === 'string') return str
+    return node.props?.label ?? ''
+  }
+
+  const tree = await ui.drawn()
+  // 页签的每个小块：Box 带边框，里面按钮的文字两侧各有一个 NBSP。
+  // 留白必须落在按钮里——写成 Box 的 paddingX 时，点在左右边缘按钮收不到。
+  for (const id of ['overview', 'models', 'context']) {
+    const box = find(tree, `whale-tabbox-${id}`)
+    expect(box).toBeDefined()
+    // Box 自己不带 paddingX：留白在按钮内部。
+    expect(box.props?.paddingX).toBeUndefined()
+    const button = find(box, `whale-tab-${id}`)
+    expect(button).toBeDefined()
+    const text = textOf(button)
+    expect(text.startsWith('\u00a0')).toBe(true)
+    expect(text.endsWith('\u00a0')).toBe(true)
+  }
+
+  // 用量条口径按钮用的是同一种小框。
+  for (const metric of ['window', 'context', 'cost', 'session', 'diff']) {
+    const box = find(tree, `chipbox-whale-metric-${metric}`)
+    expect(box).toBeDefined()
+    expect(box.props?.paddingX).toBeUndefined()
+    const button = find(box, `whale-metric-${metric}`)
+    const text = textOf(button)
+    expect(text.startsWith('\u00a0')).toBe(true)
+  }
+  // 口径按钮只有「选中」与「未选中」两种：选中的框更亮。
+  const onBox = find(tree, 'chipbox-whale-metric-window')
+  const offBox = find(tree, 'chipbox-whale-metric-diff')
+  expect(onBox.props.backgroundColor).not.toBe(offBox.props.backgroundColor)
+  expect(onBox.props.borderStyle).toBe('bold')
+  expect(offBox.props.borderStyle).toBe('round')
 
   await ui.unmount()
 })

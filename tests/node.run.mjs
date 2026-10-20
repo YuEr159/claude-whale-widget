@@ -52,13 +52,13 @@ import {
   HEAT_OPACITY,
   HEAT_ZERO_FILL,
   HEAT_ZERO_OPACITY,
+  CONTEXT_MAX_BARS,
   contextChartSvg,
   heatColumnCount,
   heatWindowDays,
   modelFill,
   axisLabelOf,
   modelStackSvg,
-  pageOf,
   turnHeatHeight,
   turnHeatSvg,
 } from '../hooks/chart-art.ts'
@@ -167,6 +167,12 @@ test('百分比与 token', () => {
   assert.equal(tokens(1234), '1234')
   assert.equal(tokens(15_721), '1.6万')
   assert.equal(tokens(2.5e8), '2.50亿')
+  // 10¹² 这一档写「万亿」不写「兆」：「兆」在汉语里已经被 SI 词头占成 10⁶，
+  // 写成兆会被读成百万，差了一百万倍。
+  assert.equal(tokens(1.2e12), '1.20万亿')
+  assert.equal(tokens(9.99e11), '9990.00亿')
+  // 负数按绝对值取档，符号留在前面。
+  assert.equal(tokens(-2.5e12), '-2.50万亿')
 })
 
 test('倒计时分档', () => {
@@ -323,13 +329,14 @@ test('用量条摘要按偏好切换口径', () => {
     '上下文 33% · 本会话 ≈$0.50',
   )
   // 多选：按固定次序拼接，与勾选先后无关；重复项只出现一次。
+  // window 已经写了 5h，context 只补 7d——同一条数字不印两遍。
   assert.equal(
     bandSummary(view, ['context', 'window'], now),
-    '5h 40% · 2h00m 后重置 · 5h 40% · 7d 70%',
+    '5h 40% · 2h00m 后重置 · 7d 70%',
   )
   assert.equal(
     bandSummary(view, ['window', 'context', 'window'], now),
-    '5h 40% · 2h00m 后重置 · 5h 40% · 7d 70%',
+    '5h 40% · 2h00m 后重置 · 7d 70%',
   )
   assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'diff', 'session', 'window'].sort())
 })
@@ -489,27 +496,35 @@ test('纵轴自适应：低用量时柱子矮，不必撑满画布', () => {
   assert.ok(!bars.some(bar => bar.segments.some(s => s.kind === 'free')))
 })
 
-test('图表翻页：0 贴住最新，越翻越往历史走', () => {
-  const items = Array.from({ length: 60 }, (_, index) => index)
-  const newest = pageOf(items, 24, 0)
-  assert.deepEqual(newest.slice, items.slice(36, 60))
-  assert.equal(newest.pages, 3)
-  assert.equal(newest.page, 3)
-  assert.equal(newest.maxOffset, 2)
+test('上下文图不翻页：显示轮数由画布宽度自己算，永远贴住最新一端', () => {
+  const turn = index => ({
+    seq: index + 1,
+    percent: 10 + (index % 5),
+    tokens: 1000,
+    at: index,
+  })
+  const turns = Array.from({ length: CONTEXT_MAX_BARS }, (_, index) => turn(index))
+  // 这些轮次没有分项构成，一根柱子就是一段「已用」，所以 rect 数 = 柱子数。
+  const barCount = svg => (svg.match(/<rect /g) || []).length
 
-  const older = pageOf(items, 24, 1)
-  assert.deepEqual(older.slice, items.slice(12, 36))
-  assert.equal(older.page, 2)
+  // 宽画布：60 轮全放得下（上限就是 60）。
+  const wide = contextChartSvg(turns, 900, CONTEXT_MAX_BARS, 0, CHART_PALETTES.dark)
+  assert.equal(barCount(wide), CONTEXT_MAX_BARS)
 
-  const oldest = pageOf(items, 24, 99)
-  assert.deepEqual(oldest.slice, items.slice(0, 12))
-  assert.equal(oldest.page, 1)
+  // 窄到画布下限（80px）：槽宽不得低于下限，柱子数必须按宽度降下来。
+  // 绘图区 80 - 26 - 6 = 48px，48 / 1.4 ≈ 34 根。
+  const narrow = contextChartSvg(turns, 80, CONTEXT_MAX_BARS, 0, CHART_PALETTES.dark)
+  const narrowCount = barCount(narrow)
+  const slot = (80 - 26 - 6) / narrowCount
+  assert.equal(narrowCount, 34)
+  assert.ok(slot >= 1.4 - 1e-9, `槽宽 ${slot.toFixed(2)}px 低于下限`)
 
-  // 不足一页时只有一页，翻不动。
-  const tiny = pageOf(items.slice(0, 5), 24, 3)
-  assert.equal(tiny.slice.length, 5)
-  assert.equal(tiny.maxOffset, 0)
-  assert.equal(tiny.pages, 1)
+  // 无论宽窄，最右边那根永远是最新一轮。
+  assert.ok(wide.includes('>' + CONTEXT_MAX_BARS + '<'), '宽画布缺最新一轮的序号')
+  assert.ok(narrow.includes('>' + CONTEXT_MAX_BARS + '<'), '窄画布缺最新一轮的序号')
+
+  // 轮次不足时不补空柱：只有 5 轮就画 5 根。
+  assert.equal(barCount(contextChartSvg(turns.slice(0, 5), 900, CONTEXT_MAX_BARS, 0, CHART_PALETTES.dark)), 5)
 })
 
 test('轮次热图：窗口固定（默认半年），不再分页', () => {
@@ -843,14 +858,16 @@ test('模型色阶在两套主题下都能按序号区分', () => {
 // 这一组验证「分桶」本身：桶的个数、桶键是哪一天、桶里的 token 是相加
 // 而不是取平均。
 
-test('粒度按范围切换：30/60 按天、180 按周、365 按月', () => {
+test('粒度按范围切换：30/60 按天、180/365 按周', () => {
   assert.equal(modelGrainFor(30), 'day')
   assert.equal(modelGrainFor(60), 'day')
   assert.equal(modelGrainFor(180), 'week')
-  assert.equal(modelGrainFor(365), 'month')
-  // 边界两侧不能跳成同一档。
+  assert.equal(modelGrainFor(365), 'week')
+  // 边界两侧不能跳成同一档；一年以上也不退化成按月——52 根周柱子仍宽于
+  // 60 天按天那档，按月反而丢掉了「这个月哪一周花得多」。
+  assert.equal(modelGrainFor(61), 'week')
   assert.equal(modelGrainFor(210), 'week')
-  assert.equal(modelGrainFor(211), 'month')
+  assert.equal(modelGrainFor(3650), 'week')
 })
 
 test('按周分桶：周一为周始，桶里的 token 相加', () => {
@@ -880,24 +897,25 @@ test('按周分桶：周日归上一周，不另起一桶', () => {
   assert.notEqual(keys.indexOf('2026-10-12'), keys.indexOf('2026-10-19'))
 })
 
-test('按月分桶：桶键是当月一日，同月合并', () => {
+test('跨年的那两周各自成桶，不并成一根', () => {
+  // 2026-12-28 是周一，2027-01-04 是下一周一。跨年不该把两周并成一根，
+  // 也不该生成一根只有一两天的「短周」——桶键始终取那一周真正的周一。
   const days = [
-    { day: '2026-09-05', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] },
-    { day: '2026-09-28', models: [{ model: 'm', input: 15, output: 0, cost: 0 }] },
-    { day: '2026-10-02', models: [{ model: 'm', input: 20, output: 0, cost: 0 }] },
+    { day: '2026-12-31', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] },
+    { day: '2027-01-02', models: [{ model: 'm', input: 15, output: 0, cost: 0 }] },
+    { day: '2027-01-05', models: [{ model: 'm', input: 20, output: 0, cost: 0 }] },
   ]
-  const { bars } = modelStackBars(days, 60, 6, 'month')
+  const { bars } = modelStackBars(days, 21, 6, 'week')
   const byKey = new Map(bars.map(bar => [bar.day, bar.total]))
-  assert.equal(byKey.get('2026-09-01'), 25, '九月两天合并')
-  assert.equal(byKey.get('2026-10-01'), 20, '十月单独')
+  assert.equal(byKey.get('2026-12-28'), 25, '12-31 与 01-02 同属 12-28 那一周')
+  assert.equal(byKey.get('2027-01-04'), 20, '01-05 属于 01-04 那一周')
 })
 
 test('桶数是窗口跨度除以粒度，不是天数', () => {
   const days = [{ day: '2026-10-20', models: [{ model: 'm', input: 1, output: 0, cost: 0 }] }]
-  // 365 天按月：最多 13 个桶（跨年时会有 13 个月份），绝不会是 365 个。
-  const monthly = modelStackBars(days, 365, 6, 'month').bars.length
-  assert.ok(monthly <= 13, `按月应当 ≤13 根柱子，实际 ${monthly}`)
-  assert.ok(monthly >= 12, `按月应当 ≥12 根柱子，实际 ${monthly}`)
+  // 365 天按周：约 53 个桶，绝不会是 365 个。
+  const yearly = modelStackBars(days, 365, 6, 'week').bars.length
+  assert.ok(yearly <= 54 && yearly >= 52, `按周应当 52–54 根，实际 ${yearly}`)
   // 180 天按周：约 27 个桶。
   const weekly = modelStackBars(days, 180, 6, 'week').bars.length
   assert.ok(weekly <= 28 && weekly >= 26, `按周应当 26–28 根，实际 ${weekly}`)
@@ -905,15 +923,15 @@ test('桶数是窗口跨度除以粒度，不是天数', () => {
   assert.equal(modelStackBars(days, 30, 6, 'day').bars.length, 30)
 })
 
-test('图注写明粒度：同样的柱子数，按天与按月说的不是一回事', () => {
+test('图注写明粒度：同样的柱子数，按天与按周说的不是一回事', () => {
   const bars = modelStackBars(
     [{ day: '2026-10-20', models: [{ model: 'm', input: 100, output: 0, cost: 0 }] }],
     30, 6, 'day',
   ).bars
   assert.ok(modelStackCaption(bars, 'day').includes('按天'))
   assert.ok(modelStackCaption(bars, 'day').includes('30 天'))
-  assert.ok(modelStackCaption(bars, 'month').includes('按月'))
-  assert.ok(modelStackCaption(bars, 'month').includes('个月'))
+  assert.ok(modelStackCaption(bars, 'week').includes('按周'))
+  assert.ok(modelStackCaption(bars, 'week').includes('周'))
 })
 
 test('三张图的 SVG 属性写法合法：不能出现空引号', () => {
@@ -950,11 +968,12 @@ test('三张图的 SVG 属性写法合法：不能出现空引号', () => {
   }
 })
 
-test('模型柱横轴标签：格式随粒度变，首尾一定标出', () => {
-  // 按天/周：只留 MM-DD，年份是噪音；按月留 YYYY-MM，只写月份跨年会歧义。
+test('模型柱横轴标签：MM-DD，首尾一定标出', () => {
+  // 两种粒度都写 MM-DD：按周范围最长一年，跨年那两根各自写出月份，
+  // 年份在这个跨度里仍是噪音；完整月-日让读者能对上日历。
   assert.equal(axisLabelOf('2026-10-20', 'day'), '10-20')
   assert.equal(axisLabelOf('2026-10-19', 'week'), '10-19')
-  assert.equal(axisLabelOf('2026-10-01', 'month'), '2026-10')
+  assert.equal(axisLabelOf('2027-01-04', 'week'), '01-04')
 
   const stacked = modelStackBars(
     [{ day: '2026-10-20', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] }],
@@ -972,17 +991,20 @@ test('模型柱横轴标签：格式随粒度变，首尾一定标出', () => {
   assert.ok(count >= 3, `标签数 ${count} 太少`)
 })
 
-test('按月那档的标签更宽，抽稀要更狠', () => {
+test('365 天按周：52 根柱子仍抽稀，首尾都在', () => {
   const stacked = modelStackBars(
     [{ day: '2026-10-20', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] }],
-    365,
+    365, 6, 'week',
   )
-  const svg = modelStackSvg(stacked.bars, 700, stacked.yMax, stacked.models, CHART_PALETTES.dark, 'month')
-  const labels = (svg.match(/font-size="9"[^>]*>[0-9]{4}-[0-9]{2}</g) || []).length
-  const barCount = stacked.bars.length
-  // 按月一档柱子本来就少（约 12 根），标签数不该超过柱子数。
-  assert.ok(labels <= barCount, `标签 ${labels} 多于柱子 ${barCount}`)
+  const svg = modelStackSvg(stacked.bars, 700, stacked.yMax, stacked.models, CHART_PALETTES.dark, 'week')
+  const labels = (svg.match(/font-size="9"[^>]*>[0-9]{2}-[0-9]{2}</g) || []).length
   assert.ok(labels >= 2, '至少要有首尾两个标签')
+  assert.ok(labels < stacked.bars.length, `标签 ${labels} 应当少于柱子 ${stacked.bars.length}`)
+  // 首尾各出现一次。
+  const first = axisLabelOf(stacked.bars[0].day, 'week')
+  const last = axisLabelOf(stacked.bars[stacked.bars.length - 1].day, 'week')
+  assert.ok(svg.includes('>' + first + '<'), `缺首个标签 ${first}`)
+  assert.ok(svg.includes('>' + last + '<'), `缺末个标签 ${last}`)
 })
 
 test('金额一律带估算标记，零与缺失值除外', () => {

@@ -216,31 +216,32 @@ export function barText(share: number, width = 12): string {
 export const MODEL_STACK_KEEP = 6
 
 /**
- * 模型页的粒度：一根柱子代表一天、一周，还是一个月。
+ * 模型页的粒度：一根柱子代表一天，还是一周。
  *
  * 为什么需要它：柱子数受画布宽度限制。900px 画布下 365 根柱子每根只有
- * 2.4px，连柱内各段都分不开，整张图会糊成一片；而按月只有 12 根、每根
- * 66px，反而更清楚。范围一拉长，粒度就得跟着变粗——这是同一件事的两种
- * 画法，不是两张不同的图。
+ * 2.4px，连柱内各段都分不开，整张图会糊成一片。范围一拉长，粒度就得跟着
+ * 变粗——这是同一件事的两种画法，不是两张不同的图。
  *
- * 阈值取整到好记的数，对应四档范围：
+ * 阈值对应四档范围：
  *   30 天 → 按天（30 根，每根 28.8px）
  *   60 天 → 按天（60 根，每根 14.4px）
  *  180 天 → 按周（26 根，每根 33.2px）
- *  365 天 → 按月（12 根，每根 66.5px）
+ *  365 天 → 按周（52 根，每根 16.6px）
+ *
+ * 365 天不按月：52 根每周柱子仍比 60 天那档（14.4px）宽，信息量却是按月
+ * 的 4 倍多——按月只剩 12 根，「这个月哪一周花得多」就看不出来了。只有
+ * 窗口长到一年以上，周柱子才会挤到不可用。
  */
-export type ModelGrain = 'day' | 'week' | 'month'
+export type ModelGrain = 'day' | 'week'
 
 /** 给定范围天数，该用哪种粒度。 */
 export function modelGrainFor(days: number): ModelGrain {
-  if (days <= 60) return 'day'
-  if (days <= 210) return 'week'
-  return 'month'
+  return days <= 60 ? 'day' : 'week'
 }
 
 /** 粒度的中文名，图注与控件共用。 */
 export function modelGrainLabel(grain: ModelGrain): string {
-  return grain === 'day' ? '按天' : grain === 'week' ? '按周' : '按月'
+  return grain === 'day' ? '按天' : '按周'
 }
 
 /**
@@ -251,13 +252,10 @@ export function modelGrainLabel(grain: ModelGrain): string {
  */
 function bucketKeyOf(date: Date, grain: ModelGrain): string {
   if (grain === 'day') return localDayKey(date)
-  if (grain === 'week') {
-    const start = new Date(date)
-    const weekday = (start.getDay() + 6) % 7
-    start.setDate(start.getDate() - weekday)
-    return localDayKey(start)
-  }
-  return localDayKey(new Date(date.getFullYear(), date.getMonth(), 1))
+  const start = new Date(date)
+  const weekday = (start.getDay() + 6) % 7
+  start.setDate(start.getDate() - weekday)
+  return localDayKey(start)
 }
 
 /** 柱内的一段：某个模型在当天占的 token。 */
@@ -383,14 +381,14 @@ export function modelStackBars(
 /**
  * 模型柱的图注：`按周 · 最近 26 周 · 共 1.2亿 tok · 峰值 3.4千万 tok`。
  *
- * 粒度必须写在图注里：同样 12 根柱子，「按天 12 天」和「按月 12 个月」
- * 说的是完全不同的时间跨度，不写清楚读者会把一年的图当成两周的。
+ * 粒度必须写在图注里：同样 26 根柱子，「按天 26 天」和「按周 26 周」
+ * 说的是差了七倍的时间跨度，不写清楚读者会把半年的图当成一个月的。
  */
 export function modelStackCaption(bars: ModelStackBar[], grain: ModelGrain = 'day'): string {
   if (bars.length === 0) return '还没有逐模型数据'
   const total = bars.reduce((sum, bar) => sum + bar.total, 0)
   const peak = bars.reduce((top, bar) => Math.max(top, bar.total), 0)
-  const unit = grain === 'day' ? '天' : grain === 'week' ? '周' : '个月'
+  const unit = grain === 'day' ? '天' : '周'
   return `${modelGrainLabel(grain)} · 最近 ${bars.length} ${unit} · 共 ${tokens(total)} tok · 峰值 ${tokens(peak)} tok`
 }
 

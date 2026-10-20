@@ -139,6 +139,18 @@ function escapeXml(text: string): string {
 }
 
 /**
+ * 上下文柱状图一个槽位的最小宽度（CSS 像素）。
+ *
+ * 槽宽 = 柱宽 + 缝。1.4px 的槽对应 1px 柱子 + 0.4px 缝——1px 是这根柱子
+ * 能被看见的底线，再窄就分不清是柱子还是抗锯齿。画布越宽能塞的槽越多，
+ * 于是「显示最近多少轮」由宽度自己算出来，不需要翻页按钮。
+ */
+export const MIN_CONTEXT_SLOT = 1.4
+
+/** 上下文柱状图最多画多少根（宽度再大也不超过它）。 */
+export const CONTEXT_MAX_BARS = 60
+
+/**
  * 上下文占比的堆叠柱状图。
  *
  * 每轮一根柱子，柱内自下而上叠：已用（按内容类别细分）、压缩缓冲。
@@ -150,15 +162,20 @@ function escapeXml(text: string): string {
  * 压缩发生的那一轮，柱子左侧竖一条虚线：压缩后上下文骤降，读者看到柱子
  * 突然变矮时，要能一眼分清是「压缩造成的」还是「自己少用了」。
  *
+ * **显示多少轮由画布宽度决定，不翻页**：每根柱子的槽宽不得低于
+ * `MIN_CONTEXT_SLOT`，在这个下限之上能塞几根就塞几根，永远贴住最新一端。
+ * 翻页按钮要求读者点两下才能看到前一段，而宽度本来就该自己适配——面板
+ * 宽的时候多露几轮，窄的时候少露几轮，图注里的轮数随之变化。
+ *
  * @param turns     逐轮记录，按时间升序
  * @param width     画布宽度，CSS 像素
- * @param maxBars   最多画几根
+ * @param maxBars   最多画几根（保留上限，宽度够也最多画这么多）
  * @param bufferPct 压缩缓冲占窗口的百分比
  */
 export function contextChartSvg(
   turns: ContextTurn[],
   width: number,
-  maxBars = 24,
+  maxBars = CONTEXT_MAX_BARS,
   bufferPct = 0,
   palette: ChartPalette = CHART_PALETTES.dark,
 ): string {
@@ -169,7 +186,12 @@ export function contextChartSvg(
   const plotWidth = Math.max(1, width - padding.left - padding.right)
   const plotHeight = Math.max(1, height - padding.top - padding.bottom)
 
-  const { bars, peak, yMax } = contextStack(turns, maxBars, bufferPct)
+  // 宽度自适应：先按「最多想画几根」铺一次，如果槽宽低于下限就减根数。
+  const cap = Math.max(1, Math.min(maxBars, turns.length))
+  const visible = Math.max(1, Math.min(cap, Math.floor(plotWidth / MIN_CONTEXT_SLOT)))
+  const shown = turns.slice(-visible)
+
+  const { bars, peak, yMax } = contextStack(shown, shown.length, bufferPct)
   if (bars.length === 0) {
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">` +
@@ -179,10 +201,11 @@ export function contextChartSvg(
   }
 
   // 柱子之间的间隙随槽位收窄，下限 0.4px：柱子多时宁可让缝隙细一点，
-  // 也要保证每根柱子本身还看得见。柱宽下限 0.5px（亚像素也会被渲染出来）。
+  // 也要保证每根柱子本身还看得见。柱宽下限 1px——这是用户定的底线：
+  // 再细就分不出那是一根柱子还是抗锯齿的噪声。
   const slot = plotWidth / bars.length
   const gap = Math.min(2, Math.max(0.4, slot * 0.3))
-  const barWidth = Math.max(0.5, slot - gap)
+  const barWidth = Math.max(1, slot - gap)
 
   const parts: string[] = []
   bars.forEach((bar, index) => {
@@ -431,16 +454,13 @@ export function turnHeatSvg(
 }
 
 /**
- * 模型页的逐日堆叠柱：一根柱代表一天 / 一周 / 一个月（看 `grain`），
- * 柱内按模型堆叠。
+ * 模型页的堆叠柱：一根柱代表一天或一周（看 `grain`），柱内按模型堆叠。
  *
  * 与上下文柱同一套版式（左侧纵轴、0 与上界两处刻度），但纵轴单位是 token
  * 而不是百分比。柱子之间留一道细缝，读者才能数出「一根柱代表多少时间」。
  *
- * 横轴标的是每根柱覆盖区间的起始日，格式随粒度变：按天只写 `10-20`
- * （范围最多两个多月，年份是噪音）、按周写 `10-19`（读者能对上日历）、
- * 按月写 `2026-10`（只写月份会有歧义，跨年时尤其）。柱子多时按可读间距
- * 抽稀，但**首尾一定标出来**——读者要知道这一段到底是哪两天的。
+ * 横轴标的是每根柱覆盖区间的起始日 `MM-DD`。柱子多时按可读间距抽稀，
+ * 但**首尾一定标出来**——读者要知道这一段到底是哪两天的。
  *
  * `order` 由调用方给出（与图例、下方明细行共用同一份），不在这里重新排序：
  * 两处各排一次，一旦算法不一致，颜色就会与模型错位。
@@ -454,7 +474,7 @@ export function modelStackSvg(
   grain: ModelGrain = 'day',
 ): string {
   const height = 110
-  // 底部留出横轴标签的位置（一个月标签比一个日期宽，给 26px）。
+  // 底部留出横轴标签的位置。
   const padding = { top: 10, right: 8, bottom: 26, left: 34 }
   const plotWidth = Math.max(1, width - padding.left - padding.right)
   const plotHeight = Math.max(1, height - padding.top - padding.bottom)
@@ -510,9 +530,8 @@ export function modelStackSvg(
   )
 
   // 横轴标签：每根柱覆盖区间的起始日。抽稀按标签的**实际像素宽度**算，
-  // 不用固定值——`2026-10`（7 个字符）比 `10-20`（5 个）宽四成，用同一个
-  // 阈值会让按月那档在窄画布上挤成一团。9px 等宽字一字符约 5.4px，
-  // 再留 4px 空隙。
+  // 不用固定值——长度不同的标签（`10-20` 与将来的 `2026-10`）用同一个
+  // 阈值会在窄画布上挤成一团。9px 等宽字一字符约 5.4px，再留 4px 空隙。
   const sampleLabel = axisLabelOf(bars[0]?.day ?? '', grain)
   const labelWidth = sampleLabel.length * 5.4 + 4
   const labelStep = Math.max(1, Math.ceil(labelWidth / slot))
@@ -531,56 +550,20 @@ export function modelStackSvg(
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">` +
-    `<title>${escapeXml(`逐模型用量：最近 ${bars.length} ${grain === 'day' ? '天' : grain === 'week' ? '周' : '个月'}，纵轴 0–${tokens(yMax)} tok`)}</title>` +
+    `<title>${escapeXml(`逐模型用量：最近 ${bars.length} ${grain === 'day' ? '天' : '周'}，纵轴 0–${tokens(yMax)} tok`)}</title>` +
     parts.join('') +
     `</svg>`
   )
 }
 
 /**
- * 横轴标签的文字：把桶键（`YYYY-MM-DD`）按粒度缩成够读的最短形式。
+ * 横轴标签的文字：把桶键（`YYYY-MM-DD`）缩成 `MM-DD`。
  *
- * 按天只留 `MM-DD`：范围最长 60 天，年份是噪音。按周同理，但保留完整
- * 月-日让读者能对上日历（一周的起点是哪天并不直观）。按月写 `YYYY-MM`，
- * 只写月份在跨年时会歧义。
+ * 两种粒度共用这一种写法：按周的范围最长 365 天、恰好一年，跨年的两根
+ * 柱子会各自写出月份，年份在这个跨度里仍是噪音；而 `MM-DD` 能让读者
+ * 对上日历——「一周的起点是哪天」并不直观。
  */
-export function axisLabelOf(day: string, grain: ModelGrain): string {
-  if (grain === 'month') return day.slice(0, 7)
+export function axisLabelOf(day: string, _grain: ModelGrain): string {
   const monthDay = day.slice(5)
   return monthDay.length > 0 ? monthDay : day
-}
-
-// ---------------- 翻页 ----------------
-
-/**
- * 从一段逐日数据里取「第 offset 页」的窗口，贴住最新一端。
- *
- * 面板本身只有纵向滚动，横向拉不动；所以给图表配一对翻页按钮，
- * 一页一个窗口。`offset` 是往左翻了几页，0 表示最右边（最新）。
- *
- * @param items 按时间升序
- * @param pageSize 一页多少条
- * @param offset 往左翻了几页
- */
-export function pageOf<T>(items: T[], pageSize: number, offset: number): {
-  slice: T[]
-  /** 往左还能翻几页（0 表示已到最左）。 */
-  maxOffset: number
-  /** 当前页的编号，从 1 起（最左是 1）。 */
-  page: number
-  /** 一共几页。 */
-  pages: number
-} {
-  const size = Math.max(1, pageSize)
-  const pages = Math.max(1, Math.ceil(items.length / size))
-  const clamped = Math.max(0, Math.min(Math.floor(offset), pages - 1))
-  // offset 0 = 最新一页（最右），offset 增大往历史翻。
-  const end = Math.max(0, items.length - clamped * size)
-  const start = Math.max(0, end - size)
-  return {
-    slice: items.slice(start, end),
-    maxOffset: pages - 1,
-    page: pages - clamped,
-    pages,
-  }
 }

@@ -29,10 +29,21 @@ export function pct(value: number | undefined | null): string {
   return `${Math.round(value)}%`
 }
 
-/** token 数：万/亿 制，便于一眼读数。 */
+/**
+ * token 数：万 / 亿 / 万亿 制，便于一眼读数。
+ *
+ * 单位按中文的「万进」制往上走：万 10⁴、亿 10⁸、兆 10¹²。到了 10¹² 这一档
+ * 写作**「万亿」而不是「兆」**——「兆」在现代汉语里已经被 SI 词头占住
+ * （兆赫、兆字节、兆瓦都是 10⁶），写成「兆」会被读成百万，正好差了一百万倍。
+ * 「万亿」两个字没有歧义，也仍然一眼能算。
+ *
+ * 再往上的「京」（10¹⁶）不再加：本机日志的 token 量离那一档还有好几个数量级，
+ * 每加一档都要多一条永远不会走到的分支与测试。
+ */
 export function tokens(value: number | undefined | null): string {
   if (value === undefined || value === null || !Number.isFinite(value)) return '—'
   const abs = Math.abs(value)
+  if (abs >= 1e12) return `${(value / 1e12).toFixed(2)}万亿`
   if (abs >= 1e8) return `${(value / 1e8).toFixed(2)}亿`
   if (abs >= 1e4) return `${(value / 1e4).toFixed(1)}万`
   return String(Math.round(value))
