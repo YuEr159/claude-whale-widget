@@ -372,7 +372,7 @@ test('用量条摘要按偏好切换口径', () => {
   )
 })
 
-test('代码改动可以单独成段，其余口径不带它', () => {
+test('代码改动的文字带增删号；摘要里不拼它，由渲染层分色追加', () => {
   const view = toUsageView({
     rateLimits: [{ kind: 'five_hour', percentUsed: 40 }],
     cost: { usd: 2 },
@@ -381,12 +381,11 @@ test('代码改动可以单独成段，其余口径不带它', () => {
   const now = Date.parse('2026-10-20T12:00:00Z')
   const diff = { added: 128, removed: 34 }
 
-  // 选中「代码改动」：这一条就是改动本身。
-  expect(bandSummary(view, ['diff'], now, diff)).toBe('+128 -34')
-  // 还没有改动时明说，不留空条。
-  expect(bandSummary(view, ['diff'], now, { added: 0, removed: 0 })).toBe('本会话还没有代码改动')
-  // 其余口径的摘要不含改动——增删要分色，由渲染层追加，不拼进字符串。
-  expect(bandSummary(view, ['window'], now, diff)).not.toContain('+128')
+  // 摘要本身不拼改动——增删要分两种颜色，拼进字符串就没法上色了。
+  // 选中「代码改动」时它由渲染层用两个带色的 Text 追加（见 render 测试）。
+  expect(bandSummary(view, ['diff'], now)).toBe('')
+  expect(bandSummary(view, ['window'], now)).not.toContain('+128')
+  // 改动本身的文字：两个方向、零值省略。
   expect(bandDiffText(diff)).toBe('+128 -34')
   expect(bandDiffText({ added: 0, removed: 0 })).toBe('')
 })
@@ -409,6 +408,39 @@ test('用量条口径选项覆盖全部取值', () => {
   expect(BAND_METRIC_OPTIONS.map(o => o.value).sort()).toEqual(
     ['context', 'cost', 'diff', 'session', 'window'].sort(),
   )
+})
+
+/**
+ * 每个标签必须和它实际画出来的内容对上。
+ *
+ * 回归：曾经把 `cost` 与 `context` 两个标签对调，结果勾「上下文占用」看到
+ * 的是额度百分比、关掉它条子毫无变化——画面上完全像「这个开关坏了」。
+ * 这条用例按**标签文字**去选口径，再断言画出来的东西，所以任何一次对调
+ * 都会立刻失败，而不是靠人肉读代码发现。
+ */
+test('口径的标签与它画出来的内容一一对应', () => {
+  const view = toUsageView({
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-20T14:00:00Z' },
+      { kind: 'seven_day', percentUsed: 70 },
+    ],
+    cost: { usd: 2 },
+    context: { window: 1_000_000, percent: 12 },
+  })
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  const valueOfLabel = (label: string) => {
+    const option = BAND_METRIC_OPTIONS.find(o => o.label === label)
+    expect(option).toBeDefined()
+    return bandSummary(view, [option!.value], now)
+  }
+
+  // 「上下文占用」画的是上下文百分比。
+  expect(valueOfLabel('上下文占用')).toBe('上下文 12%')
+  // 「5h + 7d」画的是两个额度窗口的百分比。
+  expect(valueOfLabel('5h + 7d')).toBe('5h 40% · 7d 70%')
+  // 「本会话花费」画金额，「额度窗口」画 5h 与重置时间。
+  expect(valueOfLabel('本会话花费')).toBe('本会话 ≈$2.00')
+  expect(valueOfLabel('额度窗口')).toContain('5h 40%')
 })
 
 test('口径全选时同一条数字不印两遍：window 已写 5h，context 只补 7d', () => {

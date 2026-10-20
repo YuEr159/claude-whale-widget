@@ -152,6 +152,16 @@ const LIGHT_CHART: ChartPalette = {
 /** 两套图表色，测试与文档里引用。 */
 export const CHART_PALETTES = { dark: DARK_CHART, light: LIGHT_CHART } as const
 
+/**
+ * 页内小块的底色：比所在大框**深**一档。
+ *
+ * 方向与页签的激活态相反，原因也相反：页签是「被选中所以往前浮」，而
+ * 图表块是「嵌在页面里的一块内容」，往后退一格才读得出层次。两块都往亮走
+ * 的话，页面会像一堆同样亮度的方块铺在一起，反而看不出分组。
+ */
+const DARK_INSET = { backgroundColor: '#1f2434', borderColor: '#3d4566' }
+const LIGHT_INSET = { backgroundColor: '#eef1fb', borderColor: '#c5cbe2' }
+
 /** 一组界面色：底、边、深浅标记、图表色。 */
 export type ThemeColors = PanelFill & {
   /** 当前是不是浅色主题。图表以外的地方也用得上。 */
@@ -160,6 +170,8 @@ export type ThemeColors = PanelFill & {
   chart: ChartPalette
   /** 页签被选中时的底色与边框：比所在大框再亮一档。 */
   tabActive: PanelFill
+  /** 页内小块（图表、表格）的底色与边框：比所在大框深一档。 */
+  inset: PanelFill
 }
 
 /** 深色一组。 */
@@ -168,6 +180,7 @@ const DARK: ThemeColors = {
   isLight: false,
   chart: DARK_CHART,
   tabActive: DARK_TAB_ACTIVE,
+  inset: DARK_INSET,
 }
 /** 浅色一组。 */
 const LIGHT: ThemeColors = {
@@ -175,6 +188,7 @@ const LIGHT: ThemeColors = {
   isLight: true,
   chart: LIGHT_CHART,
   tabActive: LIGHT_TAB_ACTIVE,
+  inset: LIGHT_INSET,
 }
 
 /**

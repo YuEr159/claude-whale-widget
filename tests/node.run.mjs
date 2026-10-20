@@ -341,16 +341,16 @@ test('用量条摘要按偏好切换口径', () => {
   assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'diff', 'session', 'window'].sort())
 })
 
-test('代码改动：单独成段、零值省略、其余口径不重复', () => {
+test('代码改动：摘要里不拼它（分色由渲染层做），文字本身零值省略', () => {
   const view = toUsageView({ rateLimits: [{ kind: 'five_hour', percentUsed: 40 }], cost: { usd: 2 } })
   const now = Date.parse('2026-10-20T12:00:00Z')
   const diff = { added: 128, removed: 34 }
 
-  assert.equal(bandSummary(view, ['diff'], now, diff), '+128 -34')
-  assert.equal(bandSummary(view, ['diff'], now, { added: 0, removed: 0 }), '本会话还没有代码改动')
-  // 其余口径的摘要里不含改动：增删要分色，由渲染层追加。
-  assert.ok(!bandSummary(view, ['window'], now, diff).includes('+128'))
+  // 摘要里不拼改动：增删要分两种颜色，拼进字符串就丢了颜色。
+  assert.equal(bandSummary(view, ['diff'], now), '')
+  assert.ok(!bandSummary(view, ['window'], now).includes('+128'))
   // 只有一边有改动时，零的那一边不显示。
+  assert.equal(bandDiffText(diff), '+128 -34')
   assert.equal(bandDiffText({ added: 5, removed: 0 }), '+5')
   assert.equal(bandDiffText({ added: 0, removed: 3 }), '-3')
   assert.equal(bandDiffText({ added: 0, removed: 0 }), '')
