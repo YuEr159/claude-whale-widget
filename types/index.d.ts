@@ -142,6 +142,14 @@ export type Prefs = {
   turnOffset: number
   /** 上下文图往左翻了多少屏；0 表示贴住最新一轮。 */
   contextOffset: number
+  /**
+   * 小鲸鱼的思维泡泡是否展开。
+   *
+   * 默认收起：鲸鱼只占右下角一小块，数据在上方已经完整。点一下才展开
+   * 那三行摘要。这是会话内的临时开关，不写进 `$.store`——每次打开面板
+   * 都从收起开始，界面更安静，也避免挡住下面的内容。
+   */
+  isBubbleOpen: boolean
 }
 
 /** 一轮对话的消耗（turn.complete 时记下，供提示用）。 */

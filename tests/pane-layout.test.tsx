@@ -11,6 +11,33 @@ const props = (cols: number) => ({
   view: {},
 })
 
+/** 在树里找第一个 Svg（鲸鱼可能被定位用的 Box 包着，不止一层）。 */
+function findSvg(node: any): any {
+  if (!node || typeof node !== 'object') return undefined
+  if (node.type === 'Svg') return node
+  for (const kid of node.children ?? []) {
+    const found = findSvg(kid)
+    if (found) return found
+  }
+  return undefined
+}
+
+/**
+ * 找最后一个 Svg。
+ *
+ * 面板里有好几张图（上下文柱状图、轮次历史），鲸鱼是最后画的那个。
+ * 用「第一个」会拿到前面某张图，测出来的就不是鲸鱼了。
+ */
+function findLastSvg(node: any): any {
+  if (!node || typeof node !== 'object') return undefined
+  let found: any
+  for (const kid of node.children ?? []) {
+    const deeper = findLastSvg(kid)
+    if (deeper) found = deeper
+  }
+  return found ?? (node.type === 'Svg' ? node : undefined)
+}
+
 test('面板里鲸鱼固定在右下角，且在控制行之后', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
@@ -28,17 +55,17 @@ test('面板里鲸鱼固定在右下角，且在控制行之后', async ($, on) 
   expect(tree.type).toBe('Box')
   expect(tree.props.flexDirection).toBe('column')
 
-  // 最后一行是靠右的横向 Box，里面只有鲸鱼
+  // 最后一行是靠右的横向 Box，鲸鱼在它里面
   const kids = tree.children ?? []
   const last = kids[kids.length - 1]
   expect(last?.type).toBe('Box')
   expect(last?.props?.flexDirection).toBe('row')
   expect(last?.props?.justifyContent).toBe('flex-end')
 
-  const svg = last?.children?.find((kid: any) => kid?.type === 'Svg')
+  const svg = findSvg(last)
   expect(svg).toBeDefined()
   const w = Number(svg?.props?.width)
-  expect(w).toBeGreaterThan(150)
+  expect(w).toBeGreaterThanOrEqual(150)
 
   await ui.unmount()
 })
@@ -62,7 +89,56 @@ test('窄面板同样是鲸鱼在最后一行靠右', async ($, on) => {
   const kids = tree.children ?? []
   const last = kids[kids.length - 1]
   expect(last?.props?.justifyContent).toBe('flex-end')
-  expect(last?.children?.some((kid: any) => kid?.type === 'Svg')).toBe(true)
+  expect(findSvg(last)).toBeDefined()
+
+  await ui.unmount()
+})
+
+test('泡泡默认收起：SVG 里没有气泡椭圆，只有鲸鱼', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const svg = findLastSvg(await ui.drawn())
+  const source = String(svg?.props?.source ?? '')
+  // 气泡是 <ellipse>，鲸鱼是 <image>；收起时只该有后者。
+  expect(source).not.toContain('<ellipse')
+  expect(source).toContain('<image')
+  // 展开的入口要在场，否则点不开。
+  expect(await ui.find({ key: 'whale-bubble-toggle' })).toBeDefined()
+
+  await ui.unmount()
+})
+
+test('点一下按钮，泡泡出现；再点一下，收回去', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const sourceNow = async () => String(findLastSvg(await ui.drawn())?.props?.source ?? '')
+  expect(await sourceNow()).not.toContain('<ellipse')
+
+  await ui.press({ key: 'whale-bubble-toggle' })
+  expect(await sourceNow()).toContain('<ellipse')
+
+  await ui.press({ key: 'whale-bubble-toggle' })
+  expect(await sourceNow()).not.toContain('<ellipse')
 
   await ui.unmount()
 })

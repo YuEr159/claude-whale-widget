@@ -16,7 +16,8 @@ import { contextStack, turnBars } from './usage-overview.ts'
 const COLORS = {
   used: '#6f8fe8',
   buffer: '#4a5a8a',
-  free: '#2e3350',
+  // 空闲段是「背景的空余空间」，压到很淡：它只是衬托，不该和真实用量抢眼。
+  free: '#23273a',
   axis: '#4a4f63',
   label: '#9aa0b4',
   bar: '#6f8fe8',
@@ -88,10 +89,11 @@ export function contextChartSvg(
     )
   }
 
-  // 柱子之间留 2px 间隙；柱子太窄时间隙也收窄，避免糊成一片。
+  // 柱子之间的间隙随槽位收窄，下限 0.4px：柱子多时宁可让缝隙细一点，
+  // 也要保证每根柱子本身还看得见。柱宽下限 0.5px（亚像素也会被渲染出来）。
   const slot = plotWidth / bars.length
-  const gap = Math.min(2, slot * 0.3)
-  const barWidth = Math.max(1, slot - gap)
+  const gap = Math.min(2, Math.max(0.4, slot * 0.3))
+  const barWidth = Math.max(0.5, slot - gap)
 
   const parts: string[] = []
   bars.forEach((bar, index) => {
