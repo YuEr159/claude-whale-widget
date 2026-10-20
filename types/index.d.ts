@@ -48,10 +48,6 @@ export type ScanRecord = {
 
 /** 界面偏好，持久化到 `$.store`。 */
 export type Prefs = {
-  /** 下方常驻条是否显示。 */
-  isBandVisible: boolean
-  /** 常驻条里显示哪一类数字。 */
-  bandMetric: 'window' | 'session' | 'cost' | 'context'
   /** 本地历史扫描统计最近多少天。 */
   historyDays: number
   /** 是否在每轮结束后弹出本轮消耗提示（默认关，避免每轮打断）。 */

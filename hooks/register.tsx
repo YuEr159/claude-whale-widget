@@ -1,5 +1,5 @@
 /**
- * Claude 版小鲸鱼挂件：prompt 上方常驻条 + 侧边完整面板。
+ * Claude 版小鲸鱼挂件：一个侧边面板，没有常驻条。
  *
  * 数据全部来自本机、全部只读：
  *   1. `$.session.usage()`：5 小时 / 7 天额度窗口、本会话花费、上下文占用；
@@ -18,7 +18,7 @@ import type { Register } from 'claude-code'
 import type { LocalUsage, ModelSpend, Prefs, ScanRecord, SessionTotals, TurnSpend } from '../types'
 import { costOf } from './pricing.ts'
 import { clip, pct, tokens, usd, countdown } from './format.ts'
-import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
+import { bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
 import {
   PANEL_DETAIL_OPTIONS,
   addModelSpend,
@@ -37,15 +37,13 @@ import {
   windowSourceText,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { emblemOf, moodOf, whaleBandSvg, whaleSvg } from './whale-art.ts'
+import { emblemOf, moodOf, whaleSvg } from './whale-art.ts'
 
 const PLUGIN = 'whale-usage' as const
 const PANE = 'whale'
 
 
 const DEFAULT_PREFS: Prefs = {
-  isBandVisible: true,
-  bandMetric: 'window',
   historyDays: 7,
   // 每轮都弹会打断阅读，默认关；想要的人可以在面板里打开。
   isTurnCostOn: false,
@@ -81,10 +79,6 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'whale',
       description: '打开小鲸鱼挂件：额度窗口、会话花费、上下文占用与本地用量',
-    })
-    await $.command.register({
-      name: 'whale-band',
-      description: '显示或隐藏 prompt 上方的小鲸鱼条',
     })
 
     // 时间驱动的自动扫描：每 15 秒看一眼，距上次成功扫描超过 scanIntervalMs
@@ -165,14 +159,6 @@ export const register: Register = (on, options) => {
         ? '小鲸鱼面板已打开。'
         : '小鲸鱼面板已打开，窗口加宽后会显示在侧边。',
     }
-  })
-
-  on('command.run', { command: 'whale-band' }, async $ => {
-    const held = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-    const prefsNow = held.value ?? DEFAULT_PREFS
-    const isNextVisible = !prefsNow.isBandVisible
-    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, { ...prefsNow, isBandVisible: isNextVisible })
-    return { text: isNextVisible ? '小鲸鱼条已显示。' : '小鲸鱼条已隐藏。' }
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -291,66 +277,6 @@ export const register: Register = (on, options) => {
       return result
     },
   ).catch(async ($, e, next) => next(e))
-
-  // ---------------- 常驻条 ----------------
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-    const prefsNow = heldPrefs.value ?? DEFAULT_PREFS
-    if (!prefsNow.isBandVisible || e.props.hasSurvey) return next(e)
-
-    const view = toUsageView(await $.session.usage().catch(() => undefined))
-    const mood = moodOf(view.fiveHour?.percentUsed ?? view.sevenDay?.percentUsed, e.props.isWorking)
-    const now = await $.clock.now()
-    const summary = bandSummary(view, prefsNow.bandMetric, now)
-
-    // AbovePrompt 在终端和桌面都会绘制，但只有桌面有 Svg（终端没有位图/SVG 元素）。
-    // 收窄 e.surface 后，元素表才是该 surface 的确切类型。
-    if (e.surface !== 'desktop') {
-      const { Box, Text, Button } = $.ui.resolve(e)
-      // 终端没有图形元素：文字靠左，鲸鱼 emoji 单独占最左一格。
-      return (
-        <Box key="whale-band" flexDirection="row" alignItems="center" gap={1}>
-          <Text>{emblemOf(mood)}</Text>
-          <Text dimColor>{summary}</Text>
-          <Button
-            key="whale-open"
-            plain
-            label="面板"
-            onPress={() => void $.ui.open({ id: PANE, title: '小鲸鱼' })}
-          />
-        </Box>
-      )
-    }
-
-    const { Box, Text, Button, Svg } = $.ui.resolve(e)
-
-    // 鲸鱼单独占左侧一块，压在输入框左下角——也就是原生小章鱼的位置。
-    // 摘要文字放到右边，两者之间用 flexGrow 撑开，鲸鱼不会被文字挤动。
-    return (
-      <Box
-        key="whale-band"
-        flexDirection="row"
-        alignItems="center"
-        width={e.props.bodyColumns}
-        gap={1}
-      >
-        <Svg
-          source={whaleBandSvg(mood)}
-          alt={`小鲸鱼：${summary}`}
-          width={48}
-          height={45}
-        />
-        <Box key="whale-band-fill" flexGrow={1} />
-        <Text dimColor>{summary}</Text>
-        <Button
-          key="whale-open"
-          plain
-          label="面板"
-          onPress={() => void $.ui.open({ id: PANE, title: '小鲸鱼' })}
-        />
-      </Box>
-    )
-  })
 
   // ---------------- 侧边面板 ----------------
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -614,28 +540,6 @@ export const register: Register = (on, options) => {
         />
         {Select && (
           <Select
-            key="whale-metric"
-            label="上方条显示"
-            options={BAND_METRIC_OPTIONS.map(option => ({
-              value: option.value,
-              label: option.label,
-            }))}
-            value={prefsNow.bandMetric}
-            onSelect={(value: string) => {
-              const metric = BAND_METRIC_OPTIONS.find(o => o.value === value)?.value
-              if (!metric) return
-              void (async () => {
-                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                  ...(latest.value ?? DEFAULT_PREFS),
-                  bandMetric: metric,
-                })
-              })()
-            }}
-          />
-        )}
-        {Select && (
-          <Select
             key="whale-panel-detail"
             label="面板"
             options={PANEL_DETAIL_OPTIONS.map(option => ({
@@ -692,21 +596,6 @@ export const register: Register = (on, options) => {
               await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
                 ...nowPrefs,
                 isTurnCostOn: !nowPrefs.isTurnCostOn,
-              })
-            })()
-          }}
-        />
-        <Button
-          key="whale-band-toggle"
-          plain
-          label={prefsNow.isBandVisible ? '隐藏上方条' : '显示上方条'}
-          onPress={() => {
-            void (async () => {
-              const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-              const nowPrefs = latest.value ?? DEFAULT_PREFS
-              await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                ...nowPrefs,
-                isBandVisible: !nowPrefs.isBandVisible,
               })
             })()
           }}

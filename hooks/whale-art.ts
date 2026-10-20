@@ -90,44 +90,6 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
 }
 
 /**
- * 常驻条用的像素画：极简的二次元女仆，画法照抄桌面端自带的 Clawd——
- * 大格子、纯色块、用 `<path>` 把同一行里连续的同色段合并成一条。
- *
- * 尺寸：16×15 格、每格 4 个单位，共 240 格（旧版 40×40 是 1600 格）。
- * 头 9 行、身 6 行，头身比 1.5:1。
- *
- * 低分辨率下舍掉细节（没有发丝、腮红、蝴蝶结、手指），只留能辨认的
- * 六样：蓝发、白发的女仆发箍、脸、两只眼睛、白领口、白围裙。
- * 配色取自原版立绘：蓝 #4860a8 / 浅蓝 #7a90c8 / 肤色 #f0d8d8 / 眼 #1c2440。
- *
- * 情绪不新增颜色：只在画面上叠一层薄色（忙偏暖、累偏褐、睡着偏暗），
- * 播放位置与形状都不动，所以不占额外的格子。
- */
-const PIXEL_MAID =
-'<path fill="#4860a8" d="M16 0h32v4h-32zM12 4h40v4h-40zM8 8h48v4h-48zM4 16h4v4h-4zM56 16h4v4h-4zM4 20h4v4h-4zM56 20h4v4h-4zM4 24h4v4h-4zM56 24h4v4h-4zM8 28h8v4h-8zM48 28h8v4h-8zM12 32h8v4h-8zM44 32h8v4h-8zM12 40h40v4h-40zM8 44h16v4h-16zM40 44h16v4h-16zM8 48h16v4h-16zM40 48h16v4h-16zM4 52h56v4h-56z"/><path fill="#ffffff" d="M8 12h48v4h-48zM20 36h24v4h-24zM24 44h16v4h-16zM24 48h16v4h-16z"/><path fill="#f0d8d8" d="M8 16h48v4h-48zM8 20h8v4h-8zM24 20h16v4h-16zM48 20h8v4h-8zM8 24h20v4h-20zM36 24h20v4h-20zM16 28h32v4h-32zM20 32h24v4h-24z"/><path fill="#1c2440" d="M16 20h8v4h-8zM40 20h8v4h-8zM28 24h8v4h-8z"/><path fill="#7a90c8" d="M4 56h56v4h-56z"/>'
-
-function pixelMaidSvg(mood: WhaleMood): string {
-  const tint =
-    mood === 'sleep'
-      ? '<rect width="64" height="60" fill="#22305e" opacity="0.34"/>'
-      : mood === 'tired'
-        ? '<rect width="64" height="60" fill="#8A4A2A" opacity="0.15"/>'
-        : mood === 'busy'
-          ? '<rect width="64" height="60" fill="#B07A28" opacity="0.08"/>'
-          : ''
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 60" width="64" height="60" role="img" shape-rendering="crispEdges">` +
-    PIXEL_MAID +
-    tint +
-    `</svg>`
-  )
-}
-
-export function whaleBandSvg(mood: WhaleMood): string {
-  return pixelMaidSvg(mood)
-}
-
-/**
  * 生成整幅 SVG：左上气泡 + 右下原图鲸鱼。
  *
  * 鲸鱼以 512px 的内嵌 PNG 呈现，`preserveAspectRatio` 保持比例；画布
