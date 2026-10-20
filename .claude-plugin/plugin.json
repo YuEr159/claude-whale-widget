@@ -18,8 +18,8 @@
     "historyDays": {
       "type": "number",
       "title": "本地历史统计天数",
-      "description": "统计 ~/.claude/projects 里最近多少天的用量，默认 7 天",
-      "default": 7
+      "description": "统计 ~/.claude/projects 里最近多少天的用量，默认 30 天；面板里可选 30 / 60 / 180 / 365 天",
+      "default": 30
     }
   }
 }
