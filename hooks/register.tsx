@@ -193,9 +193,15 @@ export const register: Register = (on, options) => {
     // 收窄 e.surface 后，元素表才是该 surface 的确切类型。
     if (e.surface !== 'desktop') {
       const { Box, Text, Button } = $.ui.resolve(e)
+      // 终端没有图形元素：文字靠右，鲸鱼用 emoji 占位
       return (
-        <Box key="whale-band" flexDirection="row" alignItems="center" gap={1}>
-          <Text>{emblemOf(mood)}</Text>
+        <Box
+          key="whale-band"
+          flexDirection="row"
+          alignItems="center"
+          justifyContent="flex-end"
+          gap={1}
+        >
           <Text dimColor>{summary}</Text>
           <Button
             key="whale-open"
@@ -203,26 +209,36 @@ export const register: Register = (on, options) => {
             label="面板"
             onPress={() => void $.ui.open({ id: PANE, title: '小鲸鱼' })}
           />
+          <Text>{emblemOf(mood)}</Text>
         </Box>
       )
     }
 
     const { Box, Text, Button, Svg } = $.ui.resolve(e)
 
+    // 鲸鱼排在最右：整行撑满 bodyColumns 后靠右对齐，鲸鱼就是这一行最靠右
+    // 的元素，紧贴输入框上方区域的右下角。
     return (
-      <Box key="whale-band" flexDirection="row" alignItems="center" gap={1}>
-        <Svg
-          source={whaleSvg(mood, [summary], { isAnimating: false, isCompact: true })}
-          alt={`小鲸鱼：${summary}`}
-          width={46}
-          height={24}
-        />
+      <Box
+        key="whale-band"
+        flexDirection="row"
+        alignItems="center"
+        justifyContent="flex-end"
+        width={e.props.bodyColumns}
+        gap={1}
+      >
         <Text dimColor>{summary}</Text>
         <Button
           key="whale-open"
           plain
           label="面板"
           onPress={() => void $.ui.open({ id: PANE, title: '小鲸鱼' })}
+        />
+        <Svg
+          source={whaleSvg(mood, [summary], { isAnimating: false, isCompact: true })}
+          alt={`小鲸鱼：${summary}`}
+          width={46}
+          height={24}
         />
       </Box>
     )
