@@ -266,14 +266,15 @@ export const register: Register = (on, options) => {
   // 待消费的标记，下一次 `turn.complete` 把它写进那一轮的记录，
   // 图上就能在压缩后的第一根柱子旁竖一条虚线。
   //
-  // 只观察、不改写：`next(e)` 原样往下走，压缩是否真的发生、结果如何
-  // 都不影响这里——标记的语义是「下一次看到新轮次时，它前面有过压缩」，
+  // `next(e)` 原样往下走：标记的语义是「下一次看到新轮次时，它前面有过压缩」，
   // 哪怕压缩因故被拒，下一轮照样是「压缩尝试之后」的读数。
+  // 校验器把这里判成 gating hook（返回值决定压缩是否继续），所以必须挂
+  // `.catch`——统计标记出任何岔子都不该拦住压缩本身。
   on('session.compact', async ($, e, next) => {
     // 子代理/分支的压缩不进主会话的图。
     if (!e.agentId) isCompactPending = true
     return next(e)
-  })
+  }).catch(async ($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
     const usage = e.usage
