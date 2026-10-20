@@ -4,7 +4,15 @@
  * 布局参照 Claude 桌面端的用量页：一组指标卡 + 一张按天/按小时的色块图。
  * 这里不碰 `$`，只做数据整形，方便单测。
  */
-import type { ContextTurn, LocalDay, LocalModel, LocalOverview, TurnDay } from '../types'
+import type {
+  ContextPart,
+  ContextPartKind,
+  ContextTurn,
+  LocalDay,
+  LocalModel,
+  LocalOverview,
+  TurnDay,
+} from '../types'
 import { tokens, usd } from './format.ts'
 
 /** 概览页的一张指标卡。 */
@@ -207,14 +215,88 @@ export function overviewFooter(overview: LocalOverview | undefined, totalCost: n
   return `共 ${tokens(overview.totalTokens)} tok · ${usd(totalCost)}`
 }
 
+// ---------------- 上下文构成 ----------------
+
+/**
+ * 把引擎给的行名归一成稳定键。
+ *
+ * 引擎只给行名和主题色。主题色在深浅色主题下语义不同、随版本可能变，
+ * 而行名是 `/context` 一直打印的那几个；所以按行名归一，配色才跨轮跨主题稳定。
+ * 认不出的归 `other`，不丢，只是同色。
+ */
+export function contextPartKind(name: string): ContextPartKind {
+  const text = name.trim().toLowerCase()
+  if (text.startsWith('system prompt') || text === 'system') return 'system'
+  if (text.startsWith('system tool') || text === 'tools') return 'tools'
+  if (text.startsWith('memory file')) return 'memory'
+  if (text.startsWith('mcp tool')) return 'mcp'
+  if (text.startsWith('custom agent') || text === 'agents') return 'agents'
+  if (text.startsWith('message')) return 'messages'
+  return 'other'
+}
+
+/**
+ * 从一轮的 breakdown 里取「已用」构成。
+ *
+ * 只保留 `kind === 'used'` 的行：`free` 是剩余空间、`buffer` 是压缩预留、
+ * `deferred` 在窗口之外，三者都不是「窗口被什么占着」的答案，画进构成会把
+ * 柱子的语义搅乱。返回的 token 之和可能略小于 `totalTokens`（引擎的取整），
+ * 差值在画图时补给最后一类，不让柱子出现缝隙。
+ *
+ * @param rows 引擎 breakdown 的 `categories`
+ */
+export function contextParts(rows: ReadonlyArray<{ name: string; tokens: number; kind: string }>): ContextPart[] {
+  // 同一个 kind 可能由多行合并而来（例如多个记忆文件各占一行），
+  // 行名保留最先遇到的那个，只为展示，聚合与配色都看 kind。
+  const merged = new Map<ContextPartKind, ContextPart>()
+  for (const row of rows) {
+    if (row.kind !== 'used') continue
+    if (!Number.isFinite(row.tokens) || row.tokens <= 0) continue
+    const kind = contextPartKind(row.name)
+    const prev = merged.get(kind)
+    merged.set(kind, { name: prev?.name ?? row.name, kind, tokens: (prev?.tokens ?? 0) + row.tokens })
+  }
+  return [...merged.values()].sort((a, b) => b.tokens - a.tokens)
+}
+
+/** 分类的展示名与配色键，面板与图例共用一份。 */
+export const CONTEXT_PART_LABELS: ReadonlyArray<{
+  kind: ContextPartKind
+  label: string
+  color: string
+}> = [
+  { kind: 'system', label: '系统提示', color: 'promptBorder' },
+  { kind: 'tools', label: '工具定义', color: 'suggestion' },
+  { kind: 'memory', label: '记忆文件', color: 'remember' },
+  { kind: 'mcp', label: 'MCP 工具', color: 'ide' },
+  { kind: 'agents', label: '自定义 agent', color: 'permission' },
+  { kind: 'messages', label: '对话消息', color: 'claude' },
+  { kind: 'other', label: '其他', color: 'subtle' },
+]
+
+/** 分类的展示名；未列出的键原样返回。 */
+export function contextPartLabel(kind: ContextPartKind): string {
+  return CONTEXT_PART_LABELS.find(item => item.kind === kind)?.label ?? kind
+}
+
+/** 分类的配色键；未知键用最淡的那档。 */
+export function contextPartColor(kind: ContextPartKind): string {
+  return CONTEXT_PART_LABELS.find(item => item.kind === kind)?.color ?? 'subtle'
+}
+
 // ---------------- 堆叠柱状图 ----------------
 
 /** 堆叠柱的一层：某一段的高度与配色键。 */
 export type StackSegment = {
   /** 占比，用于画该段占几行。 */
   ratio: number
-  /** 该段属于哪一类，决定颜色。 */
-  kind: 'used' | 'buffer' | 'free'
+  /**
+   * 该段属于哪一类，决定颜色。
+   *
+   * 前三个是窗口的三段骨架（已用 / 压缩缓冲 / 空闲）；有构成数据时，
+   * 「已用」再按内容类别细分，键直接是 `ContextPartKind`。
+   */
+  kind: 'used' | 'buffer' | 'free' | ContextPartKind
 }
 
 /** 一根柱子：按轮次排列，堆叠出上下文窗口的构成。 */
@@ -227,6 +309,8 @@ export type StackBar = {
   percent: number
   /** 已用 token 数，供提示与排序。 */
   tokens: number
+  /** 这一轮是否有分类构成；没有时柱子退回单色「已用」。 */
+  hasParts: boolean
 }
 
 /**
@@ -235,6 +319,10 @@ export type StackBar = {
  * 每一根柱子代表一轮：柱高固定为窗口的 100%，内部按「已用 / 压缩缓冲 / 空闲」
  * 分段堆叠。这样一眼能看出两件事：柱子左侧的已用段有多高（上下文占比），
  * 以及占比随轮次的走势。
+ *
+ * 有构成数据（`turn.parts`）时，「已用」那一段再按内容类别细分——这正是
+ * dsh-context 的核心读法：不只看到窗口满了多少，还看到被什么占满。
+ * 缺构成的老记录退回单色，两种柱子可以画在同一张图里。
  *
  * @param turns      逐轮记录，按时间升序
  * @param maxBars    最多画几根（从最新的往回取）
@@ -254,15 +342,32 @@ export function contextStack(
     // 已用与缓冲不能相加超过 100%，否则柱子在视觉上会溢出。
     const shownBuffer = Math.min(buffer, Math.max(0, 100 - used))
     const free = Math.max(0, 100 - used - shownBuffer)
+
+    const segments: StackSegment[] = []
+    const parts = turn.parts?.filter(part => part.tokens > 0) ?? []
+    if (parts.length === 0) {
+      segments.push({ ratio: used / 100, kind: 'used' })
+    } else {
+      // 用 token 占比而不是「percent 平均分」：一次请求里系统提示几十 k、
+      // 对话消息几百 k，平均分会把它们画成一样宽，正好抹掉要看的差别。
+      const partTotal = parts.reduce((sum, part) => sum + part.tokens, 0)
+      if (partTotal > 0) {
+        for (const part of parts) {
+          segments.push({ ratio: (part.tokens / partTotal) * (used / 100), kind: part.kind })
+        }
+      } else {
+        segments.push({ ratio: used / 100, kind: 'used' })
+      }
+    }
+    if (shownBuffer > 0) segments.push({ ratio: shownBuffer / 100, kind: 'buffer' })
+    if (free > 0) segments.push({ ratio: free / 100, kind: 'free' })
+
     return {
       label: String(turn.seq),
-      segments: [
-        { ratio: used / 100, kind: 'used' as const },
-        { ratio: shownBuffer / 100, kind: 'buffer' as const },
-        { ratio: free / 100, kind: 'free' as const },
-      ].filter(segment => segment.ratio > 0),
+      segments: segments.filter(segment => segment.ratio > 0),
       percent: used,
       tokens: turn.tokens,
+      hasParts: parts.length > 0,
     }
   })
 
@@ -303,24 +408,58 @@ export function rasterizeStacks(
   return grid
 }
 
-/** 堆叠柱的配色：已用最亮，缓冲次之，空闲最淡。 */
+/**
+ * 堆叠柱的配色。
+ *
+ * 窗口的三段骨架与内容分类共用这一个入口：`used` 是没有构成数据时的单色，
+ * 内容分类则各有一色（与图例同源）。这样字符版与矢量版拿到的颜色一致。
+ */
 export function stackColor(kind: StackSegment['kind'] | null): string | undefined {
-  switch (kind) {
-    case 'used':
-      return 'claude'
-    case 'buffer':
-      return 'subtle'
-    case 'free':
-      return 'inactive'
-    default:
-      return undefined
-  }
+  if (kind === null) return undefined
+  if (kind === 'used') return 'claude'
+  if (kind === 'buffer') return 'subtle'
+  if (kind === 'free') return 'inactive'
+  return contextPartColor(kind)
 }
 
 /** 堆叠柱图的说明文字：`最近 24 轮 · 峰值 42%`。 */
 export function stackCaption(barCount: number, peak: number): string {
   if (barCount === 0) return '还没有逐轮数据（跑一轮对话后出现）'
   return `最近 ${barCount} 轮 · 峰值 ${Math.round(peak)}%`
+}
+
+/** 图例的一项。 */
+export type StackLegendItem = {
+  kind: StackSegment['kind']
+  label: string
+  color: string
+}
+
+/**
+ * 按这一屏实际出现过的分段生成图例。
+ *
+ * 不画固定的三色图例：有构成数据时柱子里会出现六七种颜色，固定图例解释不了它们；
+ * 反过来只有老记录时列一堆分类名又是噪音。所以图例跟着数据走，但**顺序固定**
+ * （按 `CONTEXT_PART_LABELS` 的次序，再补缓冲与空闲），翻页时颜色与位置的对应不跳。
+ */
+export function stackLegendOf(bars: StackBar[]): StackLegendItem[] {
+  const present = new Set<StackSegment['kind']>()
+  for (const bar of bars) {
+    for (const segment of bar.segments) present.add(segment.kind)
+  }
+
+  const items: StackLegendItem[] = []
+  // 老记录没有分类构成，用单色「已用」画；它和新记录的分类柱可以同屏，
+  // 所以图例里允许两者并存。
+  if (present.has('used')) items.push({ kind: 'used', label: '已用（无构成）', color: 'claude' })
+  for (const part of CONTEXT_PART_LABELS) {
+    // `other` 是兜底键，没出现就不列；其余分类同理，出现才列。
+    if (!present.has(part.kind)) continue
+    items.push({ kind: part.kind, label: part.label, color: part.color })
+  }
+  if (present.has('buffer')) items.push({ kind: 'buffer', label: '压缩缓冲', color: 'subtle' })
+  if (present.has('free')) items.push({ kind: 'free', label: '空闲', color: 'inactive' })
+  return items
 }
 
 // ---------------- 轮次历史（GitHub 式柱状图） ----------------
@@ -343,13 +482,14 @@ export type TurnBar = {
  *
  * @param days       逐日轮次
  * @param windowDays 一共要看多少天；不足的向前补 0
+ * @param endDay     右端是哪一天（`YYYY-MM-DD`）；省略时取最后一条记录所在日
  */
-export function turnBars(days: TurnDay[], windowDays: number): TurnBar[] {
+export function turnBars(days: TurnDay[], windowDays: number, endDay?: string): TurnBar[] {
   if (windowDays <= 0) return []
   const byDay = new Map(days.map(item => [item.day, item.turns]))
 
-  // 以 today（最后一次记录所在日或系统今天）为右端，往前铺 windowDays 天。
-  const anchor = days.length > 0 ? days[days.length - 1]!.day : localDayKey(new Date())
+  // 右端：显式指定 > 最后一次记录所在日 > 系统今天。
+  const anchor = endDay ?? (days.length > 0 ? days[days.length - 1]!.day : localDayKey(new Date()))
   const anchorDate = new Date(`${anchor}T00:00:00`)
   const bars: TurnBar[] = []
   if (Number.isNaN(anchorDate.getTime())) return []
@@ -363,6 +503,52 @@ export function turnBars(days: TurnDay[], windowDays: number): TurnBar[] {
 
   const max = bars.reduce((top, bar) => (bar.turns > top ? bar.turns : top), 0)
   return bars.map(bar => ({ ...bar, ratio: max > 0 ? bar.turns / max : 0 }))
+}
+
+/**
+ * 把轮次历史按「天」切成页，而不是按记录条数：`turnsDaily` 只含有轮次的日子，
+ * 按条数切会让每页覆盖的天数忽长忽短，柱子宽窄跳动。
+ *
+ * `offset` 是往左（历史）翻了几页，0 表示最右边、贴住最新一天。
+ */
+export function turnPages(
+  days: TurnDay[],
+  windowDays: number,
+  offset: number,
+): { endDay: string; maxOffset: number; page: number; pages: number } {
+  const size = Math.max(1, Math.floor(windowDays))
+  const today = localDayKey(new Date())
+  if (days.length === 0) {
+    return { endDay: today, maxOffset: 0, page: 1, pages: 1 }
+  }
+
+  const latest = days[days.length - 1]!.day
+  const earliest = days[0]!.day
+  const span = dayGap(earliest, latest) + 1
+  const pages = Math.max(1, Math.ceil(span / size))
+  const clamped = Math.max(0, Math.min(Math.floor(offset), pages - 1))
+  return {
+    endDay: shiftDay(latest, -clamped * size),
+    maxOffset: pages - 1,
+    page: pages - clamped,
+    pages,
+  }
+}
+
+/** 两个 `YYYY-MM-DD` 相差几天；日期非法时返回 0。 */
+function dayGap(from: string, to: string): number {
+  const a = new Date(`${from}T00:00:00`).getTime()
+  const b = new Date(`${to}T00:00:00`).getTime()
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0
+  return Math.max(0, Math.round((b - a) / 86_400_000))
+}
+
+/** 把 `YYYY-MM-DD` 往前（负数）或往后挪几天。 */
+function shiftDay(day: string, delta: number): string {
+  const date = new Date(`${day}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return day
+  date.setDate(date.getDate() + delta)
+  return localDayKey(date)
 }
 
 /** 本地时区的 `YYYY-MM-DD`，与扫描脚本的切天口径一致。 */

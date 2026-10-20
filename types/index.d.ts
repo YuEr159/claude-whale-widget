@@ -52,7 +52,12 @@ export type TurnDay = {
   turns: number
 }
 
-/** 一轮的上下文占比，供堆叠柱状图使用。 */
+/**
+ * 一轮的上下文构成。
+ *
+ * 借鉴 dsh-context 的做法：上下文不是一个百分比，而是若干类内容拼起来的窗口。
+ * 每轮留一份分类占用，面板才能画出「这根柱子为什么变高」，而不只是「变高了」。
+ */
 export type ContextTurn = {
   /** 本轮的轮次序号（会话内递增）。 */
   seq: number
@@ -62,7 +67,38 @@ export type ContextTurn = {
   tokens: number
   /** 记录时间，毫秒。 */
   at: number
+  /**
+   * 本轮窗口里各分类的占用，按引擎 breakdown 的 `used` 行原样保留；
+   * 老记录没有这个字段，读的时候按「无构成」处理。
+   */
+  parts?: ContextPart[]
+  /** 本轮窗口的总 token（即 breakdown 的 `rawMaxTokens`），给构成换算百分比用。 */
+  windowTokens?: number
 }
+
+/** 上下文中一类内容的占用。 */
+export type ContextPart = {
+  /** 引擎给的行名（`System prompt`、`Messages`、`Memory files`…）。 */
+  name: string
+  tokens: number
+  /**
+   * 这一类的稳定标识，供界面配色与聚合。
+   *
+   * 引擎只给行名和主题色，而主题色在深色/浅色主题下含义不同、还可能随版本变；
+   * 这里用行名归一化出一个稳定键，跨轮同色的前提就是它。
+   */
+  kind: ContextPartKind
+}
+
+/** 上下文分类的稳定键；未识别的一律 `other`。 */
+export type ContextPartKind =
+  | 'system'
+  | 'tools'
+  | 'memory'
+  | 'mcp'
+  | 'agents'
+  | 'messages'
+  | 'other'
 
 /** `scripts/usage-scan.mjs` 一次输出的全部内容。 */
 export type LocalUsage = {
@@ -102,6 +138,10 @@ export type Prefs = {
   panelDetail: 'simple' | 'detail'
   /** 本地用量看哪一页：概览卡片 + 热力图，还是逐模型排行。 */
   panelPage: 'overview' | 'models'
+  /** 轮次图往左翻了多少屏；0 表示贴住最新一天。 */
+  turnOffset: number
+  /** 上下文图往左翻了多少屏；0 表示贴住最新一轮。 */
+  contextOffset: number
 }
 
 /** 一轮对话的消耗（turn.complete 时记下，供提示用）。 */

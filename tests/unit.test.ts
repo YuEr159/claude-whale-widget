@@ -32,12 +32,17 @@ import {
   overviewCards,
   heatLevel,
   isPlaceholderModel,
+  contextPartKind,
+  contextParts,
   contextStack,
+  stackLegendOf,
   rasterizeStacks,
   rasterizeTurnBars,
   turnBars,
   turnBarsCaption,
+  turnPages,
 } from '../hooks/usage-overview'
+import { contextChartSvg, pageOf, turnChartSvg } from '../hooks/chart-art'
 
 test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -492,4 +497,105 @@ test('轮次柱光栅化：0 轮也画一格底，时间轴不断档', () => {
   // 满值那根比 0 轮那根高
   const heightOf = (index: number) => grid.filter(row => row[index] === 'bar').length
   expect(heightOf(1)).toBeGreaterThan(heightOf(0))
+})
+
+test('图表翻页：0 贴住最新一页，越翻越往历史走', () => {
+  const items = Array.from({ length: 60 }, (_, index) => index)
+  const newest = pageOf(items, 24, 0)
+  expect(newest.slice).toEqual(items.slice(36, 60))
+  expect(newest.pages).toBe(3)
+  expect(newest.page).toBe(3)
+  expect(newest.maxOffset).toBe(2)
+
+  expect(pageOf(items, 24, 1).page).toBe(2)
+  const oldest = pageOf(items, 24, 99)
+  expect(oldest.slice).toEqual(items.slice(0, 12))
+  expect(oldest.page).toBe(1)
+})
+
+test('轮次图按天分页：窗口天数固定，右端随页移动', () => {
+  const days = [
+    { day: '2026-09-21', turns: 3 },
+    { day: '2026-10-20', turns: 9 },
+  ]
+  const newest = turnPages(days, 7, 0)
+  expect(newest.endDay).toBe('2026-10-20')
+  expect(newest.maxOffset).toBe(4)
+  expect(turnPages(days, 7, 1).endDay).toBe('2026-10-13')
+  expect(turnPages(days, 7, 99).page).toBe(1)
+
+  const bars = turnBars(days, 7, newest.endDay)
+  expect(bars).toHaveLength(7)
+  expect(bars[6]?.day).toBe('2026-10-20')
+})
+
+test('两张图在空数据时也给出合法 SVG', () => {
+  for (const svg of [contextChartSvg([], 320), turnChartSvg([], 320, 7)]) {
+    expect(svg.startsWith('<svg')).toBe(true)
+    expect(svg.endsWith('</svg>')).toBe(true)
+    expect(svg.includes('NaN')).toBe(false)
+  }
+})
+
+test('上下文分类：按行名归一，只取已用行', () => {
+  expect(contextPartKind('System prompt')).toBe('system')
+  expect(contextPartKind('System tools')).toBe('tools')
+  expect(contextPartKind('Memory files')).toBe('memory')
+  expect(contextPartKind('MCP tools')).toBe('mcp')
+  expect(contextPartKind('Custom agents')).toBe('agents')
+  expect(contextPartKind('Messages')).toBe('messages')
+  expect(contextPartKind('Slash commands')).toBe('other')
+
+  const parts = contextParts([
+    { name: 'System prompt', tokens: 12_000, kind: 'used' },
+    { name: 'Messages', tokens: 300_000, kind: 'used' },
+    { name: 'Free space', tokens: 600_000, kind: 'free' },
+    { name: 'Autocompact buffer', tokens: 45_000, kind: 'buffer' },
+    { name: 'MCP tools (deferred)', tokens: 9_000, kind: 'deferred' },
+  ])
+  expect(parts.map(p => p.kind)).toEqual(['messages', 'system'])
+})
+
+test('有构成时按内容分类堆叠，缺构成的老记录退回单色', () => {
+  const { bars } = contextStack([
+    {
+      seq: 1,
+      percent: 50,
+      tokens: 1000,
+      at: 0,
+      parts: [
+        { name: 'Messages', kind: 'messages', tokens: 300_000 },
+        { name: 'System prompt', kind: 'system', tokens: 100_000 },
+      ],
+    },
+    { seq: 2, percent: 20, tokens: 500, at: 1 },
+  ], 24, 10)
+
+  expect(bars[0]?.hasParts).toBe(true)
+  expect(bars[1]?.hasParts).toBe(false)
+  expect(bars[0]?.segments.map(s => s.kind)).toEqual(['messages', 'system', 'buffer', 'free'])
+  expect(bars[1]?.segments.map(s => s.kind)).toEqual(['used', 'buffer', 'free'])
+
+  const sum = bars[0]?.segments.reduce((acc, s) => acc + s.ratio, 0) ?? 0
+  expect(Math.abs(sum - 1) < 1e-9).toBe(true)
+  // 300k / 400k 的已用部分 = 50% × 0.75 = 37.5%
+  expect(Math.abs((bars[0]?.segments[0]?.ratio ?? 0) - 0.375) < 1e-9).toBe(true)
+})
+
+test('图例只列出现过的分类，顺序固定', () => {
+  const { bars } = contextStack([{
+    seq: 1,
+    percent: 60,
+    tokens: 1,
+    at: 0,
+    parts: [
+      { name: 'Messages', kind: 'messages', tokens: 5 },
+      { name: 'System prompt', kind: 'system', tokens: 3 },
+      { name: 'MCP tools', kind: 'mcp', tokens: 1 },
+    ],
+  }], 24, 20)
+  expect(stackLegendOf(bars).map(item => item.kind)).toEqual(['system', 'mcp', 'messages', 'buffer', 'free'])
+
+  const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
+  expect(stackLegendOf(legacy.bars).map(item => item.kind)).toEqual(['used', 'buffer', 'free'])
 })

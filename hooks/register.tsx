@@ -27,8 +27,10 @@ import type {
 import { costOf } from './pricing.ts'
 import { clip, pct, tokens, usd, countdown } from './format.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
+import { CHART_LEGEND, contextChartSvg, pageOf, turnChartSvg } from './chart-art.ts'
 import {
   barText,
+  contextParts,
   contextStack,
   maskModel,
   modelRows,
@@ -38,8 +40,10 @@ import {
   rasterizeTurnBars,
   stackCaption,
   stackColor,
+  stackLegendOf,
   turnBars,
   turnBarsCaption,
+  turnPages,
 } from './usage-overview.ts'
 import {
   PANEL_DETAIL_OPTIONS,
@@ -77,6 +81,9 @@ const DEFAULT_PREFS: Prefs = {
   panelDetail: 'detail',
   // 默认落在概览页。
   panelPage: 'overview',
+  // 两张图默认贴住最新数据，往左翻时才用偏移量。
+  turnOffset: 0,
+  contextOffset: 0,
 }
 
 const EMPTY_SCAN: ScanRecord = {
@@ -253,20 +260,36 @@ export const register: Register = (on, options) => {
       // 逐轮上下文占比：面板据此画堆叠柱状图。
       // 只保留最近 60 轮——再长的历史在面板里也画不下，而状态是会话级的，
       // 没必要无限增长。
+      //
+      // 同时取一次 breakdown（`summary` 全本地估算、不发 token 计数请求），
+      // 把「窗口被什么占着」一并记下。这是借 dsh-context 的核心读法：
+      // 上下文是一个由若干类内容拼起来的窗口，不是一个人均数。
       const heldContext = await $.state.get({ plugin: 'whale-usage', key: 'contextTurns' } as const)
       const contextTurns: ContextTurn[] = heldContext.value ?? []
-      const live = await $.session.usage().catch(() => undefined)
-      const percent = toUsageView(live).contextPercent
+      const live = await $.session
+        .usage({ breakdown: 'summary', columns: 40 })
+        .catch(() => undefined)
+      const liveView = toUsageView(live)
+      const percent = liveView.contextPercent
       if (percent !== undefined) {
         const usedTokens =
           usage.input_tokens +
           usage.cache_read_input_tokens +
           usage.cache_creation_input_tokens +
           usage.output_tokens
-        const history = [
-          ...contextTurns,
-          { seq: spend.seq, percent, tokens: usedTokens, at: spend.at },
-        ].slice(-CONTEXT_TURNS_KEPT)
+        // 只有当轮的构成：`live` 是这一轮结束时的窗口快照。
+        // 走面板同一个解析函数，形状不对就当作没有构成，不另写一套判空。
+        const liveDetail = toContextDetail(liveView.breakdown)
+        const parts = liveDetail ? contextParts(liveDetail.rows) : []
+        const entry: ContextTurn = {
+          seq: spend.seq,
+          percent,
+          tokens: usedTokens,
+          at: spend.at,
+          ...(parts.length > 0 ? { parts } : {}),
+          ...(liveView.contextWindow ? { windowTokens: liveView.contextWindow } : {}),
+        }
+        const history = [...contextTurns, entry].slice(-CONTEXT_TURNS_KEPT)
         await $.state.set({ plugin: 'whale-usage', key: 'contextTurns' } as const, history)
       }
 
@@ -529,40 +552,100 @@ export const register: Register = (on, options) => {
             contextDetail.rawMaxTokens) *
           100
         : 0
-    const stacks = contextStack(contextTurns, 24, Math.max(0, bufferPct))
-    const stackRows = width >= 60 ? 8 : 6
-    const stackGrid = rasterizeStacks(stacks.bars, stackRows)
-    const contextChart =
-      stacks.bars.length > 0 ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text bold dimColor>
-            上下文占比
+    // 面板只有纵向滚动，横向拉不动；所以每张图配一对翻页按钮，
+    // 一页一个窗口，默认贴住最新一端。
+    const contextPage = pageOf(contextTurns, 24, prefsNow.contextOffset ?? 0)
+    const stacks = contextStack(contextPage.slice, contextPage.slice.length, Math.max(0, bufferPct))
+    const stackLegend = stackLegendOf(stacks.bars)
+    const chartWidth = Math.max(80, Math.min(width * 8 - 16, 640))
+
+    // 翻页按钮：offset 越大越往历史，所以 ◀ 加、▶ 减，写回时夹在合法范围内。
+    // 只有一页时整对按钮都不画——点了不会动，留着只会让人以为还有更多。
+    const turnPage = (
+      key: 'contextOffset' | 'turnOffset',
+      maxOffset: number,
+      page: number,
+      pages: number,
+      handler: (delta: number) => void,
+    ) =>
+      maxOffset <= 0 ? null : (
+        <>
+          <Button key={`whale-left-${key}`} plain label="◀" onPress={() => handler(1)} />
+          <Button key={`whale-right-${key}`} plain label="▶" onPress={() => handler(-1)} />
+          <Text dimColor>
+            {page}/{pages}
           </Text>
-          {stackGrid.map((line, rowIndex) => (
-            <Box key={`whale-stack-${rowIndex}`} flexDirection="row">
-              {line.map((bar, barIndex) => (
-                <Text
-                  key={`whale-stack-${rowIndex}-${barIndex}`}
-                  color={stackColor(bar[0] ?? null)}
-                >
-                  {/* 空闲段用 `·` 而不是空格：深色背景下一根柱子要有可见的轮廓，
-                      否则只有「已用」那一段悬空，看不出柱子的总量。 */}
-                  {bar[0] === 'used' ? '█' : bar[0] === 'buffer' ? '▒' : '·'}
-                </Text>
+        </>
+      )
+
+    const writeOffset = (key: 'contextOffset' | 'turnOffset', delta: number, maxOffset: number) => {
+      void (async () => {
+        const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+        const nowPrefs = latest.value ?? DEFAULT_PREFS
+        const current = nowPrefs[key] ?? 0
+        const clamped = Math.max(0, Math.min(current + delta, maxOffset))
+        await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+          ...nowPrefs,
+          [key]: clamped,
+        })
+      })()
+    }
+
+    const contextChart =
+      contextPage.slice.length === 0 ? null : (
+        <Box flexDirection="column" marginTop={1}>
+          <Box flexDirection="row" gap={1} alignItems="center">
+            <Text bold dimColor>
+              上下文占比
+            </Text>
+            {turnPage(
+              'contextOffset',
+              contextPage.maxOffset,
+              contextPage.page,
+              contextPage.pages,
+              delta => writeOffset('contextOffset', delta, contextPage.maxOffset),
+            )}
+          </Box>
+          {Svg ? (
+            <Svg
+              source={contextChartSvg(
+                contextPage.slice,
+                chartWidth,
+                contextPage.slice.length,
+                Math.max(0, bufferPct),
+              )}
+              alt={stackCaption(stacks.bars.length, stacks.peak)}
+              width={chartWidth}
+              height={96}
+            />
+          ) : (
+            <>
+              {rasterizeStacks(stacks.bars, width >= 60 ? 8 : 6).map((line, rowIndex) => (
+                <Box key={`whale-stack-${rowIndex}`} flexDirection="row">
+                  {line.map((bar, barIndex) => (
+                    <Text
+                      key={`whale-stack-${rowIndex}-${barIndex}`}
+                      color={stackColor(bar[0] ?? null)}
+                    >
+                      {bar[0] === 'buffer' ? '▒' : bar[0] === 'free' ? '·' : bar[0] ? '█' : ' '}
+                    </Text>
+                  ))}
+                </Box>
               ))}
-            </Box>
-          ))}
-          <Box flexDirection="row" gap={1}>
-            <Text color="claude">█</Text>
-            <Text dimColor>已用</Text>
-            <Text color="subtle">█</Text>
-            <Text dimColor>压缩缓冲</Text>
-            <Text color="inactive">█</Text>
-            <Text dimColor>空闲</Text>
+            </>
+          )}
+          {/* 图例跟着数据走：只列这一屏里真正出现过的分类，缺构成的柱子仍按「已用」标。 */}
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            {stackLegend.map(item => (
+              <Box key={`whale-legend-${item.kind}`} flexDirection="row" gap={1}>
+                <Text color={item.color}>■</Text>
+                <Text dimColor>{item.label}</Text>
+              </Box>
+            ))}
           </Box>
           <Text dimColor>{stackCaption(stacks.bars.length, stacks.peak)}</Text>
         </Box>
-      ) : null
+      )
 
     // 上下文明细：原生 /context 的网格 + 逐项。只有拿到 breakdown 才画。
     const contextSection = contextDetail ? (
@@ -694,9 +777,16 @@ export const register: Register = (on, options) => {
               : 'promptBorder'
 
     // 轮次历史：GitHub 贡献图那种「每天一根柱」，柱高＝当天轮次。
-    const turnHistory = turnBars(data?.turnsDaily ?? [], prefsNow.historyDays)
+    // 一页就是 historyDays 天，往左翻页看更早的窗口。
+    const turnWindow = turnPages(
+      data?.turnsDaily ?? [],
+      prefsNow.historyDays,
+      prefsNow.turnOffset ?? 0,
+    )
+    const turnHistory = turnBars(data?.turnsDaily ?? [], prefsNow.historyDays, turnWindow.endDay)
     const turnRows = 6
     const turnGrid = rasterizeTurnBars(turnHistory, turnRows)
+    const turnChartWidth = Math.max(80, Math.min(width * 8 - 16, 640))
 
     const overviewPage = (
       <>
@@ -718,22 +808,42 @@ export const register: Register = (on, options) => {
         </Box>
         {turnHistory.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Text bold dimColor>
-              轮次历史
-            </Text>
-            {turnGrid.map((line, rowIndex) => (
-              <Box key={`whale-turn-${rowIndex}`} flexDirection="row">
-                {line.map((cell, index) => (
-                  <Text
-                    key={`whale-turn-${rowIndex}-${index}`}
-                    color={cell === 'bar' ? 'claude' : 'inactive'}
-                    dimColor={cell !== 'bar'}
-                  >
-                    {cell === 'bar' ? '█' : '▁'}
-                  </Text>
+            <Box flexDirection="row" gap={1} alignItems="center">
+              <Text bold dimColor>
+                轮次历史
+              </Text>
+              {turnPage(
+                'turnOffset',
+                turnWindow.maxOffset,
+                turnWindow.page,
+                turnWindow.pages,
+                delta => writeOffset('turnOffset', delta, turnWindow.maxOffset),
+              )}
+            </Box>
+            {Svg ? (
+              <Svg
+                source={turnChartSvg(turnHistory, turnChartWidth, turnHistory.length)}
+                alt={turnBarsCaption(turnHistory)}
+                width={turnChartWidth}
+                height={80}
+              />
+            ) : (
+              <>
+                {turnGrid.map((line, rowIndex) => (
+                  <Box key={`whale-turn-${rowIndex}`} flexDirection="row">
+                    {line.map((cell, index) => (
+                      <Text
+                        key={`whale-turn-${rowIndex}-${index}`}
+                        color={cell === 'bar' ? 'claude' : 'inactive'}
+                        dimColor={cell !== 'bar'}
+                      >
+                        {cell === 'bar' ? '█' : '▁'}
+                      </Text>
+                    ))}
+                  </Box>
                 ))}
-              </Box>
-            ))}
+              </>
+            )}
             <Text dimColor>{turnBarsCaption(turnHistory)}</Text>
           </Box>
         )}
