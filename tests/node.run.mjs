@@ -60,7 +60,7 @@ import {
   turnHeatSvg,
 } from '../hooks/chart-art.ts'
 import { UNPRICED, usdEstimate } from '../hooks/provenance.ts'
-import { FILLS, isLightTheme, panelFillFor } from '../hooks/panel-fill.ts'
+import { CHART_PALETTES, FILLS, isLightTheme, panelFillFor } from '../hooks/panel-fill.ts'
 
 test('价格表：官方模型按 1.25x / 0.1x 缓存计，DeepSeek Flash 单独一套', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -742,6 +742,103 @@ test('固定纵轴 100% 时保留旧行为：柱子补满，含空闲段', () =>
   assert.deepEqual(bars[0].segments.map(s => s.kind), ['used', 'buffer', 'free'])
   const sum = bars[0].segments.reduce((acc, s) => acc + s.ratio, 0)
   assert.ok(Math.abs(sum - 1) < 1e-9, `柱子应当补满到 100%，实际 ${sum}`)
+})
+
+
+// ---------------- 深浅主题的对比度 ----------------
+//
+// 这一组不是「看着还行」的检查：它按 WCAG 的公式算出每支色在两套背景上的
+// 对比度，低于阈值就失败。图表是纯 SVG，颜色写死在调色板里，没有主题键
+// 可以交给引擎解析——所以**只能靠这组断言保证浅色主题下也读得出来**。
+//
+// 阈值取 WCAG 的常见档：文字 4.5，图形元素 3.0。背景取两套主题各自的
+// 面板底色（不是纯黑纯白），因为图表实际画在那上面。
+
+const sRGB = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255)
+const toLin = c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+const luminance = h => {
+  const [r, g, b] = sRGB(h).map(toLin)
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+/** 两色的对比度，1–21。 */
+const contrast = (a, b) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+/** 把半透明色叠到背景上，得到实际呈现的颜色。 */
+const over = (fg, alpha, bg) => {
+  const f = sRGB(fg)
+  const b = sRGB(bg)
+  return (
+    '#' +
+    f
+      .map((c, i) => Math.round((c * alpha + b[i] * (1 - alpha)) * 255).toString(16).padStart(2, '0'))
+      .join('')
+  )
+}
+
+// 两套主题下面板里图表所在的底色：深色取面板底，浅色取卡片底。
+const DARK_BG = '#1a1a1a'
+const LIGHT_BG = '#ffffff'
+
+test('深色主题：每支图表色的对比度都过线', () => {
+  const p = CHART_PALETTES.dark
+  for (const [kind, color] of Object.entries(p.parts)) {
+    const ratio = contrast(color, DARK_BG)
+    assert.ok(ratio >= 3, `分类 ${kind} 在深色底上只有 ${ratio.toFixed(2)}，低于 3.0`)
+  }
+  assert.ok(contrast(p.label, DARK_BG) >= 4.5, '刻度文字要 4.5')
+  assert.ok(contrast(p.axis, DARK_BG) >= 3, '轴线要 3.0')
+  assert.ok(contrast(p.compact, DARK_BG) >= 3, '压缩标记要 3.0')
+  // 主色（柱子的主角）也当图形元素看。
+  assert.ok(contrast(p.used, DARK_BG) >= 3, '主色要 3.0')
+})
+
+test('浅色主题：每支图表色的对比度都过线', () => {
+  const p = CHART_PALETTES.light
+  for (const [kind, color] of Object.entries(p.parts)) {
+    const ratio = contrast(color, LIGHT_BG)
+    assert.ok(ratio >= 3, `分类 ${kind} 在浅色底上只有 ${ratio.toFixed(2)}，低于 3.0`)
+  }
+  assert.ok(contrast(p.label, LIGHT_BG) >= 4.5, '刻度文字要 4.5')
+  assert.ok(contrast(p.axis, LIGHT_BG) >= 3, '轴线要 3.0')
+  assert.ok(contrast(p.compact, LIGHT_BG) >= 3, '压缩标记要 3.0')
+  assert.ok(contrast(p.used, LIGHT_BG) >= 3, '主色要 3.0')
+})
+
+test('两套主题的分段色彼此分得开：已用 > 缓冲 > 空闲', () => {
+  for (const [name, p, bg] of [
+    ['深色', CHART_PALETTES.dark, DARK_BG],
+    ['浅色', CHART_PALETTES.light, LIGHT_BG],
+  ]) {
+    const used = over(p.used, p.usedOpacity, bg)
+    const buffer = over(p.used, p.bufferOpacity, bg)
+    const free = over(p.used, p.freeOpacity, bg)
+    const cUsed = contrast(used, bg)
+    const cBuffer = contrast(buffer, bg)
+    const cFree = contrast(free, bg)
+    // 三段是「越来越靠近背景」的次序，别反了。
+    assert.ok(cUsed > cBuffer, `${name}：已用应当比压缩缓冲更显眼`)
+    assert.ok(cBuffer > cFree, `${name}：压缩缓冲应当比空闲更显眼`)
+    // 相邻两段之间也要有可见差别，否则柱子看起来是一整块。
+    assert.ok(cUsed - cBuffer > 0.4, `${name}：已用与缓冲差别太小`)
+    assert.ok(cBuffer - cFree > 0.2, `${name}：缓冲与空闲差别太小`)
+  }
+})
+
+test('模型色阶在两套主题下都能按序号区分', () => {
+  for (const [name, isLight, bg] of [
+    ['深色', false, DARK_BG],
+    ['浅色', true, LIGHT_BG],
+  ]) {
+    const colors = [0, 1, 2, 3, 4].map(i => modelFill(i, isLight))
+    // 每一支本身都要看得见。
+    for (const [i, color] of colors.entries()) {
+      assert.ok(contrast(color, bg) >= 3, `${name} 第 ${i} 支对比度不足`)
+    }
+    // 相邻两支不能撞成一样（同一支色出现两次就说明色阶配错了）。
+    assert.equal(new Set(colors).size, colors.length, `${name}：模型色阶有重复`)
+  }
 })
 
 test('金额一律带估算标记，零与缺失值除外', () => {

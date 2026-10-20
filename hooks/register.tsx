@@ -28,7 +28,7 @@ import { costOf } from './pricing.ts'
 import { clip, displayWidth, padCell, pct, tokens, countdown, usd } from './format.ts'
 import { UNPRICED, usdEstimate } from './provenance.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
-import { CHART_LEGEND, PART_COLORS, contextChartSvg, heatWindowDays, modelFill, modelStackSvg, pageOf, turnHeatHeight, turnHeatSvg } from './chart-art.ts'
+import { contextChartSvg, heatWindowDays, modelFill, modelStackSvg, pageOf, turnHeatHeight, turnHeatSvg } from './chart-art.ts'
 import {
   barText,
   contextParts,
@@ -62,8 +62,8 @@ import {
   EMPTY_TOTALS,
 } from './usage-detail.ts'
 import { emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
-import { panelFillFor } from './panel-fill.ts'
-import type { PanelFill } from './panel-fill.ts'
+import { themeColorsFor } from './panel-fill.ts'
+import type { ThemeColors } from './panel-fill.ts'
 
 const PLUGIN = 'whale-usage' as const
 const PANE = 'whale'
@@ -135,7 +135,7 @@ let isCompactPending = false
  * 主题在一次会话里基本不变，而面板重绘很频繁；`null` 表示「还没读过」。
  * 换主题要重开面板才生效——这点误差换来的是每次重绘都不必再发一次 IPC。
  */
-let fillCache: PanelFill | null = null
+let themeCache: ThemeColors | null = null
 
 /** 按下鲸鱼后，形变保持多久才弹回。太短看不见，太长会像卡住。 */
 const PRESS_RELEASE_MS = 140
@@ -529,10 +529,13 @@ export const register: Register = (on, options) => {
     // 每 30 秒重绘一次——每次都问一遍 `/config` 只是白花一次 IPC，所以
     // 第一次读到后就记在模块里。`$` 不能传进辅助函数（校验器的约束），
     // 读写缓存只能是这段内联代码。
-    if (fillCache === null) {
-      fillCache = panelFillFor(await $.config.list().catch(() => undefined))
+    if (themeCache === null) {
+      themeCache = themeColorsFor(await $.config.list().catch(() => undefined))
     }
-    const fill = fillCache
+    const theme = themeCache
+    // 三块圆角框的底与边；图表另取 `theme.chart`。
+    const fill = theme
+    const chart = theme.chart
 
     const mood = moodOf(view.fiveHour?.percentUsed ?? view.sevenDay?.percentUsed, false)
     const lines = bubbleLines(view, now)
@@ -651,7 +654,7 @@ export const register: Register = (on, options) => {
     // 一页一个窗口，默认贴住最新一端。
     const contextPage = pageOf(contextTurns, 24, prefsNow.contextOffset ?? 0)
     const stacks = contextStack(contextPage.slice, contextPage.slice.length, Math.max(0, bufferPct))
-    const stackLegend = stackLegendOf(stacks.bars)
+    const stackLegend = stackLegendOf(stacks.bars, theme.isLight)
     const chartWidth = Math.max(80, Math.min(width * 8 - 16, 640))
 
     // 翻页按钮：offset 越大越往历史，所以 ◀ 加、▶ 减，写回时夹在合法范围内。
@@ -716,6 +719,7 @@ export const register: Register = (on, options) => {
                 chartWidth,
                 contextPage.slice.length,
                 Math.max(0, bufferPct),
+                chart,
               )}
               alt={stackCaption(stacks.bars.length, stacks.peak, stacks.yMax)}
               width={chartWidth}
@@ -728,7 +732,7 @@ export const register: Register = (on, options) => {
                   {line.map((bar, barIndex) => (
                     <Text
                       key={`whale-stack-${rowIndex}-${barIndex}`}
-                      color={stackColor(bar[0] ?? null)}
+                      color={stackColor(bar[0] ?? null, theme.isLight)}
                     >
                       {bar[0] === 'buffer' ? '▒' : bar[0] === 'free' ? '·' : bar[0] ? '█' : ' '}
                     </Text>
@@ -876,7 +880,7 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column" marginTop={1}>
               {Svg ? (
                 <Svg
-                  source={turnHeatSvg(turnHistory, turnChartWidth, heatMetric)}
+                  source={turnHeatSvg(turnHistory, turnChartWidth, heatMetric, chart)}
                   alt={turnBarsCaption(turnHistory)}
                   width={turnChartWidth}
                   height={heatHeight}
@@ -938,9 +942,9 @@ export const register: Register = (on, options) => {
     // 柱内段序、图例、下方每行的色块共用这一份映射：颜色与模型的对应
     // 一旦错位，读者就会把 A 的花费读成 B 的。
     const modelColorOf = (name: string): string => {
-      if (name === '其他') return PART_COLORS.other ?? '#7C8394'
+      if (name === '其他') return chart.parts.other ?? '#7C8394'
       const index = stack.models.indexOf(name)
-      return index < 0 ? '#7C8394' : modelFill(index)
+      return index < 0 ? '#7C8394' : modelFill(index, theme.isLight)
     }
 
     // 明细表按列对齐：模型名、输入、输出、金额各占固定宽度，数字右对齐。
@@ -1007,7 +1011,7 @@ export const register: Register = (on, options) => {
             </Box>
             {Svg ? (
               <Svg
-                source={modelStackSvg(stack.bars, modelChartWidth, stack.yMax, stack.models)}
+                source={modelStackSvg(stack.bars, modelChartWidth, stack.yMax, stack.models, chart)}
                 alt={modelStackCaption(stack.bars)}
                 width={modelChartWidth}
                 height={96}

@@ -10,6 +10,8 @@
  * 终端没有 `Svg`，那边仍走 `usage-overview.ts` 的字符光栅化。
  */
 import type { ContextTurn, TurnDay } from '../types'
+import { CHART_PALETTES } from './panel-fill.ts'
+import type { ChartPalette } from './panel-fill.ts'
 import { tokens } from './format.ts'
 import { contextStack, turnBars } from './usage-overview.ts'
 import type { ModelStackBar, TurnBar } from './usage-overview.ts'
@@ -25,55 +27,61 @@ import type { ModelStackBar, TurnBar } from './usage-overview.ts'
  *      对比强但不相撞；所以这套图在 Claude 的面板里不会显得「串色」。
  */
 
-/** 图表统一的配色，与面板主题里的语义色对齐。 */
-const COLORS = {
-  /** 核心蓝：DeepSeek 品牌色。没有构成数据的「已用」段用它。 */
-  used: '#4D6BFE',
-  /** 压缩缓冲：同色相族里压暗一档，与「已用」区分开又不抢戏。 */
-  buffer: '#33407A',
-  // 空闲段是「背景的空余空间」，压到很淡：它只是衬托，不该和真实用量抢眼。
-  free: '#23273a',
-  axis: '#4a4f63',
-  label: '#9aa0b4',
-  bar: '#4D6BFE',
-  barEmpty: '#3a3f55',
-  /** 压缩标记：暖色，与整套冷色图表形成对照，一眼就能从柱子里挑出来。 */
-  compact: '#E0913C',
-} as const
+/**
+ * 图表颜色全部来自面板算好的调色板（`ThemeColors.chart`）。
+ *
+ * 这里**不写死任何色值**，原因见 `panel-fill.ts` 的 `ChartPalette`：
+ * 两套主题需要的是两组不同的色值，不是同一支色的两个透明度。图表的每个
+ * 绘制函数都收一个 `palette` 参数，由渲染层从主题算出后传进来。
+ */
+
+/** 一支颜色的「填充」写法：`fill` + `fill-opacity`，两套主题共用一个值。 */
+function fillOf(color: string, opacity: number): string {
+  return `fill="${color}"${opacity < 1 ? ` fill-opacity="${opacity}"` : ''}`
+}
+
+/** 同上，用于线条。 */
+function strokeOf(color: string, opacity: number): string {
+  return `stroke="${color}"${opacity < 1 ? ` stroke-opacity="${opacity}"` : ''}`
+}
 
 /**
- * 内容分类的矢量配色。
+ * 内容分类的色相分配（两套主题共用这一套色相，只差明度）。
  *
- * 与 `usage-overview.ts` 的 `CONTEXT_PART_LABELS` 是同一套语义色的具体值：
- * 那边给的是主题键（终端用），这边给的是十六进制（SVG 用）。两边必须一一对应，
- * 否则同一张图在桌面端和终端会读出不同含义。
+ * 与 `usage-overview.ts` 的 `CONTEXT_PART_LABELS` 是同一套语义色：那边给的是
+ * 主题键（终端用），这边给的是十六进制（SVG 用），两边的**色相**必须一一对应，
+ * 否则同一张图在桌面端和终端会读出不同含义。具体色值在两套调色板里。
  *
  * 色相分配（由深到浅、由冷到更冷）刻意拉开距离：
  *   messages（对话消息，占比最大）用核心蓝，是主角；
  *   system（系统提示）往紫走，与蓝区分；
  *   tools（工具定义）用青绿，冷色但色相明显不同；
- *   memory（记忆文件）用靛青，比 tools 更蓝更亮；
- *   mcp（MCP 工具）用紫罗兰，比 system 更亮；
- *   agents（自定义 agent）用蓝紫，介于核心蓝与紫之间。
- * 六者的明度也各不相同（36%–74%），即使色相接近也能分辨。
+ *   memory（记忆文件）用靛青，比 tools 更蓝；
+ *   mcp（MCP 工具）用紫罗兰，比 system 更艳；
+ *   agents（自定义 agent）用深青，压在中间一档。
+ *   other 是中性灰兜底，不与任何分类撞色。
  */
-export const PART_COLORS: Readonly<Record<string, string>> = {
-  messages: '#4D6BFE', // 230° 核心蓝（DeepSeek），主角
-  system: '#A78BFA', // 257° 紫，最亮的一档
-  tools: '#22C3D6', // 187° 青绿，色相离蓝最远
-  memory: '#7AA2F7', // 219° 浅靛，比核心蓝亮
-  mcp: '#C084FC', // 271° 品紫，与 system 同族但更艳
-  agents: '#1E6F8C', // 194° 深青，压暗与 tools 区分
-  // 兜底：认不出的分类用完全中性的灰（无色相），不与任何分类撞色。
-  other: '#7C8394',
-}
+export const PART_KINDS = [
+  'messages',
+  'system',
+  'tools',
+  'memory',
+  'mcp',
+  'agents',
+  'other',
+] as const
 
-/** 一段的分段键对应的矢量颜色。 */
-export function segmentFill(kind: string): string {
-  if (kind === 'used') return COLORS.used
-  if (kind === 'buffer') return COLORS.buffer
-  if (kind === 'free') return COLORS.free
-  return PART_COLORS[kind] ?? PART_COLORS.other ?? COLORS.used
+/**
+ * 一段的填充写法，直接进 SVG 的 `rect` 属性串。
+ *
+ * 骨架三段（已用 / 压缩缓冲 / 空闲）用同一支主色靠不透明度分层；内容分类
+ * 各有自己的实色。具体取哪支色由 `palette` 决定——深色一套、浅色一套。
+ */
+export function segmentFill(kind: string, palette: ChartPalette): string {
+  if (kind === 'used') return fillOf(palette.used, palette.usedOpacity)
+  if (kind === 'buffer') return fillOf(palette.used, palette.bufferOpacity)
+  if (kind === 'free') return fillOf(palette.used, palette.freeOpacity)
+  return fillOf(palette.parts[kind] ?? palette.parts.other ?? palette.used, 1)
 }
 
 /**
@@ -85,8 +93,11 @@ export function segmentFill(kind: string): string {
  * 拿到最饱和的核心蓝，往后的逐渐变浅、偏移——读者不用看名字也能判断哪段是主力。
  *
  * 色阶用完时循环，但模型页只画前几段（见 `MODEL_STACK_KEEP`），循环不会出现。
+ *
+ * 两套主题各一份：浅色版是同一批色相压暗过的，保证在白底上也分得开
+ * （逐支实测 ≥ 4.5）。
  */
-const MODEL_SCALE = [
+const MODEL_SCALE_DARK = [
   '#4D6BFE', // 230° 核心蓝（DeepSeek）
   '#7AA2F7', // 219° 浅靛
   '#22C3D6', // 187° 青绿
@@ -97,9 +108,26 @@ const MODEL_SCALE = [
   '#7C8394', // 中性灰兜底
 ] as const
 
-/** 第 `index` 段（按用量降序）的配色。 */
-export function modelFill(index: number): string {
-  return MODEL_SCALE[Math.abs(index) % MODEL_SCALE.length] ?? MODEL_SCALE[0]
+const MODEL_SCALE_LIGHT = [
+  '#3B54D6', // 核心蓝，压暗
+  '#3468C0', // 浅靛 → 深靛
+  '#0E7C8A', // 青绿 → 深青
+  '#7C4DDB', // 紫 → 深紫
+  '#1E6F8C', // 深青，本来就够深
+  '#9333EA', // 品紫 → 深品紫
+  '#4A63C8', // 介于核心与浅靛之间
+  '#6E7486', // 中性灰
+] as const
+
+/**
+ * 第 `index` 段（按用量降序）的配色。
+ *
+ * `palette` 决定用深色还是浅色那一套色阶——两套的**色相顺序一致**，
+ * 所以读者换主题后各模型之间的相对位置仍然读得出来。
+ */
+export function modelFill(index: number, isLight = false): string {
+  const scale = isLight ? MODEL_SCALE_LIGHT : MODEL_SCALE_DARK
+  return scale[Math.abs(index) % scale.length] ?? scale[0]
 }
 
 function escapeXml(text: string): string {
@@ -132,6 +160,7 @@ export function contextChartSvg(
   width: number,
   maxBars = 24,
   bufferPct = 0,
+  palette: ChartPalette = CHART_PALETTES.dark,
 ): string {
   const height = 112
   // 左侧留出纵轴刻度与轴线的位置：刻度数字要放在轴线左边，给 26px。
@@ -144,7 +173,7 @@ export function contextChartSvg(
   if (bars.length === 0) {
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">` +
-      `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" font-size="11" fill="${COLORS.label}">还没有逐轮数据</text>` +
+      `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" font-size="11" ${fillOf(palette.label, 1)}>还没有逐轮数据</text>` +
       `</svg>`
     )
   }
@@ -162,10 +191,9 @@ export function contextChartSvg(
     for (const segment of bar.segments) {
       const segmentHeight = segment.ratio * plotHeight
       const y = cursor - segmentHeight
-      const fill =
-        segmentFill(segment.kind)
+      const fill = segmentFill(segment.kind, palette)
       parts.push(
-        `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${Math.max(segmentHeight, 0.5).toFixed(2)}" fill="${fill}"/>`,
+        `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${Math.max(segmentHeight, 0.5).toFixed(2)}" ${fill}/>`,
       )
       cursor = y
     }
@@ -181,21 +209,21 @@ export function contextChartSvg(
   const axisTop = padding.top
   const axisBottom = padding.top + plotHeight
   parts.push(
-    `<line x1="${padding.left}" y1="${axisTop}" x2="${padding.left}" y2="${axisBottom}" stroke="${COLORS.axis}" stroke-width="1"/>`,
+    `<line x1="${padding.left}" y1="${axisTop}" x2="${padding.left}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
   )
   // 基线
   parts.push(
-    `<line x1="${padding.left}" y1="${axisBottom}" x2="${width - padding.right}" y2="${axisBottom}" stroke="${COLORS.axis}" stroke-width="1"/>`,
+    `<line x1="${padding.left}" y1="${axisBottom}" x2="${width - padding.right}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
   )
   // 上界刻度：轴顶向左伸一小段，数字右对齐贴着轴线。
   parts.push(
-    `<line x1="${padding.left - 3}" y1="${axisTop}" x2="${padding.left}" y2="${axisTop}" stroke="${COLORS.axis}" stroke-width="1"/>`,
-    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="9" fill="${COLORS.label}">${Math.round(yMax)}%</text>`,
+    `<line x1="${padding.left - 3}" y1="${axisTop}" x2="${padding.left}" y2="${axisTop}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
+    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}">${Math.round(yMax)}%</text>`,
   )
   // 0 刻度：同样向左伸一小段。
   parts.push(
-    `<line x1="${padding.left - 3}" y1="${axisBottom}" x2="${padding.left}" y2="${axisBottom}" stroke="${COLORS.axis}" stroke-width="1"/>`,
-    `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" fill="${COLORS.label}">0</text>`,
+    `<line x1="${padding.left - 3}" y1="${axisBottom}" x2="${padding.left}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
+    `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}">0</text>`,
   )
 
   // 压缩虚线：画在「压缩后那一轮」柱子的左缘，从柱脚贯穿到图顶。
@@ -204,7 +232,7 @@ export function contextChartSvg(
     if (!bar.isAfterCompact) return
     const x = (padding.left + index * slot + gap / 2).toFixed(2)
     parts.push(
-      `<line x1="${x}" y1="${axisTop}" x2="${x}" y2="${axisBottom}" stroke="${COLORS.compact}" stroke-width="1" stroke-dasharray="2 2"/>`,
+      `<line x1="${x}" y1="${axisTop}" x2="${x}" y2="${axisBottom}" ${strokeOf(palette.compact, 1)} stroke-width="1" stroke-dasharray="2 2"/>`,
     )
   })
 
@@ -215,7 +243,7 @@ export function contextChartSvg(
     if (index % labelStep !== 0 && index !== bars.length - 1) return
     const center = padding.left + index * slot + slot / 2
     parts.push(
-      `<text x="${center.toFixed(2)}" y="${axisBottom + 12}" text-anchor="middle" font-size="9" fill="${COLORS.label}">${escapeXml(bar.label)}</text>`,
+      `<text x="${center.toFixed(2)}" y="${axisBottom + 12}" text-anchor="middle" font-size="9" ${fillOf(palette.label, 1)}">${escapeXml(bar.label)}</text>`,
     )
   })
 
@@ -227,13 +255,6 @@ export function contextChartSvg(
   )
 }
 
-
-/** 图例里的一项，供调用方按表面决定画字符还是 Svg。 */
-export const CHART_LEGEND = [
-  { key: 'used', label: '已用', color: COLORS.used },
-  { key: 'buffer', label: '压缩缓冲', color: COLORS.buffer },
-  { key: 'free', label: '空闲', color: COLORS.free },
-] as const
 
 /** 热图色标：同一支蓝，靠不透明度分出深浅。 */
 export const HEAT_FILL = '#4D6BFE'
@@ -339,6 +360,7 @@ export function turnHeatSvg(
   days: TurnDay[],
   width: number,
   metric: HeatMetric = 'messages',
+  palette: ChartPalette = CHART_PALETTES.dark,
 ): string {
   // 列数由宽度决定，窗口天数跟着列数走：宽度增加 → 多露出几周历史。
   // 但点数不能超过「数据实际跨度」——`turnBars` 会往前补 0，补到 483 天时
@@ -350,7 +372,7 @@ export function turnHeatSvg(
   if (bars.length === 0) {
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} 60" width="${width}" height="60" role="img">` +
-      `<text x="${width / 2}" y="30" text-anchor="middle" font-size="11" fill="${COLORS.label}">还没有轮次数据</text>` +
+      `<text x="${width / 2}" y="30" text-anchor="middle" font-size="11" ${fillOf(palette.label, 1)}>还没有轮次数据</text>` +
       `</svg>`
     )
   }
@@ -397,7 +419,7 @@ export function turnHeatSvg(
   // 上方不再另起标题——同一件事说两遍会让画面多一道横线。
   const caption = `${metric === 'turns' ? '轮次' : '消息'} · 最近 ${bars.length} 天 · 共 ${total.toLocaleString('en-US')} ${unit} · 峰值 ${max.toLocaleString('en-US')} ${unit}`
   parts.push(
-    `<text x="${width - HEAT_SIDE}" y="${height - 4}" text-anchor="end" font-size="9" fill="${COLORS.label}">${escapeXml(caption)}</text>`,
+    `<text x="${width - HEAT_SIDE}" y="${height - 4}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}>${escapeXml(caption)}</text>`,
   )
 
   return (
@@ -422,6 +444,7 @@ export function modelStackSvg(
   width: number,
   yMax: number,
   order: string[],
+  palette: ChartPalette = CHART_PALETTES.dark,
 ): string {
   const height = 96
   const padding = { top: 10, right: 2, bottom: 14, left: 34 }
@@ -431,7 +454,7 @@ export function modelStackSvg(
   if (bars.length === 0) {
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">` +
-      `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" font-size="11" fill="${COLORS.label}">还没有逐模型数据</text>` +
+      `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" font-size="11" ${fillOf(palette.label, 1)}>还没有逐模型数据</text>` +
       `</svg>`
     )
   }
@@ -454,12 +477,14 @@ export function modelStackSvg(
       const share = yMax > 0 ? segment.tokens / yMax : 0
       const segmentHeight = share * plotHeight
       const y = cursor - segmentHeight
-      const fill =
+      const fill = fillOf(
         segment.model === '其他'
-          ? PART_COLORS.other ?? COLORS.barEmpty
-          : modelFill(rank.get(segment.model) ?? 0)
+          ? palette.parts.other ?? palette.barEmpty
+          : modelFill(rank.get(segment.model) ?? 0, palette.isLight),
+        1,
+      )
       parts.push(
-        `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${Math.max(segmentHeight, 0.5).toFixed(2)}" fill="${fill}"><title>${escapeXml(`${bar.day} · ${segment.model} · ${Math.round(segment.tokens).toLocaleString('en-US')} tok`)}</title></rect>`,
+        `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${Math.max(segmentHeight, 0.5).toFixed(2)}" ${fill}><title>${escapeXml(`${bar.day} · ${segment.model} · ${Math.round(segment.tokens).toLocaleString('en-US')} tok`)}</title></rect>`,
       )
       cursor = y
     }
@@ -469,11 +494,11 @@ export function modelStackSvg(
   const axisTop = padding.top
   const axisBottom = padding.top + plotHeight
   parts.push(
-    `<line x1="${padding.left}" y1="${axisTop}" x2="${padding.left}" y2="${axisBottom}" stroke="${COLORS.axis}" stroke-width="1"/>`,
-    `<line x1="${padding.left}" y1="${axisBottom}" x2="${width - padding.right}" y2="${axisBottom}" stroke="${COLORS.axis}" stroke-width="1"/>`,
-    `<line x1="${padding.left - 3}" y1="${axisTop}" x2="${padding.left}" y2="${axisTop}" stroke="${COLORS.axis}" stroke-width="1"/>`,
-    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="8" fill="${COLORS.label}">${escapeXml(tokens(yMax))}</text>`,
-    `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" fill="${COLORS.label}">0</text>`,
+    `<line x1="${padding.left}" y1="${axisTop}" x2="${padding.left}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
+    `<line x1="${padding.left}" y1="${axisBottom}" x2="${width - padding.right}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
+    `<line x1="${padding.left - 3}" y1="${axisTop}" x2="${padding.left}" y2="${axisTop}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
+    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="8" ${fillOf(palette.label, 1)}">${escapeXml(tokens(yMax))}</text>`,
+    `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}">0</text>`,
   )
 
   return (
