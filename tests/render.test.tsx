@@ -83,6 +83,54 @@ test('桌面端面板能画出来，控件都在', async ($, on) => {
   await ui.unmount()
 })
 
+test('页签与内容在同一个外框内，选中的那个换成更亮的底', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  /** 从整棵树里找某个 key 的环状盒子，返回它的 props。 */
+  const boxOf = (node: any, key: string): any => {
+    if (!node || typeof node !== 'object') return undefined
+    if (node.props?.key === key) return node
+    for (const kid of node.children ?? []) {
+      const hit = boxOf(kid, key)
+      if (hit) return hit
+    }
+    return undefined
+  }
+  const propsOf = async (key: string) => boxOf(await ui.drawn(), key)?.props
+
+  const overviewTab = await propsOf('whale-tabbox-overview')
+  const modelsTab = await propsOf('whale-tabbox-models')
+  expect(overviewTab).toBeDefined()
+  expect(modelsTab).toBeDefined()
+  // 每个页签各自带一个边框；激活的那个更粗。
+  expect(overviewTab.borderStyle).toBe('bold')
+  expect(modelsTab.borderStyle).toBe('round')
+  // 默认落在概览页：概览的底色更亮，模型的是大框那一档。
+  expect(overviewTab.backgroundColor).not.toBe(modelsTab.backgroundColor)
+  const overviewActive = overviewTab.backgroundColor
+
+  await ui.press({ key: 'whale-tab-models' })
+  const modelsAfter = await propsOf('whale-tabbox-models')
+  const overviewAfter = await propsOf('whale-tabbox-overview')
+  // 切过去之后，亮的那一档换到了模型页签上——不是两个都亮着。
+  expect(modelsAfter.backgroundColor).toBe(overviewActive)
+  expect(modelsAfter.borderStyle).toBe('bold')
+  expect(overviewAfter.backgroundColor).not.toBe(overviewActive)
+  expect(overviewAfter.borderStyle).toBe('round')
+
+  await ui.unmount()
+})
+
 test('输入框上方有用量条：摘要 + 面板入口，但没有形象', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })

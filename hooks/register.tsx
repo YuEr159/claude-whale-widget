@@ -737,7 +737,9 @@ export const register: Register = (on, options) => {
               </Box>
             ))}
           </Box>
-          <Text dimColor>{stackCaption(stacks.bars.length, stacks.peak, stacks.yMax)}</Text>
+          {/* 这一行图注不再上屏：纵轴上下界已经标在图里（轴上写着 0 与上界），
+              峰值与轮次数在柱子上读得出来，再写一遍只是让画面多一行。
+              无障碍描述仍走 alt（见上面 Svg 的 alt）。 */}
         </Box>
       )
 
@@ -764,29 +766,49 @@ export const register: Register = (on, options) => {
     )
 
     // 页签：概览 / 模型，对应原生用量页的两个标签。
+    //
+    // 每个页签自成一个圆角小块，选中的那个换成更亮的底与更亮的边——不用
+    // `[概览]` 那种方括号，因为页签本身已经有框了，再套一层括号会像双重边框。
     const pageTabs = (
-      <Box flexDirection="row" gap={1} marginTop={1}>
+      <Box flexDirection="row" gap={1} marginBottom={1}>
         {(
           [
             { id: 'overview', label: '概览' },
             { id: 'models', label: '模型' },
           ] as const
-        ).map(tab => (
-          <Button
-            key={`whale-tab-${tab.id}`}
-            plain
-            label={page === tab.id ? `[${tab.label}]` : tab.label}
-            onPress={() => {
-              void (async () => {
-                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                  ...(latest.value ?? DEFAULT_PREFS),
-                  panelPage: tab.id,
-                })
-              })()
-            }}
-          />
-        ))}
+        ).map(tab => {
+          const isActive = page === tab.id
+          return (
+            <Box
+              key={`whale-tabbox-${tab.id}`}
+              // 激活态三处一起变：底色往亮走、边框换更亮的一档、边框再变粗。
+              // 只用底色不够——浅色主题下往白走最多到 #ffffff，与未激活的
+              // #e3e7f7 只差 1.23，几乎看不出来。
+              borderStyle={isActive ? 'bold' : 'round'}
+              borderColor={isActive ? theme.tabActive.borderColor : fill.borderColor}
+              backgroundColor={
+                isActive ? theme.tabActive.backgroundColor : fill.backgroundColor
+              }
+              paddingX={1}
+            >
+              <Button
+                key={`whale-tab-${tab.id}`}
+                plain
+                label={tab.label}
+                dimColor={!isActive}
+                onPress={() => {
+                  void (async () => {
+                    const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                      ...(latest.value ?? DEFAULT_PREFS),
+                      panelPage: tab.id,
+                    })
+                  })()
+                }}
+              />
+            </Box>
+          )
+        })}
       </Box>
     )
 
@@ -811,13 +833,16 @@ export const register: Register = (on, options) => {
     for (let index = 0; index < cardValues.length; index += cardsPerRow) {
       cardRows.push(cardValues.slice(index, index + cardsPerRow))
     }
-    // 卡片宽度写死成一个整数：外层圆角框左右各有 1 列内边距、1 列边框，
-    // 中间用 gap 隔开。余数不再分给某一张——那正是边缘参差的来源。
+    // 卡片宽度写死成一个整数，按列数均分。要扣掉的是**这一行真正可用的宽度**：
+    //   面板宽度 width
+    //   − 4   外层大框：左右各 1 列边框 + 1 列内边距
+    //   − 卡片之间的 gap 总数
+    // 余数不再分给某一张——那正是边缘参差的来源。
     // 面板极窄时夹一个下限，宁可让这一行溢出也不要压成 0 列。
     const cardGaps = Math.max(0, cardsPerRow - 1)
     const cardWidth = Math.max(
       8,
-      Math.floor((width - 2 - 2 - cardGaps) / Math.max(1, cardsPerRow)),
+      Math.floor((width - 4 - cardGaps) / Math.max(1, cardsPerRow)),
     )
 
     // 热图：方块大小固定，列数随宽度增加，窗口天数跟着列数走。
@@ -832,21 +857,18 @@ export const register: Register = (on, options) => {
 
     const overviewPage = (
       <>
-        {/* 整组只有一个外框：六张卡与热图是同一个视觉单元，不是两件事。 */}
-        <Box
-          flexDirection="column"
-          borderStyle="round"
-          borderColor={fill.borderColor}
-          backgroundColor={fill.backgroundColor}
-          paddingX={1}
-        >
+        {/* 外框由下面的 pageFrame 统一给（页签与两页内容共用一个框），
+            这里只排内容：六张卡 + 热图是同一个视觉单元。 */}
+        <Box flexDirection="column" gap={1}>
           {cardRows.map((row, rowIndex) => (
             <Box key={`whale-cardrow-${rowIndex}`} flexDirection="row" gap={1} width="100%">
               {row.map((card, index) => (
-                // 每张卡都带同一个圆角框与同一支底色，卡片之间的留白靠外层 gap。
+                // 每张卡都带同一个圆角框与同一支底色。横向靠这一行的 gap、
+                // 纵向靠外层那个 gap={1}——两处都用 1 列/行，上下与左右
+                // 的缝才一样宽。只在横向上留缝的话，换行之后两行卡片会
+                // 贴在一起，看起来像一整块被切开。
                 // 宽度不给 flexGrow：那会让「值」长短不同的卡片算出的宽度有零头，
-                // 六张卡右边缘就参差不齐。改成按列数算出同一个整数宽度，
-                // 最后一张吃掉余数——边缘对齐，框也一样宽。
+                // 六张卡右边缘就参差不齐。改成按列数算出同一个整数宽度。
                 <Box
                   key={`whale-card-${rowIndex}-${index}`}
                   flexDirection="column"
@@ -864,7 +886,9 @@ export const register: Register = (on, options) => {
             </Box>
           ))}
           {turnHistory.length > 0 && (
-            <Box flexDirection="column" marginTop={1}>
+            // marginTop 由外层 gap={1} 给，这里不再重复加，否则热图与
+            // 最后一行卡片之间会是 2 行、而卡片之间只有 1 行。
+            <Box flexDirection="column">
               {Svg ? (
                 <Svg
                   source={turnHeatSvg(turnHistory, turnChartWidth, heatMetric, chart)}
@@ -995,8 +1019,7 @@ export const register: Register = (on, options) => {
         {stack.bars.length === 0 ? (
           <Text dimColor>还没有统计数据</Text>
         ) : (
-          <Box flexDirection="column" borderStyle="round" borderColor={fill.borderColor}
-            backgroundColor={fill.backgroundColor} paddingX={1}>
+          <Box flexDirection="column">
             <Box flexDirection="row" gap={1} alignItems="center" justifyContent="space-between">
               <Text bold dimColor>
                 逐模型用量
@@ -1123,8 +1146,20 @@ export const register: Register = (on, options) => {
         {windows}
         {session}
         {contextChart}
-        {pageTabs}
-        {page === 'models' ? modelsPage : overviewPage}
+        {/* 页签与两页内容共用一个外框：页签是这个框的「标签栏」，
+            内容是本页的读数。它们属于同一个视觉单元，分开画成两个框会
+            让人以为页签是面板级导航、内容又是另一块卡片。 */}
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor={fill.borderColor}
+          backgroundColor={fill.backgroundColor}
+          paddingX={1}
+          marginTop={1}
+        >
+          {pageTabs}
+          {page === 'models' ? modelsPage : overviewPage}
+        </Box>
         {controls}
         {/* 数据新鲜度贴在最底下：它是「上面那些数字有多可信」的脚注，
             放在开场反而挡在真正要看的数字前面。 */}
