@@ -107,6 +107,10 @@ export function bandSummary(
 ): string {
   const five = pct(view.fiveHour?.percentUsed)
   const seven = pct(view.sevenDay?.percentUsed)
+  const hasLimits = Boolean(view.fiveHour || view.sevenDay)
+  // `window` 已经写出了 5h 那一半，`context` 若照常输出就会把 `5h 24%`
+  // 连着印两遍。所以两条都选时让 `context` 只补 7d 这一半。
+  const windowShowsFive = metrics.includes('window') && hasLimits
 
   const one = (metric: BandMetric): string => {
     switch (metric) {
@@ -117,11 +121,16 @@ export function bandSummary(
       case 'cost':
         return `上下文 ${pct(view.contextPercent)}`
       case 'context':
-        return `5h ${five} · 7d ${seven}`
+        // 没有订阅额度窗口时（第三方网关、API key 计费）两个百分比都是空的，
+        // 与其在条子上挂两个破折号，不如退回上下文 + 花费——那两项在任何
+        // 计费方式下都有读数。
+        if (!hasLimits) {
+          return `上下文 ${pct(view.contextPercent)} · 本会话 ${usdEstimate(view.costUsd)}`
+        }
+        return windowShowsFive ? `7d ${seven}` : `5h ${five} · 7d ${seven}`
       default:
-        // 没有订阅额度窗口时（第三方网关、API key 计费），退回上下文占用 + 会话花费，
-        // 这两项在任何计费方式下都有读数。
-        if (!view.fiveHour && !view.sevenDay) {
+        // `window` 是默认口径，所以也要有这条退路。
+        if (!hasLimits) {
           return `上下文 ${pct(view.contextPercent)} · 本会话 ${usdEstimate(view.costUsd)}`
         }
         return view.fiveHour
@@ -131,12 +140,17 @@ export function bandSummary(
   }
 
   const seen = new Set<BandMetric>()
+  // 按**文本**再去一次重：两条口径在没有额度窗口时都会退回
+  // 「上下文 … · 本会话 …」，并排出现就是同一句话写了两遍。
+  const seenText = new Set<string>()
   const parts: string[] = []
   for (const option of BAND_METRIC_OPTIONS) {
     if (!metrics.includes(option.value) || seen.has(option.value)) continue
     seen.add(option.value)
     const text = one(option.value)
-    if (text.length > 0) parts.push(text)
+    if (text.length === 0 || seenText.has(text)) continue
+    seenText.add(text)
+    parts.push(text)
   }
   return parts.join(' · ')
 }
@@ -154,13 +168,14 @@ export function bubbleLines(view: UsageView, now: number): string[] {
  * 用量条能显示的口径，面板与默认值共用。
  *
  * 这几项的次序就是拼接口径的次序——读者选了「额度窗口」与「代码改动」时，
- * 条子上先出现额度、再出现改动，不会因为勾选先后而变。`diff` 与 `window`
- * 互斥，见 `BAND_METRIC_OPTIONS` 的调用方。
+ * 条子上先出现额度、再出现改动，不会因为勾选先后而变。标签必须与
+ * `bandSummary` 里 `one()` 真正画出来的内容对上，否则勾「上下文占用」却
+ * 看到 `5h 23% · 7d 41%` 那种错位。
  */
 export const BAND_METRIC_OPTIONS: ReadonlyArray<{ value: BandMetric; label: string }> = [
   { value: 'window', label: '额度窗口' },
-  { value: 'context', label: '5h + 7d' },
-  { value: 'cost', label: '上下文占用' },
+  { value: 'context', label: '上下文占用' },
+  { value: 'cost', label: '5h + 7d' },
   { value: 'session', label: '本会话花费' },
   { value: 'diff', label: '代码改动' },
 ]

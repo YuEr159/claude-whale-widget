@@ -38,7 +38,7 @@ import {
   turnBars,
   turnBarsCaption,
 } from '../hooks/usage-overview'
-import { contextChartSvg, pageOf, turnHeatSvg } from '../hooks/chart-art'
+import { contextChartSvg, turnHeatSvg } from '../hooks/chart-art'
 import { UNPRICED, usdEstimate } from '../hooks/provenance'
 import { FILLS, isLightTheme, panelFillFor } from '../hooks/panel-fill'
 
@@ -140,6 +140,8 @@ test('百分比与 token 取整', () => {
   expect(tokens(1234)).toBe('1234')
   expect(tokens(15_721)).toBe('1.6万')
   expect(tokens(2.5e8)).toBe('2.50亿')
+  // 10¹² 这一档写「万亿」，不写「兆」——后者在汉语里已是 10⁶ 的词头。
+  expect(tokens(1.2e12)).toBe('1.20万亿')
 })
 
 test('重置倒计时按小时/天/分钟分档', () => {
@@ -361,11 +363,12 @@ test('用量条摘要按偏好切换口径', () => {
   expect(bandSummary(view, ['cost'], now)).toBe('上下文 12%')
   expect(bandSummary(view, ['context'], now)).toBe('5h 40% · 7d 70%')
   // 多选：按 `BAND_METRIC_OPTIONS` 的固定次序拼接，与勾选先后无关。
+  // window 已经写了 5h，context 只补 7d——同一条数字不印两遍。
   expect(bandSummary(view, ['context', 'window'], now)).toBe(
-    '5h 40% · 2h00m 后重置 · 5h 40% · 7d 70%',
+    '5h 40% · 2h00m 后重置 · 7d 70%',
   )
   expect(bandSummary(view, ['window', 'context', 'window'], now)).toBe(
-    '5h 40% · 2h00m 后重置 · 5h 40% · 7d 70%',
+    '5h 40% · 2h00m 后重置 · 7d 70%',
   )
 })
 
@@ -406,6 +409,24 @@ test('用量条口径选项覆盖全部取值', () => {
   expect(BAND_METRIC_OPTIONS.map(o => o.value).sort()).toEqual(
     ['context', 'cost', 'diff', 'session', 'window'].sort(),
   )
+})
+
+test('口径全选时同一条数字不印两遍：window 已写 5h，context 只补 7d', () => {
+  const view = {
+    fiveHour: { percentUsed: 24 },
+    sevenDay: { percentUsed: 41 },
+    limits: [],
+    costUsd: 1.23,
+    contextPercent: 62,
+  }
+  const all = BAND_METRIC_OPTIONS.map(o => o.value)
+  const text = bandSummary(view as never, all, Date.now())
+  // `5h 24%` 只该出现一次——之前 window 与 context 各写一遍。
+  expect(text.match(/5h 24%/g)?.length).toBe(1)
+  expect(text).toContain('7d 41%')
+  expect(text).toContain('上下文 62%')
+  // 只选 context 时两个都写。
+  expect(bandSummary(view as never, ['context'], Date.now())).toBe('5h 24% · 7d 41%')
 })
 
 test('鲸鱼尺寸：连续公式，没有阈值跳变', () => {
@@ -617,18 +638,11 @@ test('表格对齐：按显示宽度补空格，中文与英文混排也不歪',
   expect(displayWidth(clip('DeepSeek Flash', 6))).toBeLessThanOrEqual(6)
 })
 
-test('图表翻页：0 贴住最新一页，越翻越往历史走', () => {
-  const items = Array.from({ length: 60 }, (_, index) => index)
-  const newest = pageOf(items, 24, 0)
-  expect(newest.slice).toEqual(items.slice(36, 60))
-  expect(newest.pages).toBe(3)
-  expect(newest.page).toBe(3)
-  expect(newest.maxOffset).toBe(2)
-
-  expect(pageOf(items, 24, 1).page).toBe(2)
-  const oldest = pageOf(items, 24, 99)
-  expect(oldest.slice).toEqual(items.slice(0, 12))
-  expect(oldest.page).toBe(1)
+test('图表翻页已取消：上下文柱状图按宽度自适应，没有翻页状态', () => {
+  // 翻页的 `pageOf` 与 `contextOffset` 一并删掉了。这里守的是「不再有
+  // 翻页入口」：显示轮数只由宽度决定，图注里的轮数跟着变化。
+  // 宽度自适应的数值本身在 `tests/node.run.mjs` 里断言。
+  expect(contextChartSvg([], 320).includes('NaN')).toBe(false)
 })
 
 test('轮次热图：窗口按天给定，缺的日子补 0', () => {

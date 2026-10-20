@@ -28,7 +28,15 @@ import { costOf } from './pricing.ts'
 import { clip, displayWidth, padCell, pct, tokens, countdown, usd } from './format.ts'
 import { UNPRICED, usdEstimate } from './provenance.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
-import { contextChartSvg, heatWindowDays, modelFill, modelStackSvg, pageOf, turnHeatHeight, turnHeatSvg } from './chart-art.ts'
+import {
+  CONTEXT_MAX_BARS,
+  contextChartSvg,
+  heatWindowDays,
+  modelFill,
+  modelStackSvg,
+  turnHeatHeight,
+  turnHeatSvg,
+} from './chart-art.ts'
 import {
   barText,
   contextParts,
@@ -77,12 +85,10 @@ const DEFAULT_PREFS: Prefs = {
   isTurnCostOn: false,
   // 本地日志聚合要读几十上百 MB，5 分钟一次足够。
   scanIntervalMs: 5 * 60_000,
-  // 默认落在概览页。
+  // 默认落在用量概览页。
   panelPage: 'overview',
   // 热图默认看轮次（用户真正发起请求的次数），可切到消息数。
   heatMetric: 'turns',
-  // 上下文图默认贴住最新一轮，往左翻时才用偏移量。
-  contextOffset: 0,
   // 泡泡默认收起：鲸鱼只留右下角一小块，点一下才展开摘要。
   isBubbleOpen: false,
   // 按压变形只在点击后的一瞬为真。
@@ -448,7 +454,12 @@ export const register: Register = (on, options) => {
     const heldTotals = await $.state.get({ plugin: 'whale-usage', key: 'totals' } as const)
     const totals = heldTotals.value ?? EMPTY_TOTALS
     const diff = { added: totals.linesAdded, removed: totals.linesRemoved }
-    const metrics = prefsNow.bandMetrics ?? DEFAULT_PREFS.bandMetrics
+    // 空数组按默认处理：一条空白用量条比显示得多更糟。面板侧同一份判断
+    // 写在 `metrics` 那段，两处口径必须一致。
+    const metrics =
+      Array.isArray(prefsNow.bandMetrics) && prefsNow.bandMetrics.length > 0
+        ? prefsNow.bandMetrics
+        : DEFAULT_PREFS.bandMetrics
     const summary = bandSummary(view, metrics, now, diff)
 
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -637,111 +648,60 @@ export const register: Register = (on, options) => {
             contextDetail.rawMaxTokens) *
           100
         : 0
-    // 面板只有纵向滚动，横向拉不动；所以每张图配一对翻页按钮，
-    // 一页一个窗口，默认贴住最新一端。
-    const contextPage = pageOf(contextTurns, 24, prefsNow.contextOffset ?? 0)
-    const stacks = contextStack(contextPage.slice, contextPage.slice.length, Math.max(0, bufferPct))
+    // 显示最近几轮由画布宽度自己算（见 `contextChartSvg`）：面板宽就多露几轮，
+    // 窄就少露几轮，不要翻页按钮——那要求读者点两下才看得到前一段。
+    const stacks = contextStack(contextTurns, CONTEXT_MAX_BARS, Math.max(0, bufferPct))
     const stackLegend = stackLegendOf(stacks.bars, theme.isLight)
     const chartWidth = Math.max(80, Math.min(width * 8 - 16, 640))
 
-    // 翻页按钮：offset 越大越往历史，所以 ◀ 加、▶ 减，写回时夹在合法范围内。
-    // 只有一页时整对按钮都不画——点了不会动，留着只会让人以为还有更多。
-    const turnPage = (
-      key: 'contextOffset',
-      maxOffset: number,
-      page: number,
-      pages: number,
-      handler: (delta: number) => void,
-    ) =>
-      maxOffset <= 0 ? null : (
-        <>
-          <Button key={`whale-left-${key}`} plain label="◀" onPress={() => handler(1)} />
-          <Button key={`whale-right-${key}`} plain label="▶" onPress={() => handler(-1)} />
-          <Text dimColor>
-            {page}/{pages}
-          </Text>
-        </>
-      )
-
-    const writeOffset = (key: 'contextOffset', delta: number, maxOffset: number) => {
-      void (async () => {
-        const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-        const nowPrefs = latest.value ?? DEFAULT_PREFS
-        const current = nowPrefs[key] ?? 0
-        const clamped = Math.max(0, Math.min(current + delta, maxOffset))
-        await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-          ...nowPrefs,
-          [key]: clamped,
-        })
-      })()
-    }
-
-    const contextChart =
-      contextPage.slice.length === 0 ? null : (
-        // 与概览、模型两页同一个外框语言：圆角 + 同一支底色，三块并排在一起
-        // 读起来才是同一层面的三个视图，而不是三张来源不同的卡片。
-        <Box
-          flexDirection="column"
-          borderStyle="round"
-          borderColor={fill.borderColor}
-          backgroundColor={fill.backgroundColor}
-          paddingX={1}
-        >
-          <Box flexDirection="row" gap={1} alignItems="center">
-            <Text bold dimColor>
-              上下文占比
-            </Text>
-            {turnPage(
-              'contextOffset',
-              contextPage.maxOffset,
-              contextPage.page,
-              contextPage.pages,
-              delta => writeOffset('contextOffset', delta, contextPage.maxOffset),
+    const contextPage = (
+      <>
+        {contextTurns.length === 0 ? (
+          <Text dimColor>还没有逐轮数据</Text>
+        ) : (
+          <>
+            {Svg ? (
+              <Svg
+                source={contextChartSvg(
+                  contextTurns,
+                  chartWidth,
+                  CONTEXT_MAX_BARS,
+                  Math.max(0, bufferPct),
+                  chart,
+                )}
+                alt={stackCaption(stacks.bars.length, stacks.peak, stacks.yMax)}
+                width={chartWidth}
+                height={112}
+              />
+            ) : (
+              <>
+                {rasterizeStacks(stacks.bars, width >= 60 ? 8 : 6).map((line, rowIndex) => (
+                  <Box key={`whale-stack-${rowIndex}`} flexDirection="row">
+                    {line.map((bar, barIndex) => (
+                      <Text
+                        key={`whale-stack-${rowIndex}-${barIndex}`}
+                        color={stackColor(bar[0] ?? null, theme.isLight)}
+                      >
+                        {bar[0] === 'buffer' ? '▒' : bar[0] === 'free' ? '·' : bar[0] ? '█' : ' '}
+                      </Text>
+                    ))}
+                  </Box>
+                ))}
+              </>
             )}
-          </Box>
-          {Svg ? (
-            <Svg
-              source={contextChartSvg(
-                contextPage.slice,
-                chartWidth,
-                contextPage.slice.length,
-                Math.max(0, bufferPct),
-                chart,
-              )}
-              alt={stackCaption(stacks.bars.length, stacks.peak, stacks.yMax)}
-              width={chartWidth}
-              height={112}
-            />
-          ) : (
-            <>
-              {rasterizeStacks(stacks.bars, width >= 60 ? 8 : 6).map((line, rowIndex) => (
-                <Box key={`whale-stack-${rowIndex}`} flexDirection="row">
-                  {line.map((bar, barIndex) => (
-                    <Text
-                      key={`whale-stack-${rowIndex}-${barIndex}`}
-                      color={stackColor(bar[0] ?? null, theme.isLight)}
-                    >
-                      {bar[0] === 'buffer' ? '▒' : bar[0] === 'free' ? '·' : bar[0] ? '█' : ' '}
-                    </Text>
-                  ))}
+            {/* 图例跟着数据走：只列这一屏里真正出现过的分类，缺构成的柱子仍按「已用」标。 */}
+            <Box flexDirection="row" gap={1} flexWrap="wrap">
+              {stackLegend.map(item => (
+                <Box key={`whale-legend-${item.kind}`} flexDirection="row" gap={1}>
+                  <Text color={item.color}>■</Text>
+                  <Text dimColor>{item.label}</Text>
                 </Box>
               ))}
-            </>
-          )}
-          {/* 图例跟着数据走：只列这一屏里真正出现过的分类，缺构成的柱子仍按「已用」标。 */}
-          <Box flexDirection="row" gap={1} flexWrap="wrap">
-            {stackLegend.map(item => (
-              <Box key={`whale-legend-${item.kind}`} flexDirection="row" gap={1}>
-                <Text color={item.color}>■</Text>
-                <Text dimColor>{item.label}</Text>
-              </Box>
-            ))}
-          </Box>
-          {/* 这一行图注不再上屏：纵轴上下界已经标在图里（轴上写着 0 与上界），
-              峰值与轮次数在柱子上读得出来，再写一遍只是让画面多一行。
-              无障碍描述仍走 alt（见上面 Svg 的 alt）。 */}
-        </Box>
-      )
+            </Box>
+          </>
+        )}
+      </>
+    )
 
     // 上下文的窗口上限、压缩阈值、记忆文件 / MCP / agent 数量都不再上屏：
     // 柱状图已经表达了「窗口被什么占着」，其余几项是读数之外的配置细节，
@@ -765,16 +725,22 @@ export const register: Register = (on, options) => {
       </>
     )
 
-    // 页签：概览 / 模型，对应原生用量页的两个标签。
+    // 页签：用量概览 / 模型分布 / 本会话上下文占比。
     //
-    // 每个页签自成一个圆角小块，选中的那个换成更亮的底与更亮的边——不用
-    // `[概览]` 那种方括号，因为页签本身已经有框了，再套一层括号会像双重边框。
+    // 三个页签共处一个大框，各自带一个圆角小块，选中的那个换成更亮的底与
+    // 更亮的边——不用 `[概览]` 那种方括号，因为页签本身已经有框了，再套一层
+    // 括号会像双重边框。
+    //
+    // 左右留白放在 **Button 内部**（children 里补 NBSP），不能写成 Box 的
+    // `paddingX`：那样 padding 落在按钮外面，点在小块的左右边缘时按钮收不到，
+    // 看起来「框大、能点的地儿小」。留白必须在按钮的命中区里。
     const pageTabs = (
-      <Box flexDirection="row" gap={1} marginBottom={1}>
+      <Box flexDirection="row" gap={1} marginBottom={1} flexWrap="wrap">
         {(
           [
-            { id: 'overview', label: '概览' },
-            { id: 'models', label: '模型' },
+            { id: 'overview', label: '用量概览' },
+            { id: 'models', label: '模型分布' },
+            { id: 'context', label: '本会话上下文占比' },
           ] as const
         ).map(tab => {
           const isActive = page === tab.id
@@ -789,7 +755,6 @@ export const register: Register = (on, options) => {
               backgroundColor={
                 isActive ? theme.tabActive.backgroundColor : fill.backgroundColor
               }
-              paddingX={1}
             >
               <Button
                 key={`whale-tab-${tab.id}`}
@@ -805,7 +770,12 @@ export const register: Register = (on, options) => {
                     })
                   })()
                 }}
-              />
+              >
+                {/* 左右各 1 格留白（U+00A0，普通空格会被裁掉），落在按钮自己的
+                    命中区里。用字符串而不是 `<Text dimColor>`：Button 的 dimColor
+                    管的就是自己画出来的字，再套一层 Text 会让高亮回不来。 */}
+                {' ' + tab.label + ' '}
+              </Button>
             </Box>
           )
         })}
@@ -947,8 +917,8 @@ export const register: Register = (on, options) => {
     )
 
     // ---------------- 模型页：逐日堆叠柱 + 每行一个模型 ----------------
-    // 粒度由范围推出来，不单独给控件：两者绑死才不会被配成「30 天按月」
-    // 这种看着有 30 根、其实只有 2 根的错配。
+    // 粒度由范围推出来，不单独给控件：两者绑死才不会被配成「30 天按周」
+    // 这种看着有 30 根、其实只有 5 根的错配。
     const grain = modelGrainFor(prefsNow.historyDays)
     const stack = modelStackBars(data?.modelDaily ?? [], prefsNow.historyDays, MODEL_STACK_KEEP, grain)
     const modelDetails = modelDetailRows(data?.byModel ?? [])
@@ -982,9 +952,10 @@ export const register: Register = (on, options) => {
     // 「范围」放在模型页：它改变的是逐日统计的窗口，与概览卡片无关——
     // 概览的六张卡一直看扫描到的全部数据，柱子与明细才跟着这个范围走。
     //
-    // 只有四档，因为粒度和范围是绑定的：30 / 60 天按天、180 天按周、
-    // 365 天按月。给一个 7 天之类的短范围反而没意义——柱子只有 7 根，
-    // 而按天已经是能取到的最细粒度，再短也只是柱子变宽。
+    // 只有四档，因为粒度和范围是绑定的：30 / 60 天按天、180 / 365 天按周。
+    // 365 天仍用按周：52 根柱子每根约 16px，比 60 天按天那档还宽，而按月
+    // 只剩 12 根，「这个月哪一周花得多」就看不出来了。给一个 7 天之类的短
+    // 范围反而没意义——柱子只有 7 根，而按天已经是能取到的最细粒度。
     const modelRange = Select ? (
       <Box flexDirection="row" gap={1} alignItems="center">
         <Select
@@ -1068,44 +1039,52 @@ export const register: Register = (on, options) => {
         )}
       </>
     )
+    // 小框按钮：与上面的页签同一套语言——圆角小块、激活时底色变亮 + 边框
+    // 变粗变亮。行内还有其他元素，所以「留白」放在 Button 的 children 里，
+    // 不能写成 Box 的 paddingX（那样 padding 会落在命中区外面）。
+    const chip = (
+      key: string,
+      label: string,
+      isActive: boolean,
+      onPress: () => void,
+    ) => (
+      <Box
+        key={`chipbox-${key}`}
+        borderStyle={isActive ? 'bold' : 'round'}
+        borderColor={isActive ? theme.tabActive.borderColor : fill.borderColor}
+        backgroundColor={isActive ? theme.tabActive.backgroundColor : fill.backgroundColor}
+      >
+        <Button key={key} plain label={label} dimColor={!isActive} onPress={onPress}>
+          {' ' + label + ' '}
+        </Button>      </Box>
+    )
+
     const controls = (
-      <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-        {/* 用量条口径是多选：`Select` 只支持单选，所以每个口径一个 Button，
-            选中画成主按钮，未选中压暗。至少保留一项——全取消会让用量条
-            变成一条空行，看起来像坏了。 */}
+      <Box flexDirection="column" gap={1} marginTop={1}>
+        {/* 用量条口径是多选：每项一个方块按钮，选中的那块变亮。至少保留一项——
+            全取消会让用量条变成一条空行，看起来像坏了。 */}
         <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
           <Text dimColor>用量条显示</Text>
           {BAND_METRIC_OPTIONS.map(option => {
             const isOn = metrics.includes(option.value)
-            return (
-              <Button
-                key={`whale-metric-${option.value}`}
-                plain
-                variant={isOn ? 'primary' : undefined}
-                dimColor={!isOn}
-                label={option.label}
-                onPress={() => {
-                  const next = isOn
-                    ? metrics.filter(item => item !== option.value)
-                    : [...metrics, option.value]
-                  if (next.length === 0) return
-                  void (async () => {
-                    const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                      ...(latest.value ?? DEFAULT_PREFS),
-                      bandMetrics: BAND_METRIC_OPTIONS.map(o => o.value).filter(v => next.includes(v)),
-                    })
-                  })()
-                }}
-              />
-            )
+            return chip(`whale-metric-${option.value}`, option.label, isOn, () => {
+              const next = isOn
+                ? metrics.filter(item => item !== option.value)
+                : [...metrics, option.value]
+              if (next.length === 0) return
+              void (async () => {
+                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                  ...(latest.value ?? DEFAULT_PREFS),
+                  bandMetrics: BAND_METRIC_OPTIONS.map(o => o.value).filter(v => next.includes(v)),
+                })
+              })()
+            })
           })}
         </Box>
-        <Button
-          key="whale-turn-cost"
-          plain
-          label={prefsNow.isTurnCostOn ? '轮次费用提示 开' : '轮次费用提示 关'}
-          onPress={() => {
+        <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+          <Text dimColor>开关</Text>
+          {chip('whale-turn-cost', '轮次费用提示', prefsNow.isTurnCostOn ?? false, () => {
             void (async () => {
               const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
               const nowPrefs = latest.value ?? DEFAULT_PREFS
@@ -1114,13 +1093,8 @@ export const register: Register = (on, options) => {
                 isTurnCostOn: !nowPrefs.isTurnCostOn,
               })
             })()
-          }}
-        />
-        <Button
-          key="whale-band-toggle"
-          plain
-          label={prefsNow.isBandVisible ? '隐藏用量条' : '显示用量条'}
-          onPress={() => {
+          })}
+          {chip('whale-band-toggle', prefsNow.isBandVisible ? '隐藏用量条' : '显示用量条', false, () => {
             void (async () => {
               const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
               const nowPrefs = latest.value ?? DEFAULT_PREFS
@@ -1132,8 +1106,8 @@ export const register: Register = (on, options) => {
               // 收起后整个入口都没了，得告诉人怎么再叫出来，否则只能重开会话。
               if (!isNextVisible) $.ui.toast('/whale 可以呼出当前面板哦！')
             })()
-          }}
-        />
+          })}
+        </Box>
       </Box>
     )
 
@@ -1145,9 +1119,8 @@ export const register: Register = (on, options) => {
         <Text bold>Claude 用量</Text>
         {windows}
         {session}
-        {contextChart}
-        {/* 页签与两页内容共用一个外框：页签是这个框的「标签栏」，
-            内容是本页的读数。它们属于同一个视觉单元，分开画成两个框会
+        {/* 三个页签与各自内容共用一个外框：页签是这个框的「标签栏」，
+            内容是当前页的读数。它们属于同一个视觉单元，分开画成两个框会
             让人以为页签是面板级导航、内容又是另一块卡片。 */}
         <Box
           flexDirection="column"
@@ -1158,7 +1131,7 @@ export const register: Register = (on, options) => {
           marginTop={1}
         >
           {pageTabs}
-          {page === 'models' ? modelsPage : overviewPage}
+          {page === 'context' ? contextPage : page === 'models' ? modelsPage : overviewPage}
         </Box>
         {controls}
         {/* 数据新鲜度贴在最底下：它是「上面那些数字有多可信」的脚注，

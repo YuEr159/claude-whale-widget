@@ -171,13 +171,13 @@ test('泡泡点开后过几秒自己消失', async ($, on) => {
 })
 
 /**
- * 注意：引擎测试的宿主规则只允许「插件的 hooks 模块」写 `$.state`
- * （`its hooks module does not call it`），测试自己的 hook 写不进去；
- * 测试的 `$` 也没有 `$.turn.complete` 可以主动触发记录路径。
- * 所以「翻页写回偏好」由 `pageOf` / `turnPages` 的纯函数用例覆盖，
- * 这里只断言渲染侧：没有数据时不该出现翻页按钮。
+ * 上下文图没有翻页按钮——显示最近多少轮由画布宽度自己算。
+ *
+ * 这条测试守两件事：没有逐轮数据时不画图，以及翻页按钮彻底不存在
+ * （它们曾被画成 `whale-left-contextOffset` / `whale-right-contextOffset`）。
+ * 宽度自适应的数值断言在 `tests/node.run.mjs` 里。
  */
-test('没有逐轮数据时不画上下文图，也不画翻页按钮', async ($, on) => {
+test('没有逐轮数据时上下文页只说明情况，不画翻页按钮', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
@@ -192,10 +192,12 @@ test('没有逐轮数据时不画上下文图，也不画翻页按钮', async ($
     viewport: { columns: 120, rows: 40 },
   })
 
+  // 翻到上下文页才画这块内容。
+  await ui.press({ key: 'whale-tab-context' })
   expect(await ui.find({ key: 'whale-left-contextOffset' })).toBeUndefined()
   expect(await ui.find({ key: 'whale-right-contextOffset' })).toBeUndefined()
   const tree = JSON.stringify(await ui.drawn())
-  expect(tree.includes('上下文占比')).toBe(false)
+  expect(tree).toContain('还没有逐轮数据')
 
   await ui.unmount()
 })
