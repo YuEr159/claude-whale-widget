@@ -37,12 +37,17 @@ import {
   isPlaceholderModel,
   maskModel,
   modelRows,
+  contextPartKind,
+  contextParts,
   contextStack,
+  stackLegendOf,
   rasterizeStacks,
   rasterizeTurnBars,
   turnBars,
   turnBarsCaption,
+  turnPages,
 } from '../hooks/usage-overview.ts'
+import { contextChartSvg, pageOf, turnChartSvg } from '../hooks/chart-art.ts'
 
 test('价格表只认官方模型，缓存按 1.25x / 0.1x', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -318,4 +323,157 @@ test('上下文堆叠柱与轮次柱', () => {
   assert.equal(tb[tb.length - 1].ratio, 1)
   assert.equal(tb.find(b => b.day === '2026-10-19').turns, 0)
   assert.ok(turnBarsCaption(tb).includes('峰值 30 轮'))
+})
+
+test('图表翻页：0 贴住最新，越翻越往历史走', () => {
+  const items = Array.from({ length: 60 }, (_, index) => index)
+  const newest = pageOf(items, 24, 0)
+  assert.deepEqual(newest.slice, items.slice(36, 60))
+  assert.equal(newest.pages, 3)
+  assert.equal(newest.page, 3)
+  assert.equal(newest.maxOffset, 2)
+
+  const older = pageOf(items, 24, 1)
+  assert.deepEqual(older.slice, items.slice(12, 36))
+  assert.equal(older.page, 2)
+
+  const oldest = pageOf(items, 24, 99)
+  assert.deepEqual(oldest.slice, items.slice(0, 12))
+  assert.equal(oldest.page, 1)
+
+  // 不足一页时只有一页，翻不动。
+  const tiny = pageOf(items.slice(0, 5), 24, 3)
+  assert.equal(tiny.slice.length, 5)
+  assert.equal(tiny.maxOffset, 0)
+  assert.equal(tiny.pages, 1)
+})
+
+test('轮次图按天分页，窗口天数固定', () => {
+  const days = [
+    { day: '2026-09-21', turns: 3 },
+    { day: '2026-10-20', turns: 9 },
+  ]
+  const newest = turnPages(days, 7, 0)
+  assert.equal(newest.endDay, '2026-10-20')
+  assert.equal(newest.maxOffset, 4) // 9-21..10-20 共 30 天，ceil(30/7)=5 页
+  assert.equal(newest.page, 5)
+
+  const prev = turnPages(days, 7, 1)
+  assert.equal(prev.endDay, '2026-10-13')
+
+  const oldest = turnPages(days, 7, 99)
+  assert.equal(oldest.page, 1)
+
+  // 指定的右端要真的落在图的最后一根柱子上。
+  const bars = turnBars(days, 7, prev.endDay)
+  assert.equal(bars[bars.length - 1].day, '2026-10-13')
+  assert.equal(bars.length, 7)
+
+  // 没有数据时给今天，且翻不动。
+  const empty = turnPages([], 7, 2)
+  assert.equal(empty.maxOffset, 0)
+  assert.equal(empty.pages, 1)
+})
+
+test('两张图在空数据时也给出合法 SVG', () => {
+  for (const svg of [contextChartSvg([], 320), turnChartSvg([], 320, 7)]) {
+    assert.ok(svg.startsWith('<svg'))
+    assert.ok(svg.endsWith('</svg>'))
+    assert.ok(!svg.includes('NaN'))
+  }
+})
+
+test('上下文分类：按行名归一，只取已用行', () => {
+  // 引擎 /context 的行名；大小写与后缀都要能吃下。
+  assert.equal(contextPartKind('System prompt'), 'system')
+  assert.equal(contextPartKind('System tools'), 'tools')
+  assert.equal(contextPartKind('Memory files'), 'memory')
+  assert.equal(contextPartKind('MCP tools'), 'mcp')
+  assert.equal(contextPartKind('Custom agents'), 'agents')
+  assert.equal(contextPartKind('Messages'), 'messages')
+  assert.equal(contextPartKind('Slash commands'), 'other')
+
+  const parts = contextParts([
+    { name: 'System prompt', tokens: 12_000, kind: 'used' },
+    { name: 'Messages', tokens: 300_000, kind: 'used' },
+    { name: 'Memory files', tokens: 3_000, kind: 'used' },
+    { name: 'Free space', tokens: 600_000, kind: 'free' },
+    { name: 'Autocompact buffer', tokens: 45_000, kind: 'buffer' },
+    { name: 'MCP tools (deferred)', tokens: 9_000, kind: 'deferred' },
+  ])
+  // free / buffer / deferred 都不是「窗口被什么占着」，不进构成。
+  assert.deepEqual(parts.map(p => p.kind), ['messages', 'system', 'memory'])
+  assert.equal(parts[0].tokens, 300_000)
+})
+
+test('上下文分类：同一类合并，零值与坏值丢弃', () => {
+  const parts = contextParts([
+    { name: 'Memory files', tokens: 1_000, kind: 'used' },
+    { name: 'Memory files', tokens: 2_000, kind: 'used' },
+    { name: 'Messages', tokens: 0, kind: 'used' },
+    { name: 'Messages', tokens: Number.NaN, kind: 'used' },
+    { name: 'System prompt', tokens: -5, kind: 'used' },
+  ])
+  assert.equal(parts.length, 1)
+  assert.equal(parts[0].kind, 'memory')
+  assert.equal(parts[0].tokens, 3_000)
+})
+
+test('有构成数据时柱子按内容分类堆叠，总高仍是窗口 100%', () => {
+  const turns = [
+    {
+      seq: 1,
+      percent: 50,
+      tokens: 1000,
+      at: 0,
+      parts: [
+        { name: 'Messages', kind: 'messages', tokens: 300_000 },
+        { name: 'System prompt', kind: 'system', tokens: 100_000 },
+        { name: 'Memory files', kind: 'memory', tokens: 100_000 },
+      ],
+    },
+    // 老记录：没有 parts，退回单色「已用」。
+    { seq: 2, percent: 20, tokens: 500, at: 1 },
+  ]
+  const { bars } = contextStack(turns, 24, 10)
+  assert.equal(bars.length, 2)
+  assert.equal(bars[0].hasParts, true)
+  assert.equal(bars[1].hasParts, false)
+
+  // 第一根：三种分类各按 token 比例分掉 50%，再加 10% 缓冲与 40% 空闲。
+  const kinds = bars[0].segments.map(s => s.kind)
+  assert.deepEqual(kinds, ['messages', 'system', 'memory', 'buffer', 'free'])
+  const sum = bars[0].segments.reduce((acc, s) => acc + s.ratio, 0)
+  assert.ok(Math.abs(sum - 1) < 1e-9)
+  assert.ok(Math.abs(bars[0].segments[0].ratio - 0.3) < 1e-9)
+
+  // 第二根只有「已用 / 缓冲 / 空闲」三段。
+  assert.deepEqual(bars[1].segments.map(s => s.kind), ['used', 'buffer', 'free'])
+})
+
+test('图例跟着这一屏出现过的分段走，顺序稳定', () => {
+  const withParts = contextStack([{
+    seq: 1,
+    percent: 60,
+    tokens: 1,
+    at: 0,
+    parts: [
+      { name: 'Messages', kind: 'messages', tokens: 5 },
+      { name: 'System prompt', kind: 'system', tokens: 3 },
+      { name: 'MCP tools', kind: 'mcp', tokens: 1 },
+    ],
+  }], 24, 20)
+  const legend = stackLegendOf(withParts.bars)
+  // 顺序按 CONTEXT_PART_LABELS：system → tools → memory → mcp → agents → messages，
+  // 末尾才是缓冲与空闲。
+  assert.deepEqual(legend.map(item => item.kind), ['system', 'mcp', 'messages', 'buffer', 'free'])
+  // 没出现过的分类不进图例。
+  assert.ok(!legend.some(item => item.kind === 'memory'))
+  assert.ok(!legend.some(item => item.kind === 'tools'))
+})
+
+test('只有老记录时图例退回三段骨架', () => {
+  const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
+  const legend = stackLegendOf(legacy.bars)
+  assert.deepEqual(legend.map(item => item.kind), ['used', 'buffer', 'free'])
 })
