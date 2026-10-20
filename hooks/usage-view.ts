@@ -22,21 +22,37 @@ export type UsageView = {
   contextWindow?: number
 }
 
-/** 从 `$.session.usage()` 的返回里挑出界面要用的字段。 */
-export function toUsageView(usage: {
-  rateLimits: readonly { kind: string; percentUsed: number; resetsAt?: string }[]
-  cost?: { usd: number }
-  context: { tokens?: number; window: number; percent?: number }
-}): UsageView {
-  const fiveHour = usage.rateLimits.find(limit => limit.kind === 'five_hour')
-  const sevenDay = usage.rateLimits.find(limit => limit.kind === 'seven_day')
+/** 从一个未知形状的 usage 结果里挑字段；形状不对就当作「没有数据」。 */
+export function toUsageView(usage: unknown): UsageView {
+  if (!usage || typeof usage !== 'object') return {}
+  const source = usage as {
+    rateLimits?: unknown
+    cost?: { usd?: unknown } | null
+    context?: { tokens?: unknown; window?: unknown; percent?: unknown } | null
+  }
+
+  const limits = Array.isArray(source.rateLimits) ? source.rateLimits : []
+  const pick = (kind: string): RateLimitView | undefined => {
+    const hit = limits.find(
+      (item): item is RateLimitView =>
+        !!item &&
+        typeof item === 'object' &&
+        (item as { kind?: unknown }).kind === kind &&
+        typeof (item as { percentUsed?: unknown }).percentUsed === 'number',
+    )
+    return hit ?? undefined
+  }
+
+  const context = source.context
+  const cost = source.cost
+
   return {
-    fiveHour,
-    sevenDay,
-    costUsd: usage.cost?.usd,
-    contextPercent: usage.context.percent,
-    contextTokens: usage.context.tokens,
-    contextWindow: usage.context.window,
+    fiveHour: pick('five_hour'),
+    sevenDay: pick('seven_day'),
+    costUsd: typeof cost?.usd === 'number' ? cost.usd : undefined,
+    contextPercent: typeof context?.percent === 'number' ? context.percent : undefined,
+    contextTokens: typeof context?.tokens === 'number' ? context.tokens : undefined,
+    contextWindow: typeof context?.window === 'number' ? context.window : undefined,
   }
 }
 

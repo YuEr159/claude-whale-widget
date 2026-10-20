@@ -75,7 +75,7 @@ export type TurnSpend = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'claude-whale': {
+    'whale-usage': {
       prefs: Prefs
       scan: ScanRecord
       lastTurn: TurnSpend | null

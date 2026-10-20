@@ -21,12 +21,9 @@ import { clip, pct, tokens, usd, countdown } from './format.ts'
 import { bandSummary, bubbleLines, toUsageView } from './usage-view.ts'
 import { emblemOf, moodOf, whaleSvg } from './whale-art.ts'
 
-const PLUGIN = 'claude-whale' as const
+const PLUGIN = 'whale-usage' as const
 const PANE = 'whale'
 
-const PREFS_REF = { plugin: PLUGIN, key: 'prefs' } as const
-const SCAN_REF = { plugin: PLUGIN, key: 'scan' } as const
-const TURN_REF = { plugin: PLUGIN, key: 'lastTurn' } as const
 
 const DEFAULT_PREFS: Prefs = {
   isBandVisible: true,
@@ -75,14 +72,14 @@ export const register: Register = (on, options) => {
       wantsScan = false
       isScanning = true
       lastScanAt = now
-      const held = await $.state.get(SCAN_REF)
-      await $.state.set(SCAN_REF, { ...(held.value ?? EMPTY_SCAN), isRunning: true, lastError: null })
+      const held = await $.state.get({ plugin: 'whale-usage', key: 'scan' } as const)
+      await $.state.set({ plugin: 'whale-usage', key: 'scan' } as const, { ...(held.value ?? EMPTY_SCAN), isRunning: true, lastError: null })
 
       try {
         const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
         if (!home) throw new Error('找不到 HOME 或 USERPROFILE')
 
-        const prefsHeld = await $.state.get(PREFS_REF)
+        const prefsHeld = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
         const prefsNow = prefsHeld.value ?? DEFAULT_PREFS
         const days = prefsNow.historyDays > 0 ? prefsNow.historyDays : defaultHistoryDays
         const root = `${home.replace(/\\/g, '/')}/.claude/projects`
@@ -97,8 +94,8 @@ export const register: Register = (on, options) => {
         const data = JSON.parse(result.stdout.trim()) as LocalUsage | { error?: string }
         if ('error' in data && data.error) throw new Error(data.error)
 
-        const after = await $.state.get(SCAN_REF)
-        await $.state.set(SCAN_REF, {
+        const after = await $.state.get({ plugin: 'whale-usage', key: 'scan' } as const)
+        await $.state.set({ plugin: 'whale-usage', key: 'scan' } as const, {
           ...(after.value ?? EMPTY_SCAN),
           isRunning: false,
           lastRunAt: now,
@@ -106,8 +103,8 @@ export const register: Register = (on, options) => {
           data: data as LocalUsage,
         })
       } catch (error) {
-        const after = await $.state.get(SCAN_REF)
-        await $.state.set(SCAN_REF, {
+        const after = await $.state.get({ plugin: 'whale-usage', key: 'scan' } as const)
+        await $.state.set({ plugin: 'whale-usage', key: 'scan' } as const, {
           ...(after.value ?? EMPTY_SCAN),
           isRunning: false,
           lastRunAt: now,
@@ -137,10 +134,10 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'whale-band' }, async $ => {
-    const held = await $.state.get(PREFS_REF)
+    const held = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
     const prefsNow = held.value ?? DEFAULT_PREFS
     const isNextVisible = !prefsNow.isBandVisible
-    await $.state.set(PREFS_REF, { ...prefsNow, isBandVisible: isNextVisible })
+    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, { ...prefsNow, isBandVisible: isNextVisible })
     return { text: isNextVisible ? '小鲸鱼条已显示。' : '小鲸鱼条已隐藏。' }
   })
 
@@ -153,7 +150,7 @@ export const register: Register = (on, options) => {
         cacheWrite: usage.cache_creation_input_tokens,
         cacheRead: usage.cache_read_input_tokens,
       })
-      const heldTurn = await $.state.get(TURN_REF)
+      const heldTurn = await $.state.get({ plugin: 'whale-usage', key: 'lastTurn' } as const)
       const spend: TurnSpend = {
         seq: (heldTurn.value?.seq ?? 0) + 1,
         turnId: e.turnId,
@@ -165,9 +162,9 @@ export const register: Register = (on, options) => {
         cost: cost ?? null,
         at: Date.now(),
       }
-      await $.state.set(TURN_REF, spend)
+      await $.state.set({ plugin: 'whale-usage', key: 'lastTurn' } as const, spend)
 
-      const heldPrefs = await $.state.get(PREFS_REF)
+      const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
       if ((heldPrefs.value ?? DEFAULT_PREFS).isTurnCostOn) {
         const label = cost === undefined ? '未收录模型' : usd(cost)
         const inputTotal = usage.input_tokens + usage.cache_read_input_tokens
@@ -183,12 +180,11 @@ export const register: Register = (on, options) => {
 
   // ---------------- 常驻条 ----------------
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const heldPrefs = await $.state.get(PREFS_REF)
+    const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
     const prefsNow = heldPrefs.value ?? DEFAULT_PREFS
     if (!prefsNow.isBandVisible || e.props.hasSurvey) return next(e)
 
-    const usage = await $.session.usage()
-    const view = toUsageView(usage)
+    const view = toUsageView(await $.session.usage().catch(() => undefined))
     const mood = moodOf(view.fiveHour?.percentUsed ?? view.sevenDay?.percentUsed, e.props.isWorking)
     const now = await $.clock.now()
     const summary = bandSummary(view, prefsNow.bandMetric, now)
@@ -240,15 +236,14 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button } = table
     const Svg = 'Svg' in table ? table.Svg : undefined
     const Select = 'Select' in table ? table.Select : undefined
-    const usage = await $.session.usage()
-    const view = toUsageView(usage)
+    const view = toUsageView(await $.session.usage().catch(() => undefined))
     const now = await $.clock.now()
 
-    const heldPrefs = await $.state.get(PREFS_REF)
+    const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
     const prefsNow = heldPrefs.value ?? DEFAULT_PREFS
-    const heldScan = await $.state.get(SCAN_REF)
+    const heldScan = await $.state.get({ plugin: 'whale-usage', key: 'scan' } as const)
     const record = heldScan.value ?? EMPTY_SCAN
-    const heldTurn = await $.state.get(TURN_REF)
+    const heldTurn = await $.state.get({ plugin: 'whale-usage', key: 'lastTurn' } as const)
     const turn = heldTurn.value ?? null
 
     const mood = moodOf(view.fiveHour?.percentUsed ?? view.sevenDay?.percentUsed, false)
@@ -371,8 +366,8 @@ export const register: Register = (on, options) => {
               onSelect={(value: string) => {
                 const days = Number(value) || DEFAULT_PREFS.historyDays
                 void (async () => {
-                  const latest = await $.state.get(PREFS_REF)
-                  await $.state.set(PREFS_REF, {
+                  const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                  await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
                     ...(latest.value ?? DEFAULT_PREFS),
                     historyDays: days,
                   })
@@ -388,9 +383,9 @@ export const register: Register = (on, options) => {
             label={prefsNow.isTurnCostOn ? '轮次提示：开' : '轮次提示：关'}
             onPress={() => {
               void (async () => {
-                const latest = await $.state.get(PREFS_REF)
+                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
                 const nowPrefs = latest.value ?? DEFAULT_PREFS
-                await $.state.set(PREFS_REF, { ...nowPrefs, isTurnCostOn: !nowPrefs.isTurnCostOn })
+                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, { ...nowPrefs, isTurnCostOn: !nowPrefs.isTurnCostOn })
               })()
             }}
           />
@@ -400,9 +395,9 @@ export const register: Register = (on, options) => {
             label={prefsNow.isBandVisible ? '隐藏上方条' : '显示上方条'}
             onPress={() => {
               void (async () => {
-                const latest = await $.state.get(PREFS_REF)
+                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
                 const nowPrefs = latest.value ?? DEFAULT_PREFS
-                await $.state.set(PREFS_REF, { ...nowPrefs, isBandVisible: !nowPrefs.isBandVisible })
+                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, { ...nowPrefs, isBandVisible: !nowPrefs.isBandVisible })
               })()
             }}
           />

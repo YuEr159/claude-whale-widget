@@ -25,27 +25,47 @@ Claude Code 桌面端的小鲸鱼挂件：**prompt 上方常驻一条**，点开
 
 ## 安装
 
-本插件是 Claude Code 的 **mod**（function hooks 插件），需要支持 `plugin` 子命令的
-Claude Code 版本。
+本插件是 Claude Code 的 **mod**（function hooks 插件），需要 Claude Code **2.1.275 或更新版本**。
+
+三条路，任选其一：
+
+**1. 本会话热重载（开发时最方便）**
+
+把插件目录放进当前会话的 mods 目录，引擎会在本轮结束时加载，之后改文件自动重载：
 
 ```bash
-claude plugin validate .
+cp -r . "$HOME/.claude/dev-mods/<会话 id>/whale-usage"
 ```
 
-然后把插件目录加进会话：
+**2. 指定目录启动**
 
 ```bash
-claude --plugin-dir "/path/to/claude-whale-widget"
+claude --plugin-dir "/path/to/whale-usage"
 ```
 
-或长期启用：把目录写进环境变量 `CLAUDE_CODE_PLUGIN_DIRS`，或在 Claude Code 的插件
-市场配置里登记。
+**3. 长期启用**
+
+把目录写进环境变量 `CLAUDE_CODE_PLUGIN_DIRS`，或在插件市场配置里登记。
 
 装好后：
 
 - 输入 `/whale` 打开侧边面板；
 - 输入 `/whale-band` 显示 / 隐藏上方常驻条；
 - 面板里可以切换统计范围、开关轮次提示、显示 / 隐藏上方条。
+
+## 怎么测
+
+开发时用桌面端自带的引擎跑测试最准——它比 npm 版的 `claude` 新，规则也更严：
+
+```bash
+# Windows 上桌面端引擎的位置
+ENGINE="$LOCALAPPDATA/Claude-3p/claude-code/<版本>/<哈希>/claude.exe"
+
+"$ENGINE" plugin validate .   # 契约校验：名字、state 归属、调用了哪些接口
+"$ENGINE" plugin test .       # 单元 + 渲染测试
+npx --package typescript@5.6 tsc -p .   # 类型检查
+node --test tests/node.run.mjs          # 不依赖 CLI 的等价测试
+```
 
 ## 数据取不到时
 
