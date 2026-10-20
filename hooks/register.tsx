@@ -36,6 +36,9 @@ import {
   maskModel,
   modelDetailRows,
   modelRows,
+  MODEL_STACK_KEEP,
+  modelGrainFor,
+  modelGrainLabel,
   modelStackBars,
   modelStackCaption,
   overviewCards,
@@ -72,7 +75,7 @@ const PANE = 'whale'
 const DEFAULT_PREFS: Prefs = {
   isBandVisible: true,
   bandMetrics: ['window'],
-  historyDays: 7,
+  historyDays: 30,
   // 每轮都弹会打断阅读，默认关；想要的人可以在面板里打开。
   isTurnCostOn: false,
   // 本地日志聚合要读几十上百 MB，5 分钟一次足够。
@@ -936,7 +939,10 @@ export const register: Register = (on, options) => {
     )
 
     // ---------------- 模型页：逐日堆叠柱 + 每行一个模型 ----------------
-    const stack = modelStackBars(data?.modelDaily ?? [], prefsNow.historyDays)
+    // 粒度由范围推出来，不单独给控件：两者绑死才不会被配成「30 天按月」
+    // 这种看着有 30 根、其实只有 2 根的错配。
+    const grain = modelGrainFor(prefsNow.historyDays)
+    const stack = modelStackBars(data?.modelDaily ?? [], prefsNow.historyDays, MODEL_STACK_KEEP, grain)
     const modelDetails = modelDetailRows(data?.byModel ?? [])
     const modelChartWidth = Math.max(80, Math.min(width * 8 - 16, 900))
     // 柱内段序、图例、下方每行的色块共用这一份映射：颜色与模型的对应
@@ -968,17 +974,20 @@ export const register: Register = (on, options) => {
 
     // 「范围」放在模型页：它改变的是逐日统计的窗口，与概览卡片无关——
     // 概览的六张卡一直看扫描到的全部数据，柱子与明细才跟着这个范围走。
+    //
+    // 只有四档，因为粒度和范围是绑定的：30 / 60 天按天、180 天按周、
+    // 365 天按月。给一个 7 天之类的短范围反而没意义——柱子只有 7 根，
+    // 而按天已经是能取到的最细粒度，再短也只是柱子变宽。
     const modelRange = Select ? (
       <Box flexDirection="row" gap={1} alignItems="center">
         <Select
           key="whale-days"
           label="范围"
           options={[
-            { value: '1', label: '今天' },
-            { value: '3', label: '3 天' },
-            { value: '7', label: '7 天' },
-            { value: '14', label: '14 天' },
             { value: '30', label: '30 天' },
+            { value: '60', label: '60 天' },
+            { value: '180', label: '180 天' },
+            { value: '365', label: '365 天' },
           ]}
           value={String(prefsNow.historyDays)}
           onSelect={(value: string) => {
@@ -989,10 +998,12 @@ export const register: Register = (on, options) => {
                 ...(latest.value ?? DEFAULT_PREFS),
                 historyDays: days,
               })
+              // 窗口拉长后本地扫描的数据不够：立刻重扫，别等下一个周期。
               isScanForced = true
             })()
           }}
         />
+        <Text dimColor>{modelGrainLabel(grain)}</Text>
       </Box>
     ) : null
 
@@ -1012,12 +1023,12 @@ export const register: Register = (on, options) => {
             {Svg ? (
               <Svg
                 source={modelStackSvg(stack.bars, modelChartWidth, stack.yMax, stack.models, chart)}
-                alt={modelStackCaption(stack.bars)}
+                alt={modelStackCaption(stack.bars, grain)}
                 width={modelChartWidth}
                 height={96}
               />
             ) : (
-              <Text dimColor>{modelStackCaption(stack.bars)}</Text>
+              <Text dimColor>{modelStackCaption(stack.bars, grain)}</Text>
             )}
             <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
               {stack.models.map(model => (
@@ -1027,7 +1038,7 @@ export const register: Register = (on, options) => {
                 </Box>
               ))}
             </Box>
-            <Text dimColor>{modelStackCaption(stack.bars)}</Text>
+            <Text dimColor>{modelStackCaption(stack.bars, grain)}</Text>
             <Box flexDirection="column" marginTop={1}>
               {/* 表头与数据行共用同一组列宽，所以各列能对齐。 */}
               <Box flexDirection="row" gap={1}>
@@ -1133,10 +1144,12 @@ export const register: Register = (on, options) => {
         {session}
         {contextChart}
         {byModelSection}
-        {historyHead}
         {pageTabs}
         {page === 'models' ? modelsPage : overviewPage}
         {controls}
+        {/* 数据新鲜度贴在最底下：它是「上面那些数字有多可信」的脚注，
+            放在开场反而挡在真正要看的数字前面。 */}
+        {historyHead}
         {/* 鲸鱼独占最后一行、靠右。整只鲸鱼可点：`Svg` 自己没有 onPress，
             所以盖一层 Button。用一个 Button 而不是按行铺一排——桌面端把
             「label 全是空格」的按钮压成零宽，铺多少行都点不中；这里改用

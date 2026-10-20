@@ -35,7 +35,11 @@ import {
   isPlaceholderModel,
   maskModel,
   modelDetailRows,
+  modelGrainFor,
+  modelGrainLabel,
   modelRows,
+  modelStackBars,
+  modelStackCaption,
   contextPartKind,
   contextParts,
   contextStack,
@@ -839,6 +843,85 @@ test('模型色阶在两套主题下都能按序号区分', () => {
     // 相邻两支不能撞成一样（同一支色出现两次就说明色阶配错了）。
     assert.equal(new Set(colors).size, colors.length, `${name}：模型色阶有重复`)
   }
+})
+
+// ---------------- 模型页的粒度 ----------------
+//
+// 范围一拉长，柱子数就必须压下来，否则 365 根每根 2.4px 糊成一片。
+// 这一组验证「分桶」本身：桶的个数、桶键是哪一天、桶里的 token 是相加
+// 而不是取平均。
+
+test('粒度按范围切换：30/60 按天、180 按周、365 按月', () => {
+  assert.equal(modelGrainFor(30), 'day')
+  assert.equal(modelGrainFor(60), 'day')
+  assert.equal(modelGrainFor(180), 'week')
+  assert.equal(modelGrainFor(365), 'month')
+  // 边界两侧不能跳成同一档。
+  assert.equal(modelGrainFor(210), 'week')
+  assert.equal(modelGrainFor(211), 'month')
+})
+
+test('按周分桶：周一为周始，桶里的 token 相加', () => {
+  // 2026-10-19 是周一。造三天的数据：周一、周三（同一周）、下周一。
+  const days = [
+    { day: '2026-10-19', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] },
+    { day: '2026-10-21', models: [{ model: 'm', input: 20, output: 0, cost: 0 }] },
+    { day: '2026-10-26', models: [{ model: 'm', input: 40, output: 0, cost: 0 }] },
+  ]
+  const { bars } = modelStackBars(days, 14, 6, 'week')
+  // 桶键是桶里最早的一天：10-19 那一桶装 10+20，10-26 那一桶装 40。
+  const byKey = new Map(bars.map(bar => [bar.day, bar.total]))
+  assert.equal(byKey.get('2026-10-19'), 30, '同一周的两天应当相加')
+  assert.equal(byKey.get('2026-10-26'), 40, '下一周单独一桶')
+})
+
+test('按周分桶：周日归上一周，不另起一桶', () => {
+  // 2026-10-18 是周日，2026-10-19 是周一：两者必须分属不同桶。
+  const days = [
+    { day: '2026-10-18', models: [{ model: 'm', input: 5, output: 0, cost: 0 }] },
+    { day: '2026-10-19', models: [{ model: 'm', input: 7, output: 0, cost: 0 }] },
+  ]
+  const { bars } = modelStackBars(days, 7, 6, 'week')
+  const keys = bars.map(bar => bar.day)
+  assert.ok(keys.includes('2026-10-12'), '周日 10-18 属于以 10-12 开头的那一周')
+  assert.ok(keys.includes('2026-10-19'), '周一 10-19 是新的一桶')
+  assert.notEqual(keys.indexOf('2026-10-12'), keys.indexOf('2026-10-19'))
+})
+
+test('按月分桶：桶键是当月一日，同月合并', () => {
+  const days = [
+    { day: '2026-09-05', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] },
+    { day: '2026-09-28', models: [{ model: 'm', input: 15, output: 0, cost: 0 }] },
+    { day: '2026-10-02', models: [{ model: 'm', input: 20, output: 0, cost: 0 }] },
+  ]
+  const { bars } = modelStackBars(days, 60, 6, 'month')
+  const byKey = new Map(bars.map(bar => [bar.day, bar.total]))
+  assert.equal(byKey.get('2026-09-01'), 25, '九月两天合并')
+  assert.equal(byKey.get('2026-10-01'), 20, '十月单独')
+})
+
+test('桶数是窗口跨度除以粒度，不是天数', () => {
+  const days = [{ day: '2026-10-20', models: [{ model: 'm', input: 1, output: 0, cost: 0 }] }]
+  // 365 天按月：最多 13 个桶（跨年时会有 13 个月份），绝不会是 365 个。
+  const monthly = modelStackBars(days, 365, 6, 'month').bars.length
+  assert.ok(monthly <= 13, `按月应当 ≤13 根柱子，实际 ${monthly}`)
+  assert.ok(monthly >= 12, `按月应当 ≥12 根柱子，实际 ${monthly}`)
+  // 180 天按周：约 27 个桶。
+  const weekly = modelStackBars(days, 180, 6, 'week').bars.length
+  assert.ok(weekly <= 28 && weekly >= 26, `按周应当 26–28 根，实际 ${weekly}`)
+  // 30 天按天：正好 30 根。
+  assert.equal(modelStackBars(days, 30, 6, 'day').bars.length, 30)
+})
+
+test('图注写明粒度：同样的柱子数，按天与按月说的不是一回事', () => {
+  const bars = modelStackBars(
+    [{ day: '2026-10-20', models: [{ model: 'm', input: 100, output: 0, cost: 0 }] }],
+    30, 6, 'day',
+  ).bars
+  assert.ok(modelStackCaption(bars, 'day').includes('按天'))
+  assert.ok(modelStackCaption(bars, 'day').includes('30 天'))
+  assert.ok(modelStackCaption(bars, 'month').includes('按月'))
+  assert.ok(modelStackCaption(bars, 'month').includes('个月'))
 })
 
 test('金额一律带估算标记，零与缺失值除外', () => {
