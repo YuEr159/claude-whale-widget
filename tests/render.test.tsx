@@ -13,6 +13,39 @@ import { register } from '../hooks/register.tsx'
 
 const PLUGIN = 'whale-usage'
 
+/**
+ * 引擎只允许行内元素（Text）里放字符串或其它 Text；放 Box 会让整棵树被拒，
+ * 引擎改画它自己的界面，插件这一屏就整个消失了。
+ *
+ * 这条规则值得单独守着，因为有两个坑很隐蔽：
+ *   - `<>...</>` 在这个引擎里**不是透明的**，它是个纵向 Box（Fragment 的实现
+ *     就是 `column Box around the children`）；
+ *   - 嵌套 Text 是合法的，嵌套 Box 不是。
+ *
+ * 返回第一处违规的路径，没有则 undefined。
+ */
+function findBlockInInline(node: any, path = ''): string | undefined {
+  if (!node || typeof node !== 'object') return undefined
+  const here = `${path}/${node.type ?? '?'}`
+
+  if (node.type === 'Text') {
+    for (const kid of node.children ?? []) {
+      if (kid && typeof kid === 'object') {
+        if (kid.type !== 'Text') return `${here} > ${kid.type}`
+        const deeper = findBlockInInline(kid, here)
+        if (deeper) return deeper
+      }
+    }
+    return undefined
+  }
+
+  for (const kid of node.children ?? []) {
+    const found = findBlockInInline(kid, here)
+    if (found) return found
+  }
+  return undefined
+}
+
 const PANE_PROPS = {
   title: '小鲸鱼',
   isFocused: false,
@@ -149,10 +182,13 @@ test('用量条画出代码改动，增删各用主题的 diff 色', async ($, o
     viewport: { columns: 120, rows: 40 },
   })
 
-  const tree = JSON.stringify(await ui.drawn())
+  const tree = await ui.drawn()
   // 还没有任何 Edit / Write：不画 `+0 -0` 这种噪音。
-  expect(tree).not.toContain('diffAdded')
-  expect(tree).not.toContain('diffRemoved')
+  expect(JSON.stringify(tree)).not.toContain('diffAdded')
+  expect(JSON.stringify(tree)).not.toContain('diffRemoved')
+  // 关键回归：行内元素里不能出现 Box。之前用 `<>` 包增删片段，
+  // Fragment 展开成 Box 塞进 Text，整棵树被引擎拒绝，用量条直接消失。
+  expect(findBlockInInline(tree)).toBeUndefined()
 
   await ui.unmount()
 })
