@@ -460,13 +460,15 @@ test('小时标签与原生用量页一致', () => {
   expect(hourLabel(null)).toBe('—')
 })
 
-test('模型名脱敏：保留头尾，中间星号', () => {
+test('模型名显示全名，只有过长才截断——不打码', () => {
   expect(maskModel(null)).toBe('—')
-  expect(maskModel('claude-opus-5-5')).toBe('opu*** -5-5')
-  const masked = maskModel('deepseek-v4-flash')
-  expect(masked.startsWith('dee')).toBe(true)
-  expect(masked).toContain('*')
-  expect(masked).not.toBe('deepseek-v4-flash')
+  // 本地数据没有要藏的东西：原名照出，读者要能一眼认出是哪个模型。
+  expect(maskModel('claude-opus-5-5')).toBe('opus-5-5')
+  expect(maskModel('deepseek-v4-flash')).toBe('deepseek-v4-flash')
+  // 截断用省略号而不是星号：读者至少知道它被截了，不会以为是匿名数据。
+  const long = maskModel('some-very-long-gateway-model-name')
+  expect(long.endsWith('…')).toBe(true)
+  expect(long).not.toContain('*')
 })
 
 test('热力图分档按最大值比例，不是绝对阈值', () => {
