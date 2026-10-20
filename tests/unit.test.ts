@@ -7,7 +7,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { costOf, priceOf } from '../hooks/pricing'
 import { clip, countdown, pct, tokens, usd } from '../hooks/format'
-import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view'
+import { freshnessOf, toUsageView } from '../hooks/usage-view'
 import {
   addModelSpend,
   contextHeadline,
@@ -22,7 +22,7 @@ import {
   unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { moodOf, whaleBandSvg, whaleSvg } from '../hooks/whale-art'
+import { moodOf, whaleSvg } from '../hooks/whale-art'
 
 test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -116,27 +116,6 @@ test('usage 视图挑出 5h/7d 两个窗口', () => {
   expect(view.contextPercent).toBe(0.1)
 })
 
-test('常驻条摘要按偏好切换口径', () => {
-  const view = toUsageView({
-    rateLimits: [
-      { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-20T14:00:00Z' },
-      { kind: 'seven_day', percentUsed: 70 },
-    ],
-    cost: { usd: 2 },
-    context: { window: 1_000_000, percent: 12 },
-  })
-  const now = Date.parse('2026-10-20T12:00:00Z')
-  expect(bandSummary(view, 'window', now)).toContain('5h 40%')
-  expect(bandSummary(view, 'session', now)).toBe('本会话 $2.00')
-  expect(bandSummary(view, 'cost', now)).toBe('上下文 12%')
-  expect(bandSummary(view, 'context', now)).toBe('5h 40% · 7d 70%')
-})
-
-test('没有额度窗口时退回上下文与会话花费', () => {
-  const view = toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } })
-  expect(bandSummary(view, 'window', 0)).toBe('上下文 33% · 本会话 $0.50')
-})
-
 test('SVG 是合法标签，文字做了转义，动画可选', () => {
   const svg = whaleSvg('idle', ['余额 <b>&', '¥1.23', '5m'])
   expect(svg.startsWith('<svg')).toBe(true)
@@ -173,12 +152,6 @@ test('数据新鲜度：刚更新、分钟、小时、过期判定', () => {
 
   // 间隔为 0（只在手动刷新时扫）永远不判过期
   expect(freshnessOf(now - 99 * 60_000, now, 0).isStale).toBe(false)
-})
-
-test('上方条口径选项覆盖全部四种取值', () => {
-  expect(BAND_METRIC_OPTIONS.map(o => o.value).sort()).toEqual(
-    ['context', 'cost', 'session', 'window'].sort(),
-  )
 })
 
 test('额度窗口按原生 /usage 的标题与顺序排列', () => {
@@ -316,17 +289,3 @@ test('面板详细程度：缺字段按默认详细读', () => {
   expect(detailOf({ panelDetail: 'detail' })).toBe('detail')
 })
 
-test('常驻条用极简像素女仆：16×15 格、path 合并', () => {
-  const svg = whaleBandSvg('idle')
-  expect(svg.startsWith('<svg')).toBe(true)
-  expect(svg.endsWith('</svg>')).toBe(true)
-  expect(svg).toContain('viewBox="0 0 64 60"')
-  expect(svg).toContain('shape-rendering="crispEdges"')
-  // 纯矢量：没有内嵌位图，尺寸远小于 Svg 的 source 上限
-  expect(svg).not.toContain('<image')
-  expect(svg).not.toContain('base64')
-  expect(svg.length).toBeLessThan(2000)
-  // 情绪只叠一层色，不新增彩色格子
-  expect(whaleBandSvg('idle')).not.toContain('<rect width="64"')
-  expect(whaleBandSvg('sleep')).toContain('<rect width="64" height="60"')
-})

@@ -14,7 +14,7 @@ import { test } from 'node:test'
 
 import { costOf, priceOf } from '../hooks/pricing.ts'
 import { clip, countdown, pct, tokens, usd } from '../hooks/format.ts'
-import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
+import { freshnessOf, toUsageView } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
   contextHeadline,
@@ -29,7 +29,7 @@ import {
   unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { moodOf, whaleBandSvg, whaleSvg } from '../hooks/whale-art.ts'
+import { moodOf, whaleSvg } from '../hooks/whale-art.ts'
 
 test('价格表只认官方模型，缓存按 1.25x / 0.1x', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -120,31 +120,6 @@ test('usage 视图挑窗口', () => {
   assert.equal(view.contextPercent, 0.1)
 })
 
-test('常驻条摘要口径', () => {
-  const view = toUsageView({
-    rateLimits: [
-      { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-20T14:00:00Z' },
-      { kind: 'seven_day', percentUsed: 70 },
-    ],
-    cost: { usd: 2 },
-    context: { window: 1_000_000, percent: 12 },
-  })
-  const now = Date.parse('2026-10-20T12:00:00Z')
-  assert.ok(bandSummary(view, 'window', now).includes('5h 40%'))
-  assert.equal(bandSummary(view, 'session', now), '本会话 $2.00')
-  assert.equal(bandSummary(view, 'cost', now), '上下文 12%')
-  assert.equal(bandSummary(view, 'context', now), '5h 40% · 7d 70%')
-})
-
-test('无额度窗口时退回上下文 + 会话花费', () => {
-  const view = toUsageView({
-    rateLimits: [],
-    cost: { usd: 0.5 },
-    context: { window: 200_000, percent: 33 },
-  })
-  assert.equal(bandSummary(view, 'window', 0), '上下文 33% · 本会话 $0.50')
-})
-
 test('SVG 合法、文字转义、动画可选', () => {
   const svg = whaleSvg('idle', ['余额 <b>&', '¥1.23', '5m'])
   assert.ok(svg.startsWith('<svg'))
@@ -170,13 +145,6 @@ test('数据新鲜度：刚更新、分钟、小时、过期判定', () => {
   assert.equal(freshnessOf(now - 11 * 60_000, now, 300_000).isStale, true)
   assert.equal(freshnessOf(now - 90 * 60_000, now, 300_000).text, '1 小时前')
   assert.equal(freshnessOf(now - 99 * 60_000, now, 0).isStale, false)
-})
-
-test('上方条口径选项覆盖全部四种取值', () => {
-  assert.deepEqual(
-    BAND_METRIC_OPTIONS.map(o => o.value).sort(),
-    ['context', 'cost', 'session', 'window'].sort(),
-  )
 })
 
 test('额度窗口按原生 /usage 的标题与顺序排列', () => {
@@ -262,15 +230,3 @@ test('面板详细程度默认详细', () => {
   assert.equal(detailOf({ panelDetail: 'simple' }), 'simple')
 })
 
-test('常驻条用极简像素女仆：16×15 格、path 合并', () => {
-  const svg = whaleBandSvg('idle')
-  assert.ok(svg.startsWith('<svg'))
-  assert.ok(svg.endsWith('</svg>'))
-  assert.ok(svg.includes('viewBox="0 0 64 60"'))
-  assert.ok(svg.includes('shape-rendering="crispEdges"'))
-  assert.ok(!svg.includes('<image'))
-  assert.ok(!svg.includes('base64'))
-  assert.ok(svg.length < 2000)
-  assert.ok(!whaleBandSvg('idle').includes('<rect width="64"'))
-  assert.ok(whaleBandSvg('sleep').includes('<rect width="64" height="60"'))
-})

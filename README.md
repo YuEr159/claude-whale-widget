@@ -1,18 +1,14 @@
 # Claude 用量小鲸鱼挂件
 
-Claude Code 桌面端的小鲸鱼挂件：**prompt 上方常驻一条**，点开**侧边面板**看完整数据。
+Claude Code 桌面端的小鲸鱼挂件：输入 `/whale` 打开**侧边面板**看完整用量。
 数据全部来自本机、全部只读，不需要 API key，不上传任何东西。
 
 这是 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)
 的 Claude 版重做——原版挂在 DSH Web 界面右下角、显示 DeepSeek 余额；Claude 没有
 「用 API key 查余额」的接口，所以这一版换成了 Claude 真正能读到的四类数据。
 
-```
-🐳                                             5h 23% · 2h13m 后重置  [面板]
-```
-
-常驻条里是**极简像素的二次元女仆**：16×15 格、纯矢量、path 合并，画法照抄
-桌面端的 Clawd（头身比 1.5:1）；面板里仍是原版素材内嵌的立绘。
+面板底部是小鲸鱼立绘（原版素材内嵌，按用量变表情）。输入框上方**不再有常驻条**，
+也不占用任何输入区域。
 
 ## 显示什么
 
@@ -31,7 +27,7 @@ Claude Code 桌面端的小鲸鱼挂件：**prompt 上方常驻一条**，点开
 | **每轮消耗** | `turn.complete` 事件 | 每轮结束后的真实 token，按官方价格估算；默认不弹提示，可在面板打开 |
 | **本地历史用量** | `~/.claude/projects/*.jsonl` | 今日 / 最近 N 天的 token 与估算金额，跨会话汇总 |
 
-小鲸鱼会随用量变表情：正常 → 忙碌 → 疲惫 → 睡着（额度接近上限）。工作中会喷水。
+面板里的小鲸鱼会随用量变表情：正常 → 忙碌 → 疲惫 → 睡着（额度接近上限）。工作时会喷水。
 
 ### 详细视图与原生面板的差异
 
@@ -78,8 +74,7 @@ claude --plugin-dir "/path/to/whale-usage"
 装好后：
 
 - 输入 `/whale` 打开侧边面板；
-- 输入 `/whale-band` 显示 / 隐藏上方常驻条；
-- 面板里可以切换详细 / 简洁、上方条口径、统计范围，开关轮次提示与上方条。
+- 面板里可以切换详细 / 简洁、统计范围，开关轮次提示。
 
 ## 怎么测
 
@@ -99,15 +94,14 @@ node --test tests/node.run.mjs          # 不依赖 CLI 的等价测试
 
 | 情况 | 表现 |
 |---|---|
-| 没有订阅额度窗口（API key 计费、第三方网关） | 额度显示 `—`，常驻条自动退回「上下文 + 会话花费」 |
+| 没有订阅额度窗口（API key 计费、第三方网关） | 额度一栏显示「无额度窗口」，上下文与会话花费照常 |
 | 用的是第三方模型（DeepSeek、Qwen 等） | token 照常统计，金额显示「未收录模型」，不会拿官方价格硬套 |
 | 本机没有 Node | 本地历史一栏报错，其余数据照常 |
 
 ## 素材来源
 
 面板里的小鲸鱼原图来自 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MIT），
-按显示尺寸重采样后内嵌进 SVG。常驻条的像素女仆是照着原图配色另行绘制的
-16×15 网格。完整署名与许可见 [NOTICE.md](NOTICE.md)。
+按显示尺寸重采样后内嵌进 SVG。完整署名与许可见 [NOTICE.md](NOTICE.md)。
 
 ## 隐私
 
@@ -138,7 +132,7 @@ hooks/hooks.json             入口声明
 hooks/register.tsx           全部 hook：命令、渲染、轮次、定时扫描
 hooks/usage-view.ts          纯计算：用量 → 界面文字
 hooks/usage-detail.ts        纯计算：/usage 与 /context 明细 → 面板行
-hooks/whale-art.ts           小鲸鱼画面（常驻条像素版 + 面板内嵌原图）
+hooks/whale-art.ts           小鲸鱼画面（内嵌原图 + 代码绘制的气泡）
 hooks/whale-asset.ts         原图的两档 base64 资产
 hooks/pricing.ts             官方模型价格表
 hooks/format.ts              金额 / 百分比 / 倒计时格式化
@@ -152,13 +146,13 @@ tests/                       测试
 | | DeepSeek 原版 | 本版 |
 |---|---|---|
 | 宿主 | DSH Web 界面 | Claude Code 桌面端 mod |
-| 位置 | 右下角常驻、可拖拽 | 输入框上方常驻条（鲸鱼在左，原生小章鱼所在的角）+ 侧边面板（鲸鱼在右下角） |
+| 位置 | 右下角常驻、可拖拽 | 侧边面板（鲸鱼在面板右下角），不改动输入区域 |
 | 主数据 | 余额（官方接口） | 额度窗口 / 会话花费 / 上下文 / 本地历史 |
-| 画面 | 位图 cut-out + 代码绘制的 SVG 气泡 | 常驻条像素画、面板内嵌原图，气泡代码绘制 |
+| 画面 | 位图 cut-out + 代码绘制的 SVG 气泡 | 面板内嵌原图 + 代码绘制的气泡 |
 | 取数 | 需要 API key 或平台登录态 | 本地 `$.session.usage()`，零凭据 |
 
 原版有拖拽吸附、按压音效、自定义角色与台词。桌面端的绘制元素没有位图 `Image`，
-也没有指针拖拽事件，这些在 Claude 版里用「常驻条 + 面板 + 表情」替代。
+也没有指针拖拽事件，这些在 Claude 版里用「侧边面板 + 表情」替代。
 
 ## 许可
 
