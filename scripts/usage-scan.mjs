@@ -115,6 +115,8 @@ export function aggregate(root, days) {
   // 只记模型名与条数，不记金额）；按小时统计消息数取峰值。
   const byModelCount = new Map()
   const byHour = new Array(24).fill(0)
+  // 逐日轮次（用户输入次数），给 GitHub 式的轮次柱状图用。
+  const byTurnDay = new Map()
   let unparsed = 0
   let skipped = 0
 
@@ -141,13 +143,29 @@ export function aggregate(root, days) {
       const line = text.slice(start, end)
       start = end + 1
       if (line.length === 0) continue
-      // 便宜的预筛：99% 的行不含 usage，先跳过大半，省掉 JSON.parse 的开销。
-      if (!line.includes('"usage"')) continue
+      // 便宜的预筛：99% 的行既不含 usage 也不是 user 行，先跳过大半，
+      // 省掉 JSON.parse 的开销。
+      const hasUsage = line.includes('"usage"')
+      const hasUser = line.includes('"type":"user"')
+      if (!hasUsage && !hasUser) continue
       let row
       try {
         row = JSON.parse(line)
       } catch {
         unparsed += 1
+        continue
+      }
+      // 轮次：一条用户真正输入的消息算一轮。
+      // 工具结果回填的行也标成 user，靠 promptId / toolUseResult 区分。
+      if (row?.type === 'user') {
+        const isToolResult = row.toolUseResult !== undefined || row.promptId === undefined
+        if (!isToolResult) {
+          const day = dayKey(row.timestamp)
+          const stamp = Date.parse(row.timestamp)
+          if (day && !(stamp < cutoff)) {
+            byTurnDay.set(day, (byTurnDay.get(day) ?? 0) + 1)
+          }
+        }
         continue
       }
       if (row?.type !== 'assistant') continue
@@ -315,6 +333,10 @@ export function aggregate(root, days) {
     today: { day: today, ...todayBucket },
     total,
     daily,
+    /** 逐日轮次（用户输入次数），只含有轮次的日子。 */
+    turnsDaily: [...byTurnDay.entries()]
+      .map(([day, turns]) => ({ day, turns }))
+      .sort((a, b) => (a.day < b.day ? -1 : 1)),
     byModel: [...byModel.entries()]
       .map(([model, v]) => ({ model, ...v }))
       .sort((a, b) => b.cost - a.cost),

@@ -45,10 +45,31 @@ export type LocalOverview = {
   totalTokens: number
 }
 
+/** 一天的轮次（用户输入次数），给 GitHub 式的柱状图用。 */
+export type TurnDay = {
+  /** `YYYY-MM-DD`，本地时区。 */
+  day: string
+  turns: number
+}
+
+/** 一轮的上下文占比，供堆叠柱状图使用。 */
+export type ContextTurn = {
+  /** 本轮的轮次序号（会话内递增）。 */
+  seq: number
+  /** 本轮结束时上下文窗口的占用百分比，0–100。 */
+  percent: number
+  /** 本轮消耗的 token（输入 + 缓存读写 + 输出），用于堆叠的高度。 */
+  tokens: number
+  /** 记录时间，毫秒。 */
+  at: number
+}
+
 /** `scripts/usage-scan.mjs` 一次输出的全部内容。 */
 export type LocalUsage = {
   files: number
   overview: LocalOverview
+  /** 逐日轮次；只含有轮次的日子。 */
+  turnsDaily: TurnDay[]
   windowDays: number
   today: LocalDay
   total: Omit<LocalDay, 'day'>
@@ -132,6 +153,8 @@ declare module 'claude-code' {
       lastTurn: TurnSpend | null
       totals: SessionTotals
       byModel: ModelSpend[]
+      /** 最近若干轮的上下文占比，供面板画堆叠柱状图。 */
+      contextTurns: ContextTurn[]
     }
   }
 }

@@ -32,6 +32,11 @@ import {
   overviewCards,
   heatLevel,
   isPlaceholderModel,
+  contextStack,
+  rasterizeStacks,
+  rasterizeTurnBars,
+  turnBars,
+  turnBarsCaption,
 } from '../hooks/usage-overview'
 
 test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
@@ -422,4 +427,69 @@ test('模型页过滤引擎内部标识', () => {
     { model: 'deepseek-v4-flash', isPriced: false, input: 100, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 10 },
   ] as never)
   expect(rows.map(r => r.model)).toEqual(['deepseek-v4-flash'])
+})
+
+test('上下文堆叠柱：每轮一根，段内比例受夹取', () => {
+  const turns = [
+    { seq: 1, percent: 20, tokens: 1000, at: 0 },
+    { seq: 2, percent: 55, tokens: 2000, at: 1 },
+    { seq: 3, percent: 90, tokens: 3000, at: 2 },
+  ]
+  const { bars, peak } = contextStack(turns, 24, 10)
+  expect(bars).toHaveLength(3)
+  expect(peak).toBe(90)
+  expect(bars[0]?.percent).toBe(20)
+  // 每根柱子的分段比例之和应为 1（不含被裁掉的 0 段）
+  for (const bar of bars) {
+    const total = bar.segments.reduce((sum, s) => sum + s.ratio, 0)
+    expect(Math.abs(total - 1) < 1e-9).toBe(true)
+  }
+  // 已用超过 100 时被夹住，缓冲段不溢出
+  const over = contextStack([{ seq: 9, percent: 130, tokens: 1, at: 0 }], 5, 10)
+  expect(over.bars[0]?.percent).toBe(100)
+})
+
+test('堆叠柱光栅化：行数正确，柱子自底向上填', () => {
+  const turns = [{ seq: 1, percent: 50, tokens: 1, at: 0 }]
+  const { bars } = contextStack(turns, 10, 0)
+  const grid = rasterizeStacks(bars, 4)
+  expect(grid).toHaveLength(4)
+  // 50% 在 4 行里约占 2 行，且填在底部
+  expect(grid[3]?.[0]?.[0]).not.toBeNull()
+  expect(grid[0]?.[0]?.[0] === null || grid[0]?.[0]?.[0] === 'free').toBe(true)
+})
+
+test('轮次柱：按天补齐，缺的日子记 0', () => {
+  const bars = turnBars(
+    [
+      { day: '2026-10-18', turns: 10 },
+      { day: '2026-10-20', turns: 30 },
+    ],
+    4,
+  )
+  expect(bars).toHaveLength(4)
+  expect(bars[bars.length - 1]?.day).toBe('2026-10-20')
+  expect(bars[bars.length - 1]?.turns).toBe(30)
+  expect(bars[bars.length - 1]?.ratio).toBe(1)
+  // 10-19 没有记录，应补 0
+  const gap = bars.find(b => b.day === '2026-10-19')
+  expect(gap?.turns).toBe(0)
+})
+
+test('轮次柱光栅化：0 轮也画一格底，时间轴不断档', () => {
+  const bars = turnBars(
+    [
+      { day: '2026-10-19', turns: 0 },
+      { day: '2026-10-20', turns: 100 },
+    ],
+    2,
+  )
+  const grid = rasterizeTurnBars(bars, 4)
+  expect(grid).toHaveLength(4)
+  // 每天都有底格
+  expect(grid[3]?.[0]).toBe('bar')
+  expect(grid[3]?.[1]).toBe('bar')
+  // 满值那根比 0 轮那根高
+  const heightOf = (index: number) => grid.filter(row => row[index] === 'bar').length
+  expect(heightOf(1)).toBeGreaterThan(heightOf(0))
 })
