@@ -7,7 +7,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { costOf, priceOf } from '../hooks/pricing'
 import { clip, countdown, pct, tokens, usd } from '../hooks/format'
-import { freshnessOf, toUsageView } from '../hooks/usage-view'
+import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view'
 import {
   addModelSpend,
   contextHeadline,
@@ -289,3 +289,34 @@ test('面板详细程度：缺字段按默认详细读', () => {
   expect(detailOf({ panelDetail: 'detail' })).toBe('detail')
 })
 
+
+test('用量条摘要按偏好切换口径', () => {
+  const view = toUsageView({
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-20T14:00:00Z' },
+      { kind: 'seven_day', percentUsed: 70 },
+    ],
+    cost: { usd: 2 },
+    context: { window: 1_000_000, percent: 12 },
+  })
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  expect(bandSummary(view, 'window', now)).toContain('5h 40%')
+  expect(bandSummary(view, 'session', now)).toBe('本会话 $2.00')
+  expect(bandSummary(view, 'cost', now)).toBe('上下文 12%')
+  expect(bandSummary(view, 'context', now)).toBe('5h 40% · 7d 70%')
+})
+
+test('没有额度窗口时用量条退回上下文 + 会话花费', () => {
+  const view = toUsageView({
+    rateLimits: [],
+    cost: { usd: 0.5 },
+    context: { window: 200_000, percent: 33 },
+  })
+  expect(bandSummary(view, 'window', 0)).toBe('上下文 33% · 本会话 $0.50')
+})
+
+test('用量条口径选项覆盖全部四种取值', () => {
+  expect(BAND_METRIC_OPTIONS.map(o => o.value).sort()).toEqual(
+    ['context', 'cost', 'session', 'window'].sort(),
+  )
+})

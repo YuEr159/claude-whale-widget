@@ -39,39 +39,69 @@ test('桌面端面板能画出来，控件都在', async ($, on) => {
   expect(await ui.find({ key: 'whale-days' })).toBeDefined()
   expect(await ui.find({ key: 'whale-turn-cost' })).toBeDefined()
   expect(await ui.find({ key: 'whale-panel-detail' })).toBeDefined()
-  // 常驻条已移除，控件与元素都不应再出现
-  expect(await ui.find({ key: 'whale-band-toggle' })).toBeUndefined()
-  expect(await ui.find({ key: 'whale-metric' })).toBeUndefined()
+  expect(await ui.find({ key: 'whale-metric' })).toBeDefined()
+  expect(await ui.find({ key: 'whale-band-toggle' })).toBeDefined()
 
   await ui.unmount()
 })
 
-test('不再有常驻条：本插件不注册 AbovePrompt 的渲染', async ($, on) => {
+test('输入框上方有用量条：摘要 + 面板入口，但没有形象', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.env(on, { HOME: 'C:/Users/test' })
 
-  // 没有插件响应 ui.render 时，宿主会直接拒绝挂载——这正是「常驻条已移除」
-  // 的证据：注册表里不再有能画 AbovePrompt 的 hook。
-  let message = ''
-  try {
-    await $.ui.mount({
-      plugin: PLUGIN,
-      surface: 'desktop',
-      component: 'AbovePrompt',
-      props: {
-        hasSurvey: false,
-        isWorking: false,
-        maxRows: 10,
-        bodyColumns: 100,
-        scroll: { offset: 0, bodyRows: 10 },
-        view: {},
-      },
-      viewport: { columns: 120, rows: 40 },
-    })
-  } catch (error) {
-    message = error instanceof Error ? error.message : String(error)
-  }
-  expect(message).toContain('no implementation for ui.render')
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: {
+      hasSurvey: false,
+      isWorking: false,
+      maxRows: 10,
+      bodyColumns: 100,
+      scroll: { offset: 0, bodyRows: 10 },
+      view: {},
+    },
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  // 用量条本身与入口都在
+  const band = await ui.find({ key: 'whale-band' })
+  expect(band).toBeDefined()
+  expect(await ui.find({ key: 'whale-open' })).toBeDefined()
+  // 但不再画任何形象：既没有 Svg，也没有 emoji 格
+  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  const kids = (await ui.drawn() as any).children ?? []
+  expect(kids.every((kid: any) => kid?.type !== 'Svg')).toBe(true)
+
+  await ui.unmount()
+})
+
+test('终端上用量条同样只有文字与入口', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: {
+      hasSurvey: false,
+      isWorking: false,
+      maxRows: 10,
+      bodyColumns: 100,
+      scroll: { offset: 0, bodyRows: 10 },
+      view: {},
+    },
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  expect(await ui.find({ key: 'whale-band' })).toBeDefined()
+  expect(await ui.find({ key: 'whale-open' })).toBeDefined()
+  const kids = (await ui.drawn() as any).children ?? []
+  // 第一个子元素是摘要文字，不是 emoji
+  expect(kids[0]?.type).toBe('Text')
+
+  await ui.unmount()
 })
 
 test('终端 surface 面板没有 Svg 也能画（退化成文字鲸鱼）', async ($, on) => {

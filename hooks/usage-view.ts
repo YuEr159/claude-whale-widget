@@ -72,6 +72,29 @@ export function toUsageView(usage: unknown): UsageView {
   }
 }
 
+/** 用量条那一行摘要，按偏好切换口径。 */
+export function bandSummary(view: UsageView, metric: Prefs['bandMetric'], now: number): string {
+  const five = pct(view.fiveHour?.percentUsed)
+  const seven = pct(view.sevenDay?.percentUsed)
+  switch (metric) {
+    case 'session':
+      return `本会话 ${usd(view.costUsd)}`
+    case 'cost':
+      return `上下文 ${pct(view.contextPercent)}`
+    case 'context':
+      return `5h ${five} · 7d ${seven}`
+    default:
+      // 没有订阅额度窗口时（第三方网关、API key 计费），退回上下文占用 + 会话花费，
+      // 这两项在任何计费方式下都有读数。
+      if (!view.fiveHour && !view.sevenDay) {
+        return `上下文 ${pct(view.contextPercent)} · 本会话 ${usd(view.costUsd)}`
+      }
+      return view.fiveHour
+        ? `5h ${five} · ${countdown(view.fiveHour.resetsAt, now)} 后重置`
+        : `5h ${five} · 7d ${seven}`
+  }
+}
+
 /** 面板气泡里的三行。 */
 export function bubbleLines(view: UsageView, now: number): string[] {
   return [
@@ -80,6 +103,14 @@ export function bubbleLines(view: UsageView, now: number): string[] {
     view.fiveHour?.resetsAt ? `${countdown(view.fiveHour.resetsAt, now)} 后重置` : '',
   ].filter(line => line.length > 0)
 }
+
+/** 用量条显示口径的选择项，面板与默认值共用。 */
+export const BAND_METRIC_OPTIONS: ReadonlyArray<{ value: Prefs['bandMetric']; label: string }> = [
+  { value: 'window', label: '额度窗口' },
+  { value: 'session', label: '本会话花费' },
+  { value: 'cost', label: '上下文占用' },
+  { value: 'context', label: '5h + 7d' },
+]
 
 /**
  * 本地数据的「新鲜度」：距上次扫描多久。

@@ -14,7 +14,7 @@ import { test } from 'node:test'
 
 import { costOf, priceOf } from '../hooks/pricing.ts'
 import { clip, countdown, pct, tokens, usd } from '../hooks/format.ts'
-import { freshnessOf, toUsageView } from '../hooks/usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
   contextHeadline,
@@ -230,3 +230,24 @@ test('面板详细程度默认详细', () => {
   assert.equal(detailOf({ panelDetail: 'simple' }), 'simple')
 })
 
+
+test('用量条摘要按偏好切换口径', () => {
+  const view = toUsageView({
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-20T14:00:00Z' },
+      { kind: 'seven_day', percentUsed: 70 },
+    ],
+    cost: { usd: 2 },
+    context: { window: 1_000_000, percent: 12 },
+  })
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  assert.ok(bandSummary(view, 'window', now).includes('5h 40%'))
+  assert.equal(bandSummary(view, 'session', now), '本会话 $2.00')
+  assert.equal(bandSummary(view, 'cost', now), '上下文 12%')
+  assert.equal(bandSummary(view, 'context', now), '5h 40% · 7d 70%')
+  assert.equal(
+    bandSummary(toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } }), 'window', 0),
+    '上下文 33% · 本会话 $0.50',
+  )
+  assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'session', 'window'].sort())
+})
