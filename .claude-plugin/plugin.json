@@ -1,0 +1,24 @@
+{
+  "name": "claude-whale-widget",
+  "version": "0.1.0",
+  "description": "Claude 版小鲸鱼挂件：prompt 上方常驻一条，侧边面板看额度窗口、会话花费、上下文占用与本地用量",
+  "author": {
+    "name": "YuEr159"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "mod",
+    "usage",
+    "widget"
+  ],
+  "userConfig": {
+    "historyDays": {
+      "type": "number",
+      "title": "本地历史统计天数",
+      "description": "统计 ~/.claude/projects 里最近多少天的用量，默认 7 天",
+      "default": 7
+    }
+  }
+}

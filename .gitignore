@@ -1,0 +1,11 @@
+# 类型声明由引擎在加载时写入，不入库
+.claude-plugin/types/
+
+# 开发时生成的临时文件
+.scratch/
+node_modules/
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db
