@@ -5,14 +5,16 @@
  * 对应关系（与引擎文案一致）：
  *   /usage    额度窗口 Current session / Current week、会话总花费、会话时长、
  *             代码增删行数、Usage by model
- *   /context  上下文窗口的网格与逐项明细（系统提示、消息、工具、记忆文件……）
+ *   /context  上下文窗口的构成。逐项清单与 10×10 网格不在这里画——柱状图
+ *             已经按同一批类别着色，只保留柱子表达不了的：窗口上限、压缩阈值、
+ *             以及记忆文件 / MCP / agent / 技能的数量。
  *
  * 拿不到的两项，界面上如实写明，不拿别的数硬凑：
  *   `Total duration (API)` —— 引擎只给每轮的墙钟时长；
  *   子代理的消耗 —— 只在它自己的 `turn.complete` 里，主线程不汇总。
  */
 import type { Prefs } from '../types'
-import { pct, tokens } from './format.ts'
+import { tokens } from './format.ts'
 import { usdEstimate } from './provenance.ts'
 
 // ---------------- /usage：额度窗口 ----------------
@@ -189,20 +191,15 @@ export type ContextRow = {
   name: string
   tokens: number
   kind: ContextRowKind
-  /** 占窗口的百分比；`deferred` 行在窗口之外，没有意义。 */
-  sharePercent: number
-  /** 引擎给的主题色键；空串表示没给，由界面按 kind 兜底。 */
-  color: string
 }
 
-/** 网格里的一格：分项名与引擎给的主题色。 */
-export type GridCell = {
-  name: string
-  color: string
-  isFilled: boolean
-}
-
-/** 面板「上下文明细」一节的输入，字段与引擎 breakdown 同名。 */
+/**
+ * 面板「上下文」一节的输入，字段与引擎 breakdown 同名。
+ *
+ * 逐项清单与 10×10 网格不再出现在界面上：柱状图已经按同一批类别着色，
+ * 再列一遍是同一个数字说两遍。这里只保留柱子表达不了的几件事——窗口上限、
+ * 压缩阈值、以及记忆文件 / MCP / agent / 技能的数量。
+ */
 export type ContextDetail = {
   totalTokens: number
   rawMaxTokens: number
@@ -211,10 +208,9 @@ export type ContextDetail = {
   source: string
   isAutoCompactEnabled: boolean
   autoCompactThreshold?: number
+  /** 仍供 `contextParts()` 归类与压缩阈值换算，不再逐行列出。 */
   rows: ContextRow[]
   model: string
-  /** 网格，行优先；空数组表示引擎没给。 */
-  grid: GridCell[][]
   memoryFiles: { path: string; tokens: number }[]
   mcpTools: { name: string; server: string; tokens: number }[]
   agents: { type: string; tokens: number }[]
@@ -232,20 +228,12 @@ export function toContextDetail(raw: unknown): ContextDetail | undefined {
   const rows: ContextRow[] = []
   for (const item of source.categories) {
     if (!item || typeof item !== 'object') continue
-    const row = item as { name?: unknown; tokens?: unknown; kind?: unknown; color?: unknown }
+    const row = item as { name?: unknown; tokens?: unknown; kind?: unknown }
     if (typeof row.name !== 'string' || typeof row.tokens !== 'number') continue
     const kind: ContextRowKind =
       row.kind === 'free' || row.kind === 'buffer' || row.kind === 'deferred' ? row.kind : 'used'
-    rows.push({
-      name: row.name,
-      tokens: row.tokens,
-      kind,
-      sharePercent: windowTokens > 0 ? (row.tokens / windowTokens) * 100 : 0,
-      color: typeof row.color === 'string' ? row.color : '',
-    })
+    rows.push({ name: row.name, tokens: row.tokens, kind })
   }
-
-  const grid = toGrid(source.gridRows)
 
   return {
     totalTokens: typeof source.totalTokens === 'number' ? source.totalTokens : 0,
@@ -257,7 +245,6 @@ export function toContextDetail(raw: unknown): ContextDetail | undefined {
       typeof source.autoCompactThreshold === 'number' ? source.autoCompactThreshold : undefined,
     rows,
     model: typeof source.model === 'string' ? source.model : '',
-    grid,
     memoryFiles: pickList(source.memoryFiles, item =>
       typeof item.path === 'string' && typeof item.tokens === 'number'
         ? { path: item.path, tokens: item.tokens }
@@ -302,32 +289,6 @@ function countOf(value: unknown, totalKey: string, includedKey: string) {
   return { total, included, tokens: typeof item.tokens === 'number' ? item.tokens : 0 }
 }
 
-/** 引擎给的网格：每格保留分项名与颜色，未填充的也保留（画淡色格）。 */
-function toGrid(value: unknown): GridCell[][] {
-  if (!Array.isArray(value)) return []
-  const out: GridCell[][] = []
-  for (const line of value) {
-    if (!Array.isArray(line)) continue
-    const cells: GridCell[] = []
-    for (const cell of line) {
-      if (!cell || typeof cell !== 'object') continue
-      const item = cell as { categoryName?: unknown; color?: unknown; isFilled?: unknown }
-      cells.push({
-        name: typeof item.categoryName === 'string' ? item.categoryName : '',
-        color: typeof item.color === 'string' ? item.color : '',
-        isFilled: item.isFilled === true,
-      })
-    }
-    if (cells.length > 0) out.push(cells)
-  }
-  return out
-}
-
-/** 顶栏一句话：`上下文 42% · 42.1万/100万 tok`。 */
-export function contextHeadline(detail: ContextDetail): string {
-  return `上下文 ${pct(detail.percentage)} · ${tokens(detail.totalTokens)}/${tokens(detail.rawMaxTokens)} tok`
-}
-
 /** 窗口来源的说明，对应原生 `/context` 的 `Auto-compact window` 一行。 */
 export function windowSourceText(detail: ContextDetail): string {
   const sources: Readonly<Record<string, string>> = {
@@ -346,20 +307,6 @@ export function windowSourceText(detail: ContextDetail): string {
       : '自动压缩已开'
     : '自动压缩已关'
   return `窗口 ${tokens(detail.rawMaxTokens)}（${source}） · ${compact}`
-}
-
-/** 一行分项的展示文字：`Messages 42.1万 tok (42%)`。 */
-export function contextRowText(row: ContextRow): string {
-  if (row.kind === 'free') return `${row.name} ${tokens(row.tokens)} tok`
-  if (row.kind === 'deferred') return `${row.name} ${tokens(row.tokens)} tok（窗口外）`
-  return `${row.name} ${tokens(row.tokens)} tok (${Math.round(row.sharePercent)}%)`
-}
-
-/** 按 kind 找名字，供网格着色时查表。 */
-export function kindOfName(detail: ContextDetail): ReadonlyMap<string, ContextRowKind> {
-  const map = new Map<string, ContextRowKind>()
-  for (const row of detail.rows) map.set(row.name, row.kind)
-  return map
 }
 
 /** 面板详细程度。 */

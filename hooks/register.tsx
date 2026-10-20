@@ -49,12 +49,9 @@ import {
 import {
   PANEL_DETAIL_OPTIONS,
   addModelSpend,
-  contextHeadline,
-  contextRowText,
   countPatchLines,
   detailOf,
   duration,
-  kindOfName,
   limitRows,
   meterText,
   modelLine,
@@ -463,15 +460,6 @@ export const register: Register = (on, options) => {
 
     const isDetailed = detail === 'detail'
     const contextDetail = isDetailed ? toContextDetail(view.breakdown) : undefined
-    const kinds = contextDetail ? kindOfName(contextDetail) : undefined
-    const gridColor = (cell: { name: string; color: string }) => {
-      // 引擎给的主题色优先；没给时按分项类型兜底。空串＝未填充格。
-      if (cell.color) return cell.color
-      const kind = kinds?.get(cell.name)
-      if (kind === 'free') return 'inactive'
-      if (kind === 'buffer') return 'subtle'
-      return 'promptBorder'
-    }
 
     // 额度窗口：有读数时压成一行，没有时一行说明。
     // 详细视图按原生 /usage 的写法逐条列：标题、百分比、重置倒计时、进度条。
@@ -648,40 +636,14 @@ export const register: Register = (on, options) => {
         </Box>
       )
 
-    // 上下文明细：原生 /context 的网格 + 逐项。只有拿到 breakdown 才画。
+    // 上下文一节：柱状图已经按类别画出了构成，这里只列柱子表达不了的三件事——
+    // 窗口上限与压缩阈值、各类加载项的数量。
     const contextSection = contextDetail ? (
       <>
         <Text bold dimColor>
           上下文
         </Text>
-        <Text>{contextHeadline(contextDetail)}</Text>
-        {contextDetail.model && <Text dimColor>模型 {contextDetail.model}</Text>}
         <Text dimColor>{windowSourceText(contextDetail)}</Text>
-        {contextDetail.grid.length > 0 && (
-          <Box flexDirection="column">
-            {contextDetail.grid.map((line, rowIndex) => (
-              <Box key={`whale-grid-${rowIndex}`} flexDirection="row">
-                {line.map((cell, cellIndex) => (
-                  <Text
-                    key={`whale-grid-${rowIndex}-${cellIndex}`}
-                    color={cell.isFilled ? gridColor(cell) : 'inactive'}
-                  >
-                    {cell.isFilled ? '⛁' : '·'}
-                  </Text>
-                ))}
-              </Box>
-            ))}
-          </Box>
-        )}
-        {contextDetail.rows.map((row, index) => (
-          <Text
-            key={`whale-row-${row.name}-${index}`}
-            dimColor={row.kind !== 'used'}
-            color={row.color || undefined}
-          >
-            {contextRowText(row)}
-          </Text>
-        ))}
         {contextDetail.memoryFiles.length > 0 && (
           <Text dimColor>
             记忆文件 {contextDetail.memoryFiles.length} 个 ·{' '}
@@ -991,11 +953,7 @@ export const register: Register = (on, options) => {
     // 数据来源脚注：只列这一屏真正用到的几类，且只在详细视图出现——
     // 简洁视图本来就不展示分类构成，解释它反而更乱。
     const provenanceLines = isDetailed
-      ? provenanceNotesFor(
-          data !== null && data !== undefined,
-          contextTurns.length > 0,
-          contextDetail !== undefined,
-        )
+      ? provenanceNotesFor(data !== null && data !== undefined, contextTurns.length > 0)
       : []
 
     // 鲸鱼固定在面板右下角：数据在上，鲸鱼独占最后一行并靠右。

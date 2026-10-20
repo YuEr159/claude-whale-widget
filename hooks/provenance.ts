@@ -47,10 +47,6 @@ export const PROVENANCE_NOTES: ReadonlyArray<{
     text: '柱高是引擎读数；柱内分类是本地估算（summary 粒度，不发请求）',
   },
   {
-    topic: '上下文明细',
-    text: '各行的 token 与占比是本地估算，与原生 /context 同口径',
-  },
-  {
     topic: '本地历史',
     text: '只覆盖这台机器的日志，不含其他设备或 claude.ai 网页端',
   },
@@ -60,21 +56,17 @@ export const PROVENANCE_NOTES: ReadonlyArray<{
  * 这一屏该显示哪几条来源说明。
  *
  * 每条只在对应的数字真的出现时才解释——解释一个没出现的数字只会制造噪音。
- * 柱状图与上下文明细是两个独立的数据源，分别判断。
  *
- * @param hasLocal    本地扫描是否已有结果（概览页有数字可看）
- * @param hasTurns    是否有逐轮上下文记录（画得出柱状图）
- * @param hasBreakdown 是否画得出 /context 明细
+ * @param hasLocal 本地扫描是否已有结果（概览页有数字可看）
+ * @param hasTurns 是否有逐轮上下文记录（画得出柱状图）
  */
 export function provenanceNotesFor(
   hasLocal: boolean,
   hasTurns: boolean,
-  hasBreakdown: boolean,
 ): ReadonlyArray<{ topic: string; text: string }> {
   return PROVENANCE_NOTES.filter(note => {
     if (note.topic === '本地历史') return hasLocal
     if (note.topic === '上下文柱子') return hasTurns
-    if (note.topic === '上下文明细') return hasBreakdown
     return true
   })
 }

@@ -54,7 +54,7 @@ const usage = {
   cost: { usd: 2.5 },
 }
 
-test('详细面板画出原生 /usage 与 /context 的各节', async ($, on) => {
+test('详细面板画出原生 /usage 的各节与上下文窗口信息', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
   // 测试环境没有 session.usage 的实现，这里补一个。
@@ -76,18 +76,18 @@ test('详细面板画出原生 /usage 与 /context 的各节', async ($, on) => 
   expect(tree).toContain('Current week (all models)')
   expect(tree).toContain('Current week (Sonnet only)')
 
-  // /context 的百分比、窗口来源、分项
-  expect(tree).toContain('上下文 42%')
-  expect(tree).toContain('Model自身上限'.replace('Model', '模型'))
-  expect(tree).toContain('Messages')
-  expect(tree).toContain('Autocompact buffer')
+  // 上下文一节只留窗口上限与压缩阈值；逐行清单与 10×10 网格交给柱状图。
+  expect(tree).toContain('模型自身上限')
+  expect(tree).toContain('自动压缩于')
+  expect(tree).not.toContain('Autocompact buffer')
+  expect(tree).not.toContain('⛁')
 
   // 金额带估算标记：面板里没有一笔钱来自账单。
   expect(tree).toContain('≈$')
   // 数据来源脚注：详细视图才出现，且只解释这一屏真正有的数字
   //（这里没有本地扫描结果，所以不提「本地历史」）。
   expect(tree).toContain('带 ≈ 的金额')
-  expect(tree).toContain('上下文明细')
+  expect(tree).not.toContain('上下文明细')
   expect(tree).not.toContain('本地历史')
 
   // 记忆文件 / MCP / agent / 技能计数
@@ -120,19 +120,19 @@ test('切到简洁后面板不再请求 breakdown，也不再画明细', async (
     viewport: { columns: 120, rows: 40 },
   })
 
-  // 初始是详细：请求了 breakdown，也画了 /context 明细与来源脚注。
+  // 初始是详细：请求了 breakdown，也画了窗口信息与来源脚注。
   const before = JSON.stringify(await ui.drawn())
   expect(calls.length).toBe(1)
   expect(JSON.stringify(calls[0])).toContain('breakdown')
-  expect(before).toContain('Autocompact buffer')
+  expect(before).toContain('模型自身上限')
   expect(before).toContain('带 ≈ 的金额')
 
-  // 切到简洁：下一次取用量不再带 breakdown，明细与脚注都不再出现。
+  // 切到简洁：下一次取用量不再带 breakdown，窗口信息与脚注都不再出现。
   await ui.select({ key: 'whale-panel-detail', value: 'simple' })
   const after = JSON.stringify(await ui.drawn())
   expect(calls.length).toBeGreaterThan(1)
   expect(JSON.stringify(calls[calls.length - 1])).not.toContain('breakdown')
-  expect(after).not.toContain('Autocompact buffer')
+  expect(after).not.toContain('模型自身上限')
   expect(after).not.toContain('带 ≈ 的金额')
   // 金额的估算标记是数据属性，不随视图简繁改变。
   expect(after).toContain('≈$')

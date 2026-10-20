@@ -10,8 +10,6 @@ import { clip, countdown, pct, tokens, usd } from '../hooks/format'
 import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view'
 import {
   addModelSpend,
-  contextHeadline,
-  contextRowText,
   countPatchLines,
   detailOf,
   duration,
@@ -256,7 +254,7 @@ test('未收录价格时给出说明，全收录则没有', () => {
   ])).toBeUndefined()
 })
 
-test('上下文 breakdown 整形：分项、网格、条目', () => {
+test('上下文 breakdown 整形：分项与加载项计数', () => {
   const detail = toContextDetail({
     categories: [
       { name: 'Messages', tokens: 40_000, kind: 'used', color: 'promptBorder' },
@@ -284,17 +282,14 @@ test('上下文 breakdown 整形：分项、网格、条目', () => {
   expect(detail).toBeDefined()
   if (!detail) return
   expect(detail.rows).toHaveLength(3)
-  expect(Math.abs((detail.rows[0]?.sharePercent ?? 0) - 40) < 1e-9).toBe(true)
-  expect(detail.grid[0]?.[0]).toEqual({ name: 'Messages', color: 'promptBorder', isFilled: true })
-  expect(detail.grid[0]?.[1]?.isFilled).toBe(false)
+  // 逐行清单不再上屏，但 rows 仍是柱内分类与压缩阈值的来源。
+  expect(detail.rows[0]).toEqual({ name: 'Messages', tokens: 40_000, kind: 'used' })
   expect(detail.memoryFiles[0]?.tokens).toBe(1200)
   expect(detail.mcpTools[0]?.server).toBe('linear')
   expect(detail.agents[0]?.type).toBe('Explore')
   expect(detail.skills?.included).toBe(4)
   expect(detail.slashCommands?.total).toBe(6)
-  expect(contextHeadline(detail)).toContain('上下文 50%')
   expect(windowSourceText(detail)).toContain('模型自身上限')
-  expect(contextRowText(detail.rows[0] as never)).toContain('(40%)')
 })
 
 test('形状不对的 breakdown 返回 undefined', () => {
@@ -609,16 +604,14 @@ test('金额一律带估算标记，零与缺失值除外', () => {
 })
 
 test('来源脚注只解释出现过的数字', () => {
-  expect(provenanceNotesFor(false, false, false).map(n => n.topic)).toEqual(['带 ≈ 的金额'])
-  expect(provenanceNotesFor(false, true, true).map(n => n.topic)).toEqual([
+  expect(provenanceNotesFor(false, false).map(n => n.topic)).toEqual(['带 ≈ 的金额'])
+  expect(provenanceNotesFor(false, true).map(n => n.topic)).toEqual([
     '带 ≈ 的金额',
     '上下文柱子',
-    '上下文明细',
   ])
-  expect(provenanceNotesFor(true, true, true).map(n => n.topic)).toEqual([
+  expect(provenanceNotesFor(true, true).map(n => n.topic)).toEqual([
     '带 ≈ 的金额',
     '上下文柱子',
-    '上下文明细',
     '本地历史',
   ])
 })
