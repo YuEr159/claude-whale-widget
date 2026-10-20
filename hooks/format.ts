@@ -63,6 +63,20 @@ export function clip(text: string, max: number): string {
   return `${text.slice(0, max - 1)}…`
 }
 
+/**
+ * 代码改动行数：`+128 -34`。
+ *
+ * 两边都是 0 时返回空串——刚开的会话还没有任何 Edit / Write，
+ * 画一个 `+0 -0` 只是噪音。只有一边有改动时另一边不显示，
+ * `+5` 比 `+5 -0` 干净。
+ */
+export function diffLines(added: number, removed: number): string {
+  const parts: string[] = []
+  if (added > 0) parts.push(`+${added}`)
+  if (removed > 0) parts.push(`-${removed}`)
+  return parts.join(' ')
+}
+
 /** `YYYY-MM-DD` → `MM-DD`。 */
 export function shortDay(day: string): string {
   return day.length >= 10 ? day.slice(5) : day

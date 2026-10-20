@@ -126,8 +126,8 @@ export type ScanRecord = {
 export type Prefs = {
   /** 输入框上方的用量条是否显示。 */
   isBandVisible: boolean
-  /** 用量条里显示哪一类数字。 */
-  bandMetric: 'window' | 'session' | 'cost' | 'context'
+  /** 用量条里显示哪一类数字。`diff` 是代码改动行数。 */
+  bandMetric: 'window' | 'session' | 'cost' | 'context' | 'diff'
   /** 本地历史扫描统计最近多少天。 */
   historyDays: number
   /** 是否在每轮结束后弹出本轮消耗提示（默认关，避免每轮打断）。 */

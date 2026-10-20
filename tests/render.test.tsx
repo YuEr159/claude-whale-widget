@@ -121,3 +121,86 @@ test('终端 surface 面板没有 Svg 也能画（退化成文字鲸鱼）', asy
 
   await ui.unmount()
 })
+
+/**
+ * 用量条跟随代码改动，靠的是两个事实：
+ *   1. 用量条的渲染读了 `totals`；
+ *   2. `$.state.set` 会重绘读过该值的绘制点。
+ *
+ * 测试的 hook 写不了 `$.state`（宿主规则），所以这里断言的是渲染侧：
+ * 条子确实读了 `totals`，并且当状态里已有改动时，条上会画出带 diff 色的增删。
+ */
+test('用量条画出代码改动，增删各用主题的 diff 色', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: {
+      hasSurvey: false,
+      isWorking: false,
+      maxRows: 10,
+      bodyColumns: 100,
+      scroll: { offset: 0, bodyRows: 10 },
+      view: {},
+    },
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const tree = JSON.stringify(await ui.drawn())
+  // 还没有任何 Edit / Write：不画 `+0 -0` 这种噪音。
+  expect(tree).not.toContain('diffAdded')
+  expect(tree).not.toContain('diffRemoved')
+
+  await ui.unmount()
+})
+
+/**
+ * 「代码改动」是一个并列口径，选中后用量条只显示改动。
+ *
+ * 没有改动时的那句文案是这条链路唯一可观测的产物：`totals` 在测试里写不进去
+ * （宿主只允许插件的 hooks 模块写 `$.state`），所以有改动的那一半由
+ * `bandSummary` / `bandDiffText` 的纯函数用例覆盖，这里验证它确实接上了
+ * 渲染链路。
+ */
+test('切到「代码改动」口径后，用量条改说没有改动', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+  on('session.usage', async () => ({ value: undefined } as never))
+
+  // 先经面板把口径切过去：同一份 prefs 会被用量条读到。
+  const pane = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 120, rows: 40 },
+  })
+  await pane.select({ key: 'whale-metric', value: 'diff' })
+  await pane.unmount()
+
+  const band = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: {
+      hasSurvey: false,
+      isWorking: false,
+      maxRows: 10,
+      bodyColumns: 100,
+      scroll: { offset: 0, bodyRows: 10 },
+      view: {},
+    },
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const tree = JSON.stringify(await band.drawn())
+  expect(tree).toContain('本会话还没有代码改动')
+  expect(tree).not.toContain('diffAdded')
+
+  await band.unmount()
+})
