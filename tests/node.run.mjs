@@ -924,6 +924,40 @@ test('图注写明粒度：同样的柱子数，按天与按月说的不是一�
   assert.ok(modelStackCaption(bars, 'month').includes('个月'))
 })
 
+test('三张图的 SVG 属性写法合法：不能出现空引号', () => {
+  // 回归：把写死的 fill="..." 换成 fillOf() 拼接时，旧的收尾引号没删干净，
+  // 生成出 fill="#9aa0b4"">60%</text> 这种属性。SVG 解析器直接判整张图非法，
+  // 于是三张图一起从面板上消失——而当时的测试只检查「包含某些文字」，
+  // 全部照过。这条断言守的是「属性语法本身」。
+  const pal = [CHART_PALETTES.dark, CHART_PALETTES.light]
+  const turns = [
+    { seq: 1, percent: 40, tokens: 100, at: 0, parts: [{ name: 'M', tokens: 20, kind: 'messages' }] },
+    { seq: 2, percent: 70, tokens: 100, at: 1, afterCompact: true },
+  ]
+  const days = [{ day: '2026-10-20', turns: 3, messages: 9 }]
+  const stacked = modelStackBars(
+    [{ day: '2026-10-20', models: [{ model: 'm', input: 10, output: 0, cost: 0 }] }],
+    30,
+  )
+  for (const p of pal) {
+    const list = [
+      contextChartSvg(turns, 400, 2, 10, p),
+      turnHeatSvg(days, 400, 'messages', p),
+      modelStackSvg(stacked.bars, 400, stacked.yMax, stacked.models, p),
+    ]
+    for (const svg of list) {
+      // 属性值闭合后紧跟另一个引号，说明拼串时漏删/多加了引号。
+      assert.ok(!svg.includes('""'), 'SVG 里出现了空引号：' + svg.slice(Math.max(0, svg.indexOf('""') - 60), svg.indexOf('""') + 6))
+      // 每个属性都必须有值。
+      assert.ok(!/\s[a-zA-Z-]+=""/.test(svg), 'SVG 里有空属性值')
+      // 开闭标签数量配平——少一个闭标签同样会让整张图被拒。
+      const open = (svg.match(/<(?!\/)[a-z]/g) || []).length
+      const close = (svg.match(/<\/[a-z]|\/>/g) || []).length
+      assert.equal(open, close, `SVG 标签不配平：${open} 开 / ${close} 闭`)
+    }
+  }
+})
+
 test('金额一律带估算标记，零与缺失值除外', () => {
   assert.equal(usdEstimate(2), '≈$2.00')
   assert.equal(usdEstimate(0.5), '≈$0.50')
