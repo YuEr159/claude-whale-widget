@@ -113,7 +113,7 @@ test('泡泡默认收起：SVG 里没有气泡椭圆，只有鲸鱼', async ($, 
   expect(source).not.toContain('<ellipse')
   expect(source).toContain('<image')
   // 展开的入口要在场，否则点不开。
-  expect(await ui.find({ key: 'whale-tap-0' })).toBeDefined()
+  expect(await ui.find({ key: 'whale-tap' })).toBeDefined()
 
   await ui.unmount()
 })
@@ -134,10 +134,10 @@ test('点一下鲸鱼，泡泡出现；再点一下，收回去', async ($, on) 
   const sourceNow = async () => String(findLastSvg(await ui.drawn())?.props?.source ?? '')
   expect(await sourceNow()).not.toContain('<ellipse')
 
-  await ui.press({ key: 'whale-tap-0' })
+  await ui.press({ key: 'whale-tap' })
   expect(await sourceNow()).toContain('<ellipse')
 
-  await ui.press({ key: 'whale-tap-0' })
+  await ui.press({ key: 'whale-tap' })
   expect(await sourceNow()).not.toContain('<ellipse')
 
   await ui.unmount()
@@ -160,7 +160,7 @@ test('泡泡点开后过几秒自己消失', async ($, on) => {
     String(findLastSvg(await ui.drawn())?.props?.source ?? '').includes('<ellipse')
 
   expect(await hasBubble()).toBe(false)
-  await ui.press({ key: 'whale-tap-0' })
+  await ui.press({ key: 'whale-tap' })
   expect(await hasBubble()).toBe(true)
 
   // 推进到自动收起的时间点之后：泡泡应当自己消失，不必再点一次。
