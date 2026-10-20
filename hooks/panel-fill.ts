@@ -40,6 +40,21 @@ const DARK_FILL: PanelFill = { backgroundColor: '#262b3d', borderColor: '#4a5378
 /** 浅色主题：同一种蓝调，反向取明度。 */
 const LIGHT_FILL: PanelFill = { backgroundColor: '#e3e7f7', borderColor: '#b4bcd8' }
 
+/**
+ * 页签「激活」时的底色：比所在大框再亮一档。
+ *
+ * 深色主题的方向是**往亮走**、浅色主题是**往白走**——两者都是「更靠近前景」，
+ * 也就是读者直觉里的「被选中、浮起来」。
+ *
+ * 只靠底色不够：浅色主题下 #e3e7f7 往白走最多只能到 #ffffff，两者对比度
+ * 只有 1.23，几乎看不出来——这是色彩空间的限制，换哪个值都突破不了。所以
+ * 边框也一起换，而且换到对比更强的一档（深色 2.72、浅色 2.38）。**底色说
+ * 「哪一块更亮」，边框说「哪一块被选中」**，两个通道加起来才在两套主题下
+ * 都读得出来。
+ */
+const DARK_TAB_ACTIVE = { backgroundColor: '#3a4260', borderColor: '#8e9ac9' }
+const LIGHT_TAB_ACTIVE = { backgroundColor: '#ffffff', borderColor: '#6675a8' }
+
 /** 主题值是浅色的吗。`light`、`light-daltonized`、`light-ansi` 都算。 */
 export function isLightTheme(themeValue: string | undefined): boolean {
   return (themeValue ?? '').toLowerCase().includes('light')
@@ -143,12 +158,24 @@ export type ThemeColors = PanelFill & {
   isLight: boolean
   /** 图表要用的那套颜色。 */
   chart: ChartPalette
+  /** 页签被选中时的底色与边框：比所在大框再亮一档。 */
+  tabActive: PanelFill
 }
 
 /** 深色一组。 */
-const DARK: ThemeColors = { ...DARK_FILL, isLight: false, chart: DARK_CHART }
+const DARK: ThemeColors = {
+  ...DARK_FILL,
+  isLight: false,
+  chart: DARK_CHART,
+  tabActive: DARK_TAB_ACTIVE,
+}
 /** 浅色一组。 */
-const LIGHT: ThemeColors = { ...LIGHT_FILL, isLight: true, chart: LIGHT_CHART }
+const LIGHT: ThemeColors = {
+  ...LIGHT_FILL,
+  isLight: true,
+  chart: LIGHT_CHART,
+  tabActive: LIGHT_TAB_ACTIVE,
+}
 
 /**
  * 从 `/config` 的行里挑出主题，给出这一屏要用的整套颜色。
@@ -180,3 +207,6 @@ export function panelFillFor(
 
 /** 这些底色在测试与文档里被引用，导出便于比对。 */
 export const FILLS = { dark: DARK_FILL, light: LIGHT_FILL } as const
+
+/** 页签激活态的两种底色，测试里引用。 */
+export const TAB_ACTIVE_FILLS = { dark: DARK_TAB_ACTIVE, light: LIGHT_TAB_ACTIVE } as const
