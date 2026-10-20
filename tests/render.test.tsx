@@ -70,9 +70,14 @@ test('桌面端面板能画出来，控件都在', async ($, on) => {
 
   // 刷新按钮已取消：数据由定时扫描自动更新，不需要手动触发。
   expect(await ui.find({ key: 'whale-refresh' })).toBeUndefined()
+  // 「范围」已挪到模型页，概览页上不该再有它；切过去才出现。
+  expect(await ui.find({ key: 'whale-days' })).toBeUndefined()
+  await ui.press({ key: 'whale-tab-models' })
   expect(await ui.find({ key: 'whale-days' })).toBeDefined()
+  await ui.press({ key: 'whale-tab-overview' })
   expect(await ui.find({ key: 'whale-turn-cost' })).toBeDefined()
-  expect(await ui.find({ key: 'whale-metric' })).toBeDefined()
+  // 口径是多选：每个口径一个 Button，不再是一个 Select。
+  expect(await ui.find({ key: 'whale-metric-diff' })).toBeDefined()
   expect(await ui.find({ key: 'whale-band-toggle' })).toBeDefined()
 
   await ui.unmount()
@@ -219,7 +224,7 @@ test('切到「代码改动」口径后，用量条改说没有改动', async ($
     props: PANE_PROPS,
     viewport: { columns: 120, rows: 40 },
   })
-  await pane.select({ key: 'whale-metric', value: 'diff' })
+  await pane.press({ key: 'whale-metric-diff' })
   await pane.unmount()
 
   const band = await $.ui.mount({
