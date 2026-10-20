@@ -1141,7 +1141,17 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
           <Box position="relative">
             {whale}
-            <Box position="absolute" top={0} left={0} flexDirection="column">
+            {/* 点击面积显式给死：绝对定位的 Box 只按内容撑开，而按钮的内容是
+                一串不可见字符——不同表面（终端按列、桌面按像素）对它的宽度
+                估算不一致，靠内容撑就可能撑不满鲸鱼。这里按鲸鱼的像素尺寸
+                反算格数，把宽高直接写在 Box 上。 */}
+            <Box
+              position="absolute"
+              top={0}
+              left={0}
+              width={whaleTapCols}
+              height={whaleTapRows}
+            >
               <Button
                 key="whale-tap"
                 plain
