@@ -21,9 +21,7 @@ import {
   duration,
   limitRows,
   meterText,
-  sortModelSpends,
   toContextDetail,
-  unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
 import { WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
@@ -270,13 +268,6 @@ test('按模型累加与排序', () => {
   assert.equal(two[0].input, 300)
   assert.ok(Math.abs((two[0].cost ?? 0) - 0.75) < 1e-9)
   assert.equal(two[0].turns, 2)
-
-  const sorted = sortModelSpends([
-    { model: 'unknown-x', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: null, turns: 9 },
-    { model: 'claude-opus', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 2, turns: 1 },
-  ])
-  assert.equal(sorted[0].model, 'claude-opus')
-  assert.ok(unpricedNote(sorted)?.includes('unknown-x'))
 })
 
 test('上下文 breakdown 整形', () => {

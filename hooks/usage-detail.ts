@@ -157,31 +157,6 @@ export function addModelSpend(list: ModelSpend[], entry: ModelSpend): ModelSpend
   return next
 }
 
-/** `Usage by model` 的一行：`opus-5-5 · 12.3万 tok · $1.20 · 8 轮`。 */
-export function modelLine(spend: ModelSpend): string {
-  const total = spend.input + spend.output + spend.cacheRead + spend.cacheWrite
-  const money = spend.cost === null ? '未收录价格' : usdEstimate(spend.cost)
-  return `${spend.model.replace('claude-', '')} · ${tokens(total)} tok · ${money} · ${spend.turns} 轮`
-}
-
-/** 按花费降序，未收录价格的排最后（金额不可比）。 */
-export function sortModelSpends(list: ModelSpend[]): ModelSpend[] {
-  return [...list].sort((a, b) => {
-    if (a.cost === null && b.cost === null) return b.turns - a.turns
-    if (a.cost === null) return 1
-    if (b.cost === null) return -1
-    return b.cost - a.cost
-  })
-}
-
-/** 有未收录价格的模型时给一句说明，避免把 0 当真实花费。 */
-export function unpricedNote(list: ModelSpend[]): string | undefined {
-  const unpriced = list.filter(item => item.cost === null)
-  if (unpriced.length === 0) return undefined
-  const names = unpriced.map(item => item.model.replace('claude-', '')).join('、')
-  return `未收录价格的模型：${names}（token 已计入，金额未计）`
-}
-
 // ---------------- /context：分项 ----------------
 
 export type ContextRowKind = 'used' | 'free' | 'buffer' | 'deferred'
