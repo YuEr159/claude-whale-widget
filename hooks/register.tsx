@@ -246,8 +246,7 @@ export const register: Register = (on, options) => {
 
   // ---------------- 侧边面板 ----------------
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    // Pane 可能画在终端或桌面：终端没有 Svg（只有 Raster/Image），所以用 `in`
-    // 收窄元素表，缺 Svg 时退化成文字版。
+    // Pane 可能画在终端或桌面：终端没有 Svg，缺 Svg 时退化成文字版。
     const table = $.ui.resolve(e)
     const { Box, Text, Button } = table
     const Svg = 'Svg' in table ? table.Svg : undefined
@@ -267,157 +266,190 @@ export const register: Register = (on, options) => {
     const data = record.data
     const today = data?.today
 
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Box flexDirection="row" alignItems="center" gap={1}>
-          {Svg ? (
-            <Svg
-              source={whaleSvg(mood, lines)}
-              alt={`小鲸鱼：${lines.join('，')}`}
-              width={150}
-              height={78}
-            />
-          ) : (
-            <Text>{emblemOf(mood)}</Text>
-          )}
-          <Box flexDirection="column">
-            <Text bold>Claude 用量小鲸鱼</Text>
-            <Text dimColor>{mood === 'sleep' ? '额度快满了，休息一下' : '数据只来自本机'}</Text>
-          </Box>
-        </Box>
+    // 宽面板用两栏（鲸鱼左、数据右），窄面板退回单列。
+    const width = e.props.bodyColumns
+    const isWide = width >= 60
+    // Svg 的 width/height 是 CSS 像素，bodyColumns 是字符列；等宽字体一列约 8px。
+    // 两栏时鲸鱼占左栏约 45%，单列时可占到 80%，最后夹在 150–300px 之间。
+    const pxWidth = width * 8
+    const byColumns = Math.floor(isWide ? pxWidth * 0.45 : pxWidth * 0.8)
+    const whaleWidth = Math.max(150, Math.min(byColumns, 300))
+    const whaleHeight = Math.round(whaleWidth * 0.52)
 
-        <Box flexDirection="column">
-          <Text bold>额度窗口</Text>
-          <Text>
-            5 小时 {pct(view.fiveHour?.percentUsed)}
-            {view.fiveHour?.resetsAt ? ` · ${countdown(view.fiveHour.resetsAt, now)} 后重置` : ''}
-          </Text>
-          <Text>
-            7 天 {pct(view.sevenDay?.percentUsed)}
-            {view.sevenDay?.resetsAt ? ` · ${countdown(view.sevenDay.resetsAt, now)} 后重置` : ''}
-          </Text>
-          {!view.fiveHour && !view.sevenDay && (
-            <Text dimColor>当前账号没有可读的额度窗口（API key 计费或第三方网关）。</Text>
-          )}
-        </Box>
+    const whale = Svg ? (
+      <Svg
+        source={whaleSvg(mood, lines)}
+        alt={`小鲸鱼：${lines.join('，')}`}
+        width={whaleWidth}
+        height={whaleHeight}
+      />
+    ) : (
+      <Text>{emblemOf(mood)}</Text>
+    )
 
-        <Box flexDirection="column">
-          <Text bold>本会话</Text>
-          <Text>花费 {usd(view.costUsd)}</Text>
-          <Text>
-            上下文 {pct(view.contextPercent)}
-            {view.contextTokens !== undefined
-              ? ` · ${tokens(view.contextTokens)} / ${tokens(view.contextWindow)}`
-              : ''}
-          </Text>
-          {turn && (
-            <Text dimColor>
-              上一轮 {turn.cost === null ? '未收录模型' : usd(turn.cost)} · {turn.model}
-            </Text>
-          )}
-        </Box>
+    // 额度窗口：有读数时压成一行，没有时一行说明。
+    const windows =
+      view.fiveHour || view.sevenDay ? (
+        <Text>
+          5h {pct(view.fiveHour?.percentUsed)}
+          {view.fiveHour?.resetsAt ? ` (${countdown(view.fiveHour.resetsAt, now)})` : ''}
+          {'  '}7d {pct(view.sevenDay?.percentUsed)}
+          {view.sevenDay?.resetsAt ? ` (${countdown(view.sevenDay.resetsAt, now)})` : ''}
+        </Text>
+      ) : (
+        <Text dimColor>无额度窗口（API key 或网关）</Text>
+      )
 
+    // 本会话：花费与上下文压成一行，上一轮单独一行。
+    const session = (
+      <>
+        <Text>
+          花费 {usd(view.costUsd)} · 上下文 {pct(view.contextPercent)}
+          {view.contextTokens !== undefined
+            ? ` ${tokens(view.contextTokens)}/${tokens(view.contextWindow)}`
+            : ''}
+        </Text>
+        {turn && (
+          <Text dimColor>
+            上一轮 {turn.cost === null ? '未收录模型' : usd(turn.cost)} · {clip(turn.model, 18)}
+          </Text>
+        )}
+      </>
+    )
+
+    // 本地历史：今日一行、区间一行、逐模型一行。
+    const history = (
+      <>
+        {record.isRunning && <Text dimColor>正在统计…</Text>}
+        {record.lastError && <Text dimColor>统计失败：{clip(record.lastError, 60)}</Text>}
+        {!record.isRunning && !record.lastError && !today && (
+          <Text dimColor>还没有统计结果</Text>
+        )}
+        {today && (
+          <Text>
+            今日 {usd(today.cost)} ·{' '}
+            {tokens(today.input + today.cacheRead + today.cacheWrite + today.output)} tok ·{' '}
+            {today.messages} 条
+          </Text>
+        )}
+        {today && data && (
+          <Text dimColor>
+            共 {usd(data.total.cost)} ·{' '}
+            {tokens(
+              data.total.input + data.total.cacheRead + data.total.cacheWrite + data.total.output,
+            )}{' '}
+            tok
+          </Text>
+        )}
+        {data && data.byModel.length > 0 && (
+          <Text dimColor>
+            {data.byModel
+              .slice(0, 3)
+              .map(m => `${clip(m.model.replace('claude-', ''), 14)} ${usd(m.cost)}`)
+              .join('  ')}
+          </Text>
+        )}
+      </>
+    )
+
+    const controls = (
+      <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+        <Button
+          key="whale-refresh"
+          plain
+          label="刷新"
+          onPress={() => {
+            lastScanAt = 0
+            wantsScan = true
+          }}
+        />
+        {Select && (
+          <Select
+            key="whale-days"
+            label="范围"
+            options={[
+              { value: '1', label: '今天' },
+              { value: '3', label: '3 天' },
+              { value: '7', label: '7 天' },
+              { value: '14', label: '14 天' },
+              { value: '30', label: '30 天' },
+            ]}
+            value={String(prefsNow.historyDays)}
+            onSelect={(value: string) => {
+              const days = Number(value) || DEFAULT_PREFS.historyDays
+              void (async () => {
+                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                  ...(latest.value ?? DEFAULT_PREFS),
+                  historyDays: days,
+                })
+                lastScanAt = 0
+                wantsScan = true
+              })()
+            }}
+          />
+        )}
+        <Button
+          key="whale-turn-cost"
+          plain
+          label={prefsNow.isTurnCostOn ? '轮次提示 开' : '轮次提示 关'}
+          onPress={() => {
+            void (async () => {
+              const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+              const nowPrefs = latest.value ?? DEFAULT_PREFS
+              await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                ...nowPrefs,
+                isTurnCostOn: !nowPrefs.isTurnCostOn,
+              })
+            })()
+          }}
+        />
+        <Button
+          key="whale-band-toggle"
+          plain
+          label={prefsNow.isBandVisible ? '隐藏上方条' : '显示上方条'}
+          onPress={() => {
+            void (async () => {
+              const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+              const nowPrefs = latest.value ?? DEFAULT_PREFS
+              await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                ...nowPrefs,
+                isBandVisible: !nowPrefs.isBandVisible,
+              })
+            })()
+          }}
+        />
+      </Box>
+    )
+
+    // 两栏：左鲸鱼、右数据；单列：鲸鱼在上、数据在下。
+    if (isWide) {
+      return (
         <Box flexDirection="column">
-          <Text bold>本地历史（最近 {data?.windowDays ?? prefsNow.historyDays} 天）</Text>
-          {record.isRunning && <Text dimColor>正在统计…</Text>}
-          {record.lastError && <Text dimColor>统计失败：{clip(record.lastError, 80)}</Text>}
-          {!record.isRunning && !record.lastError && !today && (
-            <Text dimColor>还没有统计结果，稍候会自动刷新。</Text>
-          )}
-          {today && (
-            <>
-              <Text>
-                今日 {usd(today.cost)} ·{' '}
-                {tokens(today.input + today.cacheRead + today.cacheWrite + today.output)} token
-              </Text>
-              <Text dimColor>今日消息 {today.messages} 条</Text>
-              {data && (
-                <Text>
-                  区间合计 {usd(data.total.cost)} ·{' '}
-                  {tokens(
-                    data.total.input +
-                      data.total.cacheRead +
-                      data.total.cacheWrite +
-                      data.total.output,
-                  )}{' '}
-                  token
-                </Text>
-              )}
-            </>
-          )}
-          {data && data.byModel.length > 0 && (
-            <Box flexDirection="column">
-              {data.byModel.slice(0, 4).map(model => (
-                <Text key={model.model} dimColor>
-                  {clip(model.model, 28)} {usd(model.cost)}
-                </Text>
-              ))}
+          <Box flexDirection="row" gap={2} alignItems="flex-start">
+            <Box flexDirection="column">{whale}</Box>
+            <Box flexDirection="column" flexGrow={1}>
+              <Text bold>Claude 用量</Text>
+              {windows}
+              {session}
+              {history}
             </Box>
-          )}
-          <Text dimColor>未收录的第三方模型不参与计价，只统计 token。</Text>
+          </Box>
+          {controls}
         </Box>
+      )
+    }
 
-        <Box flexDirection="row" gap={1} alignItems="center">
-          <Button
-            key="whale-refresh"
-            plain
-            label="立即刷新"
-            onPress={() => {
-              lastScanAt = 0
-              wantsScan = true
-            }}
-          />
-          {Select && (
-            <Select
-              key="whale-days"
-              label="统计范围"
-              options={[
-                { value: '1', label: '今天' },
-                { value: '3', label: '最近 3 天' },
-                { value: '7', label: '最近 7 天' },
-                { value: '14', label: '最近 14 天' },
-                { value: '30', label: '最近 30 天' },
-              ]}
-              value={String(prefsNow.historyDays)}
-              onSelect={(value: string) => {
-                const days = Number(value) || DEFAULT_PREFS.historyDays
-                void (async () => {
-                  const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                  await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                    ...(latest.value ?? DEFAULT_PREFS),
-                    historyDays: days,
-                  })
-                  lastScanAt = 0
-                  wantsScan = true
-                })()
-              }}
-            />
-          )}
-          <Button
-            key="whale-turn-cost"
-            plain
-            label={prefsNow.isTurnCostOn ? '轮次提示：开' : '轮次提示：关'}
-            onPress={() => {
-              void (async () => {
-                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                const nowPrefs = latest.value ?? DEFAULT_PREFS
-                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, { ...nowPrefs, isTurnCostOn: !nowPrefs.isTurnCostOn })
-              })()
-            }}
-          />
-          <Button
-            key="whale-band-toggle"
-            plain
-            label={prefsNow.isBandVisible ? '隐藏上方条' : '显示上方条'}
-            onPress={() => {
-              void (async () => {
-                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                const nowPrefs = latest.value ?? DEFAULT_PREFS
-                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, { ...nowPrefs, isBandVisible: !nowPrefs.isBandVisible })
-              })()
-            }}
-          />
+    return (
+      <Box flexDirection="column">
+        <Text bold>Claude 用量</Text>
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          {whale}
         </Box>
+        {windows}
+        {session}
+        {history}
+        {controls}
       </Box>
     )
   })
