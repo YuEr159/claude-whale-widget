@@ -37,7 +37,7 @@ import {
   windowSourceText,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { emblemOf, moodOf, whaleSvg } from './whale-art.ts'
+import { emblemOf, moodOf, whaleBandSvg, whaleSvg } from './whale-art.ts'
 
 const PLUGIN = 'whale-usage' as const
 const PANE = 'whale'
@@ -335,10 +335,10 @@ export const register: Register = (on, options) => {
         gap={1}
       >
         <Svg
-          source={whaleSvg(mood, [summary], { isAnimating: false, isCompact: true })}
+          source={whaleBandSvg(mood)}
           alt={`小鲸鱼：${summary}`}
-          width={46}
-          height={24}
+          width={36}
+          height={36}
         />
         <Box key="whale-band-fill" flexGrow={1} />
         <Text dimColor>{summary}</Text>

@@ -29,7 +29,7 @@ import {
   unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { moodOf, whaleSvg } from '../hooks/whale-art.ts'
+import { moodOf, whaleBandSvg, whaleSvg } from '../hooks/whale-art.ts'
 
 test('价格表只认官方模型，缓存按 1.25x / 0.1x', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -260,4 +260,16 @@ test('上下文 breakdown 整形', () => {
 test('面板详细程度默认详细', () => {
   assert.equal(detailOf({}), 'detail')
   assert.equal(detailOf({ panelDetail: 'simple' }), 'simple')
+})
+
+test('常驻条用像素女仆：40×40、硬边、无位图', () => {
+  const svg = whaleBandSvg('idle')
+  assert.ok(svg.startsWith('<svg'))
+  assert.ok(svg.endsWith('</svg>'))
+  assert.ok(svg.includes('viewBox="0 0 40 40"'))
+  assert.ok(svg.includes('shape-rendering="crispEdges"'))
+  assert.ok(!svg.includes('<image'))
+  assert.ok(!svg.includes('base64'))
+  assert.ok(svg.length < 30000)
+  assert.ok(whaleBandSvg('working').includes('#9fb0d8'))
 })

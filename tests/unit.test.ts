@@ -22,7 +22,7 @@ import {
   unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { moodOf, whaleSvg } from '../hooks/whale-art'
+import { moodOf, whaleBandSvg, whaleSvg } from '../hooks/whale-art'
 
 test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -314,4 +314,19 @@ test('面板详细程度：缺字段按默认详细读', () => {
   expect(detailOf({})).toBe('detail')
   expect(detailOf({ panelDetail: 'simple' })).toBe('simple')
   expect(detailOf({ panelDetail: 'detail' })).toBe('detail')
+})
+
+test('常驻条用像素女仆：40×40、硬边、无位图', () => {
+  const svg = whaleBandSvg('idle')
+  expect(svg.startsWith('<svg')).toBe(true)
+  expect(svg.endsWith('</svg>')).toBe(true)
+  expect(svg).toContain('viewBox="0 0 40 40"')
+  expect(svg).toContain('shape-rendering="crispEdges"')
+  // 纯矢量：没有内嵌位图，尺寸远小于 Svg 的 source 上限
+  expect(svg).not.toContain('<image')
+  expect(svg).not.toContain('base64')
+  expect(svg.length).toBeLessThan(30000)
+  // 上班时多两滴汗
+  expect(whaleBandSvg('working')).toContain('#9fb0d8')
+  expect(whaleBandSvg('idle')).not.toContain('y="8" width="1" height="2"')
 })
