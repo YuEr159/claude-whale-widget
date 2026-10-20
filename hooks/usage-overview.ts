@@ -475,15 +475,18 @@ export function contextParts(rows: ReadonlyArray<{ name: string; tokens: number;
 export const CONTEXT_PART_LABELS: ReadonlyArray<{
   kind: ContextPartKind
   label: string
-  color: string
+  /** 深色主题下的颜色。 */
+  dark: string
+  /** 浅色主题下的颜色；同一色相，明度压低。 */
+  light: string
 }> = [
-  { kind: 'system', label: '系统提示', color: '#A78BFA' },
-  { kind: 'tools', label: '工具定义', color: '#22C3D6' },
-  { kind: 'memory', label: '记忆文件', color: '#7AA2F7' },
-  { kind: 'mcp', label: 'MCP 工具', color: '#C084FC' },
-  { kind: 'agents', label: '自定义 agent', color: '#1E6F8C' },
-  { kind: 'messages', label: '对话消息', color: '#4D6BFE' },
-  { kind: 'other', label: '其他', color: '#7C8394' },
+  { kind: 'system', label: '系统提示', dark: '#A78BFA', light: '#7C4DDB' },
+  { kind: 'tools', label: '工具定义', dark: '#22C3D6', light: '#0E7C8A' },
+  { kind: 'memory', label: '记忆文件', dark: '#7AA2F7', light: '#3468C0' },
+  { kind: 'mcp', label: 'MCP 工具', dark: '#C084FC', light: '#9333EA' },
+  { kind: 'agents', label: '自定义 agent', dark: '#1E6F8C', light: '#1E6F8C' },
+  { kind: 'messages', label: '对话消息', dark: '#4D6BFE', light: '#3B54D6' },
+  { kind: 'other', label: '其他', dark: '#7C8394', light: '#6E7486' },
 ]
 
 /** 分类的展示名；未列出的键原样返回。 */
@@ -491,9 +494,11 @@ export function contextPartLabel(kind: ContextPartKind): string {
   return CONTEXT_PART_LABELS.find(item => item.kind === kind)?.label ?? kind
 }
 
-/** 分类的配色键；未知键用最淡的那档。 */
-export function contextPartColor(kind: ContextPartKind): string {
-  return CONTEXT_PART_LABELS.find(item => item.kind === kind)?.color ?? 'subtle'
+/** 分类的配色；未知键用最淡的那档。`isLight` 决定取深色还是浅色那支。 */
+export function contextPartColor(kind: ContextPartKind, isLight = false): string {
+  const item = CONTEXT_PART_LABELS.find(entry => entry.kind === kind)
+  if (!item) return 'subtle'
+  return isLight ? item.light : item.dark
 }
 
 // ---------------- 堆叠柱状图 ----------------
@@ -670,14 +675,18 @@ export function rasterizeStacks(
  * 窗口的三段骨架与内容分类共用这一个入口：`used` 是没有构成数据时的单色，
  * 内容分类则各有一色（与图例同源）。这样字符版与矢量版拿到的颜色一致。
  */
-export function stackColor(kind: StackSegment['kind'] | null): string | undefined {
+export function stackColor(
+  kind: StackSegment['kind'] | null,
+  isLight = false,
+): string | undefined {
   if (kind === null) return undefined
-  // 骨架三段也用固定色，与 SVG 侧一致：`'claude'` 会解析成橙色，
-  // 那是 Claude 的品牌色，放在这套冷色里会跳出来打架。
-  if (kind === 'used') return '#4D6BFE'
-  if (kind === 'buffer') return '#33407A'
-  if (kind === 'free') return '#23273a'
-  return contextPartColor(kind)
+  // 骨架三段与 SVG 侧同一套语义色：`'claude'` 会解析成橙色，那是 Claude 的
+  // 品牌色，放在这套冷色里会跳出来打架。
+  // 终端没法用透明度分层，缓冲与空闲只能各给两支明度不同的实色。
+  if (kind === 'used') return isLight ? '#3B54D6' : '#4D6BFE'
+  if (kind === 'buffer') return isLight ? '#8C9BE8' : '#33407A'
+  if (kind === 'free') return isLight ? '#DDE2F2' : '#23273a'
+  return contextPartColor(kind, isLight)
 }
 
 /** 堆叠柱图的说明文字：`最近 24 轮 · 峰值 42%`。 */
@@ -707,7 +716,7 @@ export type StackLegendItem = {
  * 反过来只有老记录时列一堆分类名又是噪音。所以图例跟着数据走，但**顺序固定**
  * （按 `CONTEXT_PART_LABELS` 的次序，再补缓冲与空闲），翻页时颜色与位置的对应不跳。
  */
-export function stackLegendOf(bars: StackBar[]): StackLegendItem[] {
+export function stackLegendOf(bars: StackBar[], isLight = false): StackLegendItem[] {
   const present = new Set<StackSegment['kind']>()
   for (const bar of bars) {
     for (const segment of bar.segments) present.add(segment.kind)
@@ -716,14 +725,21 @@ export function stackLegendOf(bars: StackBar[]): StackLegendItem[] {
   const items: StackLegendItem[] = []
   // 老记录没有分类构成，用单色「已用」画；它和新记录的分类柱可以同屏，
   // 所以图例里允许两者并存。
-  if (present.has('used')) items.push({ kind: 'used', label: '已用（无构成）', color: '#4D6BFE' })
+  if (present.has('used'))
+    items.push({
+      kind: 'used',
+      label: '已用（无构成）',
+      color: isLight ? '#3B54D6' : '#4D6BFE',
+    })
   for (const part of CONTEXT_PART_LABELS) {
     // `other` 是兜底键，没出现就不列；其余分类同理，出现才列。
     if (!present.has(part.kind)) continue
-    items.push({ kind: part.kind, label: part.label, color: part.color })
+    items.push({ kind: part.kind, label: part.label, color: isLight ? part.light : part.dark })
   }
-  if (present.has('buffer')) items.push({ kind: 'buffer', label: '压缩缓冲', color: '#33407A' })
-  if (present.has('free')) items.push({ kind: 'free', label: '空闲', color: '#23273a' })
+  if (present.has('buffer'))
+    items.push({ kind: 'buffer', label: '压缩缓冲', color: isLight ? '#8C9BE8' : '#33407A' })
+  if (present.has('free'))
+    items.push({ kind: 'free', label: '空闲', color: isLight ? '#DDE2F2' : '#23273a' })
   return items
 }
 
