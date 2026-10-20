@@ -58,10 +58,7 @@ import {
   duration,
   limitRows,
   meterText,
-  modelLine,
-  sortModelSpends,
   toContextDetail,
-  unpricedNote,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
 import { emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
@@ -632,22 +629,6 @@ export const register: Register = (on, options) => {
       </>
     )
 
-    // 按模型：原生 /usage 的 Usage by model 一节，按花费降序。
-    // 标题不再上屏——每行都自带模型名，顶上再加一个「按模型」只是重复；
-    // 模型页已经有逐模型的完整表格，这里只留最花钱的几行。
-    const modelSpends = sortModelSpends(byModel)
-    const byModelSection =
-      modelSpends.length > 0 ? (
-        <>
-          {modelSpends.slice(0, 6).map((spend, index) => (
-            <Text key={`whale-model-${spend.model}-${index}`} dimColor>
-              {modelLine(spend)}
-            </Text>
-          ))}
-          {unpricedNote(modelSpends) && <Text dimColor>{unpricedNote(modelSpends)}</Text>}
-        </>
-      ) : null
-
     // 上下文占比的堆叠柱状图：每根柱子是一轮，柱内按「已用 / 压缩缓冲 / 空闲」
     // 分段堆叠。高度按窗口的 100% 算，所以柱子之间的高低差直接就是占比走势。
     const bufferPct =
@@ -973,7 +954,6 @@ export const register: Register = (on, options) => {
     const costWidth = Math.max(4, ...costTexts.map(displayWidth))
     // 金额列只放数字：`未收录价格` 这种长文案会把整列撑开，把数字挤到一边。
     // 没有价格的模型记一个短横线，再在图注里说明它是什么意思。
-    const hasUnpriced = modelDetails.some(row => row.cost === null)
 
     // 「范围」放在模型页：它改变的是逐日统计的窗口，与概览卡片无关——
     // 概览的六张卡一直看扫描到的全部数据，柱子与明细才跟着这个范围走。
@@ -1060,9 +1040,6 @@ export const register: Register = (on, options) => {
                 </Box>
               ))}
             </Box>
-            {hasUnpriced && (
-              <Text dimColor>— 表示没有公开价格，不估算金额</Text>
-            )}
             <Text dimColor>{overviewFooter(overview, data?.total.cost ?? 0)}</Text>
           </Box>
         )}
@@ -1146,7 +1123,6 @@ export const register: Register = (on, options) => {
         {windows}
         {session}
         {contextChart}
-        {byModelSection}
         {pageTabs}
         {page === 'models' ? modelsPage : overviewPage}
         {controls}

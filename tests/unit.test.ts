@@ -14,9 +14,7 @@ import {
   duration,
   limitRows,
   meterText,
-  sortModelSpends,
   toContextDetail,
-  unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail'
 import { WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
@@ -300,24 +298,6 @@ test('按模型累加：同模型相加，未收录价格保持 null', () => {
   const unpriced = nulled.find(item => item.model === 'deepseek-v4')
   expect(unpriced?.cost).toBe(null)
   expect(unpriced?.turns).toBe(2)
-})
-
-test('按花费降序，未收录价格的排最后', () => {
-  const sorted = sortModelSpends([
-    { model: 'unknown-x', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: null, turns: 9 },
-    { model: 'claude-haiku', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.1, turns: 2 },
-    { model: 'claude-opus', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 2, turns: 1 },
-  ])
-  expect(sorted.map(item => item.model)).toEqual(['claude-opus', 'claude-haiku', 'unknown-x'])
-})
-
-test('未收录价格时给出说明，全收录则没有', () => {
-  expect(unpricedNote([
-    { model: 'deepseek-v4', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: null, turns: 1 },
-  ])).toContain('deepseek-v4')
-  expect(unpricedNote([
-    { model: 'claude-opus', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 1, turns: 1 },
-  ])).toBeUndefined()
 })
 
 test('上下文 breakdown 整形：分项与加载项计数', () => {
