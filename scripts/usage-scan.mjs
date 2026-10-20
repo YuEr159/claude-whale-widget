@@ -111,6 +111,10 @@ export function aggregate(root, days) {
   const seen = new Set()
   const byDay = new Map()
   const byModel = new Map()
+  // 概览卡片用：模型按「消息条数」排名（含未收录价格的第三方模型，
+  // 只记模型名与条数，不记金额）；按小时统计消息数取峰值。
+  const byModelCount = new Map()
+  const byHour = new Array(24).fill(0)
   let unparsed = 0
   let skipped = 0
 
@@ -179,30 +183,46 @@ export function aggregate(root, days) {
       bucket.cacheWrite += cacheWrite
       bucket.messages += 1
 
+      // 峰值时段：按本地时区的小时归组。
+      const hour = new Date(row.timestamp).getHours()
+      if (hour >= 0 && hour < 24) byHour[hour] += 1
+
+      // 常用模型：所有模型都计数，包括未收录价格的。
+      byModelCount.set(model, (byModelCount.get(model) ?? 0) + 1)
+
+      // 逐模型明细收录**所有**模型：未收录价格的第三方模型也要出现在排行里，
+      // 只是 cost 记 0，由界面标成「未收录价格」——否则模型页在只用第三方
+      // 模型的机器上会整页空白。
       const price = priceOf(model)
-      if (price) {
-        const cost =
-          (input * price.input +
+      const cost = price
+        ? (input * price.input +
             output * price.output +
             cacheWrite * price.cacheWrite +
             cacheRead * price.cacheRead) /
           1_000_000
-        bucket.cost += cost
+        : 0
+      bucket.cost += cost
 
-        // 只有官方模型才进到这一支（priceOf 只认官方），key 直接用模型名。
-        const key = model
-        let entry = byModel.get(key)
-        if (!entry) {
-          entry = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 0 }
-          byModel.set(key, entry)
+      let entry = byModel.get(model)
+      if (!entry) {
+        entry = {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          messages: 0,
+          // 这个模型是否有价格；界面据此决定显示金额还是「未收录价格」。
+          isPriced: price !== undefined,
         }
-        entry.input += input
-        entry.output += output
-        entry.cacheRead += cacheRead
-        entry.cacheWrite += cacheWrite
-        entry.messages += 1
-        entry.cost += cost
+        byModel.set(model, entry)
       }
+      entry.input += input
+      entry.output += output
+      entry.cacheRead += cacheRead
+      entry.cacheWrite += cacheWrite
+      entry.messages += 1
+      entry.cost += cost
     }
   }
 
@@ -231,9 +251,65 @@ export function aggregate(root, days) {
     messages: 0,
   }
 
+  // 峰值时段：消息最多的小时；并列时取较早的那个。
+  let peakHour = null
+  let peakCount = 0
+  for (let hour = 0; hour < 24; hour += 1) {
+    if (byHour[hour] > peakCount) {
+      peakCount = byHour[hour]
+      peakHour = hour
+    }
+  }
+
+  // 常用模型：按消息条数取第一名。
+  // `auto` / `<synthetic>` 是引擎的内部标识，用户眼里它不是一个模型，
+  // 所以只在没有别的候选时才拿它兜底。
+  const isPlaceholder = model =>
+    model === 'auto' ||
+    model === '(unknown)' ||
+    model.startsWith('<') ||
+    model.startsWith('imported-from')
+  let favoriteModel = null
+  let favoriteCount = 0
+  let fallbackModel = null
+  let fallbackCount = 0
+  for (const [model, count] of byModelCount) {
+    if (isPlaceholder(model)) {
+      if (count > fallbackCount) {
+        fallbackCount = count
+        fallbackModel = model
+      }
+      continue
+    }
+    if (count > favoriteCount) {
+      favoriteCount = count
+      favoriteModel = model
+    }
+  }
+  if (favoriteModel === null) {
+    favoriteModel = fallbackModel
+    favoriteCount = fallbackCount
+  }
+
+  const messages = total.messages
+  const totalTokens =
+    total.input + total.output + total.cacheRead + total.cacheWrite
+
   return {
     /** 扫描覆盖的日志文件数（只用于说明覆盖范围，不含路径）。 */
     files: files.length,
+    /** 概览：有消息的会话数、有消息的天数、峰值小时（0–23）、常用模型。 */
+    overview: {
+      // 一个日志文件对应一个会话（文件名就是 sessionId）；同名的只算一次。
+      sessions: new Set(files.map(file => path.basename(file, '.jsonl'))).size,
+      activeDays: daysSorted.length,
+      peakHour,
+      peakHourMessages: peakCount,
+      favoriteModel,
+      favoriteModelMessages: favoriteCount,
+      totalMessages: messages,
+      totalTokens,
+    },
     /** 统计窗口内最早再往前推的日期，让界面能说「最近 N 天」。 */
     windowDays: days,
     today: { day: today, ...todayBucket },

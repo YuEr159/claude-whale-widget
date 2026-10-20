@@ -19,6 +19,8 @@ export type LocalDay = {
 /** 本地日志聚合的逐模型汇总。 */
 export type LocalModel = {
   model: string
+  /** 该模型是否在价格表里；false 时 cost 恒为 0，界面显示「未收录价格」。 */
+  isPriced: boolean
   input: number
   output: number
   cacheWrite: number
@@ -27,9 +29,26 @@ export type LocalModel = {
   messages: number
 }
 
+/** 扫描结果里的概览卡片（对应原生用量页的 Sessions / Messages / 等）。 */
+export type LocalOverview = {
+  /** 有消息的会话数。 */
+  sessions: number
+  /** 有消息的天数。 */
+  activeDays: number
+  /** 消息最多的小时，0–23；没有消息时为 null。 */
+  peakHour: number | null
+  peakHourMessages: number
+  /** 消息最多的模型；`auto` 等占位标识会被跳过。 */
+  favoriteModel: string | null
+  favoriteModelMessages: number
+  totalMessages: number
+  totalTokens: number
+}
+
 /** `scripts/usage-scan.mjs` 一次输出的全部内容。 */
 export type LocalUsage = {
   files: number
+  overview: LocalOverview
   windowDays: number
   today: LocalDay
   total: Omit<LocalDay, 'day'>
@@ -60,6 +79,8 @@ export type Prefs = {
   scanIntervalMs: number
   /** 面板显示详细视图还是只保留概览。 */
   panelDetail: 'simple' | 'detail'
+  /** 本地用量看哪一页：概览卡片 + 热力图，还是逐模型排行。 */
+  panelPage: 'overview' | 'models'
 }
 
 /** 一轮对话的消耗（turn.complete 时记下，供提示用）。 */

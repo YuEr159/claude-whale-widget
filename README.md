@@ -30,6 +30,8 @@ Claude Code 桌面端的小鲸鱼挂件：**输入框上方一条用量摘要 + 
 | **上下文明细** | `$.session.usage({ breakdown })` | 原生 `/context` 的 10×10 网格 + 逐项（系统提示、消息、空闲、压缩缓冲），以及记忆文件、MCP 工具、自定义 agent、技能与斜杠命令的计数 |
 | **每轮消耗** | `turn.complete` 事件 | 每轮结束后的真实 token，按官方价格估算；默认不弹提示，可在面板打开 |
 | **本地历史用量** | `~/.claude/projects/*.jsonl` | 今日 / 最近 N 天的 token 与估算金额，跨会话汇总 |
+| **概览页** | 本地扫描的 `overview` | 会话数、消息数、总 token、活跃天数、峰值时段、常用模型六张卡，外加按周排列的日历热力图 |
+| **模型页** | 本地扫描的 `byModel` | 逐模型的 token 条形图与消息数；第三方模型没有价格时标「未收录价格」，不会被藏起来 |
 
 面板里的小鲸鱼会随用量变表情：正常 → 忙碌 → 疲惫 → 睡着（额度接近上限）。工作时会喷水。
 
@@ -44,6 +46,16 @@ Claude Code 桌面端的小鲸鱼挂件：**输入框上方一条用量摘要 + 
 
 `/context` 的明细用 `summary` 粒度：全部本地估算，不发 token 计数请求，所以面板
 每次重绘都不会打 API。需要 `full` 的精确计数时用原生 `/context`。
+
+概览页的数字来自本地日志扫描，不是账号级别的统计：它只覆盖这台机器上的会话，
+不含其他设备或 claude.ai 网页端。这和原生用量页的口径一致（原生页也标注了这一点）。
+
+### 关于第三方模型的金额
+
+价格表只收录 Anthropic 第一方模型。DeepSeek、Qwen、GLM 等第三方模型的 token
+照常统计、照常出现在模型页，但金额显示「未收录价格」——拿官方价去套别家的模型
+会给出错误数字。要收录某个第三方模型，需要把它的官方定价加进 `hooks/pricing.ts`
+与 `scripts/usage-scan.mjs` 的 `PRICES`（两处保持一致）。
 
 ## 安装
 
@@ -137,6 +149,7 @@ hooks/hooks.json             入口声明
 hooks/register.tsx           全部 hook：命令、渲染、轮次、定时扫描
 hooks/usage-view.ts          纯计算：用量 → 界面文字
 hooks/usage-detail.ts        纯计算：/usage 与 /context 明细 → 面板行
+hooks/usage-overview.ts      纯计算：概览卡片、日历热力图、模型排行
 hooks/whale-art.ts           小鲸鱼画面（内嵌原图 + 代码绘制的气泡）
 hooks/whale-asset.ts         原图的两档 base64 资产
 hooks/pricing.ts             官方模型价格表

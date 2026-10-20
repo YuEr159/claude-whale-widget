@@ -22,7 +22,17 @@ import {
   unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { moodOf, whaleSvg } from '../hooks/whale-art'
+import { WHALE_ASPECT, moodOf, whaleSvg, whaleWidthFor } from '../hooks/whale-art'
+import {
+  barText,
+  calendarHeat,
+  hourLabel,
+  maskModel,
+  modelRows,
+  overviewCards,
+  heatLevel,
+  isPlaceholderModel,
+} from '../hooks/usage-overview'
 
 test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -319,4 +329,97 @@ test('用量条口径选项覆盖全部四种取值', () => {
   expect(BAND_METRIC_OPTIONS.map(o => o.value).sort()).toEqual(
     ['context', 'cost', 'session', 'window'].sort(),
   )
+})
+
+test('鲸鱼尺寸：连续公式，没有阈值跳变', () => {
+  // 关键回归：旧公式在 59→60 列处会一次缩 84px
+  let maxJump = 0
+  for (let columns = 16; columns <= 140; columns += 1) {
+    const jump = Math.abs(whaleWidthFor(columns + 1) - whaleWidthFor(columns))
+    if (jump > maxJump) maxJump = jump
+  }
+  expect(maxJump).toBeLessThanOrEqual(5)
+  // 两端夹住，中间线性
+  expect(whaleWidthFor(10)).toBe(150)
+  expect(whaleWidthFor(200)).toBe(300)
+  expect(whaleWidthFor(60)).toBeGreaterThan(200)
+})
+
+test('鲸鱼高度严格等于画布比例', () => {
+  for (const columns of [20, 40, 60, 80, 100]) {
+    const w = whaleWidthFor(columns)
+    const h = w * WHALE_ASPECT
+    expect(Math.abs(h / w - 320 / 620) < 1e-12).toBe(true)
+  }
+})
+
+test('小时标签与原生用量页一致', () => {
+  expect(hourLabel(0)).toBe('12 AM')
+  expect(hourLabel(9)).toBe('9 AM')
+  expect(hourLabel(12)).toBe('12 PM')
+  expect(hourLabel(17)).toBe('5 PM')
+  expect(hourLabel(23)).toBe('11 PM')
+  expect(hourLabel(null)).toBe('—')
+})
+
+test('模型名脱敏：保留头尾，中间星号', () => {
+  expect(maskModel(null)).toBe('—')
+  expect(maskModel('claude-opus-5-5')).toBe('opu*** -5-5')
+  const masked = maskModel('deepseek-v4-flash')
+  expect(masked.startsWith('dee')).toBe(true)
+  expect(masked).toContain('*')
+  expect(masked).not.toBe('deepseek-v4-flash')
+})
+
+test('热力图分档按最大值比例，不是绝对阈值', () => {
+  expect(heatLevel(0, 100)).toBe(0)
+  expect(heatLevel(10, 100)).toBe(1)
+  expect(heatLevel(40, 100)).toBe(2)
+  expect(heatLevel(60, 100)).toBe(3)
+  expect(heatLevel(90, 100)).toBe(4)
+  // 同样的比例，换一个量级结果不变
+  expect(heatLevel(9_000_000, 10_000_000)).toBe(4)
+})
+
+test('日历热力图按周分列，每列 7 行', () => {
+  const days = [
+    { day: '2026-10-05', input: 10, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 1 },
+    { day: '2026-10-06', input: 20, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 1 },
+    { day: '2026-10-07', input: 30, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 1 },
+  ]
+  const calendar = calendarHeat(days as never)
+  expect(calendar.columns.length).toBeGreaterThan(0)
+  for (const column of calendar.columns) expect(column.length).toBe(7)
+  expect(calendar.max).toBe(30)
+})
+
+test('模型排行按 token 排，不看金额', () => {
+  const rows = modelRows([
+    { model: 'third-party', isPriced: false, input: 1000, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 5 },
+    { model: 'claude-opus', isPriced: true, input: 10, output: 0, cacheWrite: 0, cacheRead: 0, cost: 5, messages: 1 },
+  ] as never)
+  // 第三方模型没有价格，但 token 多，应排在前面
+  expect(rows[0]?.model).toBe('third-party')
+  expect(rows[0]?.cost).toBe(null)
+  expect(rows[0]?.share).toBe(1)
+})
+
+test('概览卡片六张，缺数据时全为占位', () => {
+  const cards = overviewCards(undefined, [], 30, 0)
+  expect(cards.map(c => c.label)).toEqual(['会话', '消息', '总 token', '活跃天数', '峰值时段', '常用模型'])
+  expect(cards.every(c => c.value === '—')).toBe(true)
+})
+
+test('模型页过滤引擎内部标识', () => {
+  expect(isPlaceholderModel('auto')).toBe(true)
+  expect(isPlaceholderModel('<synthetic>')).toBe(true)
+  expect(isPlaceholderModel('imported-from-dsh')).toBe(true)
+  expect(isPlaceholderModel('deepseek-v4-flash')).toBe(false)
+  expect(isPlaceholderModel('claude-opus-5-5')).toBe(false)
+
+  const rows = modelRows([
+    { model: 'auto', isPriced: false, input: 900, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 90 },
+    { model: 'deepseek-v4-flash', isPriced: false, input: 100, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 10 },
+  ] as never)
+  expect(rows.map(r => r.model)).toEqual(['deepseek-v4-flash'])
 })
