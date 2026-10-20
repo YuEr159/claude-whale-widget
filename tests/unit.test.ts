@@ -43,6 +43,7 @@ import {
   turnPages,
 } from '../hooks/usage-overview'
 import { contextChartSvg, pageOf, turnChartSvg } from '../hooks/chart-art'
+import { UNPRICED, provenanceNotesFor, usdEstimate } from '../hooks/provenance'
 
 test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -321,7 +322,7 @@ test('用量条摘要按偏好切换口径', () => {
   })
   const now = Date.parse('2026-10-20T12:00:00Z')
   expect(bandSummary(view, 'window', now)).toContain('5h 40%')
-  expect(bandSummary(view, 'session', now)).toBe('本会话 $2.00')
+  expect(bandSummary(view, 'session', now)).toBe('本会话 ≈$2.00')
   expect(bandSummary(view, 'cost', now)).toBe('上下文 12%')
   expect(bandSummary(view, 'context', now)).toBe('5h 40% · 7d 70%')
 })
@@ -332,7 +333,7 @@ test('没有额度窗口时用量条退回上下文 + 会话花费', () => {
     cost: { usd: 0.5 },
     context: { window: 200_000, percent: 33 },
   })
-  expect(bandSummary(view, 'window', 0)).toBe('上下文 33% · 本会话 $0.50')
+  expect(bandSummary(view, 'window', 0)).toBe('上下文 33% · 本会话 ≈$0.50')
 })
 
 test('用量条口径选项覆盖全部四种取值', () => {
@@ -598,4 +599,26 @@ test('图例只列出现过的分类，顺序固定', () => {
 
   const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
   expect(stackLegendOf(legacy.bars).map(item => item.kind)).toEqual(['used', 'buffer', 'free'])
+})
+
+test('金额一律带估算标记，零与缺失值除外', () => {
+  expect(usdEstimate(2)).toBe('≈$2.00')
+  expect(usdEstimate(0)).toBe('$0')
+  expect(usdEstimate(undefined)).toBe('—')
+  expect(UNPRICED).toBe('未收录价格')
+})
+
+test('来源脚注只解释出现过的数字', () => {
+  expect(provenanceNotesFor(false, false, false).map(n => n.topic)).toEqual(['带 ≈ 的金额'])
+  expect(provenanceNotesFor(false, true, true).map(n => n.topic)).toEqual([
+    '带 ≈ 的金额',
+    '上下文柱子',
+    '上下文明细',
+  ])
+  expect(provenanceNotesFor(true, true, true).map(n => n.topic)).toEqual([
+    '带 ≈ 的金额',
+    '上下文柱子',
+    '上下文明细',
+    '本地历史',
+  ])
 })

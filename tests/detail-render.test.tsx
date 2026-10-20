@@ -82,6 +82,14 @@ test('详细面板画出原生 /usage 与 /context 的各节', async ($, on) => 
   expect(tree).toContain('Messages')
   expect(tree).toContain('Autocompact buffer')
 
+  // 金额带估算标记：面板里没有一笔钱来自账单。
+  expect(tree).toContain('≈$')
+  // 数据来源脚注：详细视图才出现，且只解释这一屏真正有的数字
+  //（这里没有本地扫描结果，所以不提「本地历史」）。
+  expect(tree).toContain('带 ≈ 的金额')
+  expect(tree).toContain('上下文明细')
+  expect(tree).not.toContain('本地历史')
+
   // 记忆文件 / MCP / agent / 技能计数
   expect(tree).toContain('记忆文件 ')
   expect(tree).toContain('MCP 工具 ')
@@ -90,20 +98,16 @@ test('详细面板画出原生 /usage 与 /context 的各节', async ($, on) => 
   await ui.unmount()
 })
 
-test('简洁面板不请求 breakdown，也不画明细', async ($, on) => {
+test('切到简洁后面板不再请求 breakdown，也不再画明细', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
   mock.store(on, {})
-  // 每次取用量时把偏好改成简洁；面板渲染随后读到的就是它。
-  on('session.usage', async $ => {
-    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as never, {
-      isBandVisible: true,
-      bandMetric: 'window',
-      historyDays: 7,
-      isTurnCostOn: false,
-      scanIntervalMs: 300_000,
-      panelDetail: 'simple',
-    } as never)
+  // 测试的 hook 不能写 `$.state`（宿主规则只允许插件的 hooks 模块写），
+  // 也不能靠 hook `state.get` 预置——引擎会把那样的应答丢掉。
+  // 可靠的做法是走面板自己的控件：选中「简洁」，由插件自己写偏好、自己重绘。
+  const calls: unknown[] = []
+  on('session.usage', async (_: unknown, e: any) => {
+    calls.push(e)
     return { value: usage } as never
   })
 
@@ -116,9 +120,25 @@ test('简洁面板不请求 breakdown，也不画明细', async ($, on) => {
     viewport: { columns: 120, rows: 40 },
   })
 
-  const tree = JSON.stringify(await ui.drawn())
-  expect(tree).not.toContain('Autocompact buffer')
-  expect(tree).toContain('5h')
+  // 初始是详细：请求了 breakdown，也画了 /context 明细与来源脚注。
+  const before = JSON.stringify(await ui.drawn())
+  expect(calls.length).toBe(1)
+  expect(JSON.stringify(calls[0])).toContain('breakdown')
+  expect(before).toContain('Autocompact buffer')
+  expect(before).toContain('带 ≈ 的金额')
+
+  // 切到简洁：下一次取用量不再带 breakdown，明细与脚注都不再出现。
+  await ui.select({ key: 'whale-panel-detail', value: 'simple' })
+  const after = JSON.stringify(await ui.drawn())
+  expect(calls.length).toBeGreaterThan(1)
+  expect(JSON.stringify(calls[calls.length - 1])).not.toContain('breakdown')
+  expect(after).not.toContain('Autocompact buffer')
+  expect(after).not.toContain('带 ≈ 的金额')
+  // 金额的估算标记是数据属性，不随视图简繁改变。
+  expect(after).toContain('≈$')
+  // 额度窗口仍在，但简洁模式退回一行摘要，不再逐条列原生标题。
+  expect(after).toContain('5h')
+  expect(after).not.toContain('Current session')
 
   await ui.unmount()
 })

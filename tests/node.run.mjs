@@ -48,6 +48,7 @@ import {
   turnPages,
 } from '../hooks/usage-overview.ts'
 import { contextChartSvg, pageOf, turnChartSvg } from '../hooks/chart-art.ts'
+import { UNPRICED, provenanceNotesFor, usdEstimate } from '../hooks/provenance.ts'
 
 test('价格表只认官方模型，缓存按 1.25x / 0.1x', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -260,12 +261,13 @@ test('用量条摘要按偏好切换口径', () => {
   })
   const now = Date.parse('2026-10-20T12:00:00Z')
   assert.ok(bandSummary(view, 'window', now).includes('5h 40%'))
-  assert.equal(bandSummary(view, 'session', now), '本会话 $2.00')
+  // 金额一律带估算标记：面板里没有一笔钱来自账单。
+  assert.equal(bandSummary(view, 'session', now), '本会话 ≈$2.00')
   assert.equal(bandSummary(view, 'cost', now), '上下文 12%')
   assert.equal(bandSummary(view, 'context', now), '5h 40% · 7d 70%')
   assert.equal(
     bandSummary(toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } }), 'window', 0),
-    '上下文 33% · 本会话 $0.50',
+    '上下文 33% · 本会话 ≈$0.50',
   )
   assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'session', 'window'].sort())
 })
@@ -476,4 +478,23 @@ test('只有老记录时图例退回三段骨架', () => {
   const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
   const legend = stackLegendOf(legacy.bars)
   assert.deepEqual(legend.map(item => item.kind), ['used', 'buffer', 'free'])
+})
+
+test('金额一律带估算标记，零与缺失值除外', () => {
+  assert.equal(usdEstimate(2), '≈$2.00')
+  assert.equal(usdEstimate(0.5), '≈$0.50')
+  // 0 与缺失值没有精度可谈，不加符号。
+  assert.equal(usdEstimate(0), '$0')
+  assert.equal(usdEstimate(undefined), '—')
+  assert.equal(usdEstimate(null), '—')
+  assert.equal(UNPRICED, '未收录价格')
+})
+
+test('来源脚注只解释出现过的数字', () => {
+  const none = provenanceNotesFor(false, false, false)
+  assert.deepEqual(none.map(n => n.topic), ['带 ≈ 的金额'])
+  const ctxOnly = provenanceNotesFor(false, true, true)
+  assert.deepEqual(ctxOnly.map(n => n.topic), ['带 ≈ 的金额', '上下文柱子', '上下文明细'])
+  const all = provenanceNotesFor(true, true, true)
+  assert.deepEqual(all.map(n => n.topic), ['带 ≈ 的金额', '上下文柱子', '上下文明细', '本地历史'])
 })
