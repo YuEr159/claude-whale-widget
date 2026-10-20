@@ -218,12 +218,12 @@ export function contextChartSvg(
   // 上界刻度：轴顶向左伸一小段，数字右对齐贴着轴线。
   parts.push(
     `<line x1="${padding.left - 3}" y1="${axisTop}" x2="${padding.left}" y2="${axisTop}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
-    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}">${Math.round(yMax)}%</text>`,
+    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}>${Math.round(yMax)}%</text>`,
   )
   // 0 刻度：同样向左伸一小段。
   parts.push(
     `<line x1="${padding.left - 3}" y1="${axisBottom}" x2="${padding.left}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
-    `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}">0</text>`,
+    `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}>0</text>`,
   )
 
   // 压缩虚线：画在「压缩后那一轮」柱子的左缘，从柱脚贯穿到图顶。
@@ -243,7 +243,7 @@ export function contextChartSvg(
     if (index % labelStep !== 0 && index !== bars.length - 1) return
     const center = padding.left + index * slot + slot / 2
     parts.push(
-      `<text x="${center.toFixed(2)}" y="${axisBottom + 12}" text-anchor="middle" font-size="9" ${fillOf(palette.label, 1)}">${escapeXml(bar.label)}</text>`,
+      `<text x="${center.toFixed(2)}" y="${axisBottom + 12}" text-anchor="middle" font-size="9" ${fillOf(palette.label, 1)}>${escapeXml(bar.label)}</text>`,
     )
   })
 
@@ -497,8 +497,8 @@ export function modelStackSvg(
     `<line x1="${padding.left}" y1="${axisTop}" x2="${padding.left}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
     `<line x1="${padding.left}" y1="${axisBottom}" x2="${width - padding.right}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
     `<line x1="${padding.left - 3}" y1="${axisTop}" x2="${padding.left}" y2="${axisTop}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
-    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="8" ${fillOf(palette.label, 1)}">${escapeXml(tokens(yMax))}</text>`,
-    `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}">0</text>`,
+    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="8" ${fillOf(palette.label, 1)}>${escapeXml(tokens(yMax))}</text>`,
+    `<text x="${padding.left - 4}" y="${axisBottom + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}>0</text>`,
   )
 
   return (

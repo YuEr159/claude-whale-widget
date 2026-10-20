@@ -558,8 +558,11 @@ export const register: Register = (on, options) => {
     const whaleSize = whaleSizeFor(width)
     const whaleWidth = whaleSize.width
     const whaleHeight = whaleSize.height
-    // 点击覆盖层要盖住整只鲸鱼。Button 只有一行高，所以按行数铺；
-    // 一行约 8px（与 whaleWidthFor 里的 pxPerColumn 同口径）。
+    // 点击区：把整只鲸鱼（含气泡，气泡画在同一张 SVG 里、占画布上方大半）
+    // 铺满。引擎不告诉插件「一格等于多少像素」，这里只能按等宽字体的经验值
+    // 8px/格反算——所以刻意往下取整、并把点击区铺到整个画布宽度（也就是
+    // `whaleWidth`，不是鲸鱼本身那 300px），宁可大一圈也不能小一块：
+    // 点偏一点没反应，比点到别处触发别的东西更让人困惑。
     const whaleTapRows = Math.max(1, Math.ceil(whaleHeight / 8))
     const whaleTapCols = Math.max(1, Math.ceil(whaleWidth / 8))
 
@@ -1151,17 +1154,20 @@ export const register: Register = (on, options) => {
             放在开场反而挡在真正要看的数字前面。 */}
         {historyHead}
         {/* 鲸鱼独占最后一行、靠右。整只鲸鱼可点：`Svg` 自己没有 onPress，
-            所以盖一层 Button。用一个 Button 而不是按行铺一排——桌面端把
-            「label 全是空格」的按钮压成零宽，铺多少行都点不中；这里改用
-            带真实字符（``）的行做 children，按钮就有了一块实打实的尺寸，
-            每行都只是这块尺寸的一部分，整块一起响应一次点击。 */}
+            所以盖一层 Button。
+
+            三件事必须同时成立，少一件就点不中：
+            1. **有内容撑出尺寸**。绝对定位的 Box 只按内容撑开，空 Box 是 0×0。
+               用 U+2800（盲文空白）而不是普通空格：它有实际宽度，但看起来
+               是空的，不会在鲸鱼上盖出一片可见的方块。
+            2. **尺寸显式给死**。不同表面对「一格多宽」的估算不一致，光靠内容
+               撑可能撑不满；Box 上再写一遍 width/height 兜底。
+            3. **label 不参与绘制**。有 children 时 label 只作控件名（无障碍
+               读出来用），不会被画到鲸鱼上——之前写的是「展开小鲸鱼摘要」，
+               终端会把这七个字直接印在鲸鱼身上。 */}
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
           <Box position="relative">
             {whale}
-            {/* 点击面积显式给死：绝对定位的 Box 只按内容撑开，而按钮的内容是
-                一串不可见字符——不同表面（终端按列、桌面按像素）对它的宽度
-                估算不一致，靠内容撑就可能撑不满鲸鱼。这里按鲸鱼的像素尺寸
-                反算格数，把宽高直接写在 Box 上。 */}
             <Box
               position="absolute"
               top={0}
@@ -1215,8 +1221,8 @@ export const register: Register = (on, options) => {
                 }}
               >
                 {Array.from({ length: whaleTapRows }, (_, row) => (
-                  <Text key={`whale-tap-row-${row}`} dimColor>
-                    {' '.repeat(whaleTapCols)}
+                  <Text key={`whale-tap-row-${row}`}>
+                    {'⠀'.repeat(whaleTapCols)}
                   </Text>
                 ))}
               </Button>
