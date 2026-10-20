@@ -61,7 +61,7 @@ import {
   windowSourceText,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { WHALE_ASPECT, emblemOf, moodOf, whaleSvg, whaleWidthFor } from './whale-art.ts'
+import { emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
 
 const PLUGIN = 'whale-usage' as const
 const PANE = 'whale'
@@ -82,6 +82,8 @@ const DEFAULT_PREFS: Prefs = {
   // 两张图默认贴住最新数据，往左翻时才用偏移量。
   turnOffset: 0,
   contextOffset: 0,
+  // 泡泡默认收起：鲸鱼只留右下角一小块，点一下才展开摘要。
+  isBubbleOpen: false,
 }
 
 const EMPTY_SCAN: ScanRecord = {
@@ -423,6 +425,8 @@ export const register: Register = (on, options) => {
     const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
     const prefsNow = heldPrefs.value ?? DEFAULT_PREFS
     const detail = detailOf(prefsNow)
+    // 默认收起：读不到该字段的老状态按「收起」处理。
+    const isBubbleOpen = prefsNow.isBubbleOpen === true
 
     // 详细视图才请求上下文分项：`full` 会给每个工具、记忆文件发一次 token 计数
     // 请求（与 /context 同口径），`summary` 全本地估算、不发请求。面板用 summary
@@ -463,13 +467,18 @@ export const register: Register = (on, options) => {
     //      `preserveAspectRatio` 会留白并上下居中，且留白量随宽度抖动。
     //   3. 右下角对齐用显式列宽，不用 `100%`——后者依赖父容器的解析宽度。
     const width = e.props.bodyColumns
-    const whaleWidth = whaleWidthFor(width)
-    const whaleHeight = whaleWidth * WHALE_ASPECT
+    const whaleSize = whaleSizeFor(width)
+    const whaleWidth = whaleSize.width
+    const whaleHeight = whaleSize.height
 
     const whale = Svg ? (
       <Svg
-        source={whaleSvg(mood, lines)}
-        alt={`小鲸鱼：${lines.join('，')}`}
+        source={whaleSvg(mood, lines, { isBubbleOpen: isBubbleOpen })}
+        alt={
+          isBubbleOpen
+            ? `小鲸鱼：${lines.join('，')}`
+            : '小鲸鱼（点右侧按钮展开摘要）'
+        }
         width={whaleWidth}
         height={whaleHeight}
       />
@@ -999,8 +1008,32 @@ export const register: Register = (on, options) => {
             ))}
           </Box>
         )}
+        {/* 鲸鱼独占最后一行、靠右，位置不受泡泡状态影响。
+            展开 / 收起的按钮用绝对定位盖在鲸鱼左下角：`Svg` 没有 onPress，
+            `Button` 的子元素也只能是文字，点击只能落在独立控件上；
+            用绝对定位是为了不让它把鲸鱼挤离右边。 */}
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
-          {whale}
+          <Box position="relative">
+            {whale}
+            <Box position="absolute" bottom={0} left={-10}>
+              <Button
+                key="whale-bubble-toggle"
+                plain
+                dimColor
+                label={isBubbleOpen ? '收起摘要' : '展开摘要'}
+                onPress={() => {
+                  void (async () => {
+                    const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                    const nowPrefs = latest.value ?? DEFAULT_PREFS
+                    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                      ...nowPrefs,
+                      isBubbleOpen: !(nowPrefs.isBubbleOpen === true),
+                    })
+                  })()
+                }}
+              />
+            </Box>
+          </Box>
         </Box>
       </Box>
     )

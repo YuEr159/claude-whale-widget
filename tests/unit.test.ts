@@ -20,7 +20,7 @@ import {
   unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { WHALE_ASPECT, moodOf, whaleSvg, whaleWidthFor } from '../hooks/whale-art'
+import { WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
 import {
   barText,
   calendarHeat,
@@ -146,6 +146,25 @@ test('SVG 是合法标签，文字做了转义，动画可选', () => {
   const still = whaleSvg('sleep', ['休息'], { isAnimating: false })
   expect(still).not.toContain('animateTransform')
   expect(whaleSvg('working', ['x'])).toContain('animateTransform')
+})
+
+test('泡泡收起时不画气泡，但鲸鱼的位置不变', () => {
+  const open = whaleSvg('idle', ['5 小时窗口 23%', '≈$2.50', '2h13m 后重置'], { isBubbleOpen: true })
+  const closed = whaleSvg('idle', ['5 小时窗口 23%', '≈$2.50', '2h13m 后重置'], { isBubbleOpen: false })
+
+  // 气泡由椭圆与文字组成，收起时全部消失。
+  expect(open).toContain('<ellipse')
+  expect(open).toContain('5 小时窗口 23%')
+  expect(closed).not.toContain('<ellipse')
+  expect(closed).not.toContain('5 小时窗口 23%')
+
+  // 鲸鱼本身与它的定位都必须原样保留：收起泡泡不该让鲸鱼挪位。
+  expect(closed).toContain('<image')
+  expect(closed).toContain('translate(318 16)')
+  expect(open).toContain('translate(318 16)')
+
+  // 省略 options 时按「展开」处理，保持对旧调用方的向后兼容。
+  expect(whaleSvg('idle', ['a'])).toContain('<ellipse')
 })
 
 test('数据新鲜度：刚更新、分钟、小时、过期判定', () => {
@@ -365,21 +384,22 @@ test('鲸鱼尺寸：连续公式，没有阈值跳变', () => {
   // 关键回归：旧公式在 59→60 列处会一次缩 84px
   let maxJump = 0
   for (let columns = 16; columns <= 140; columns += 1) {
-    const jump = Math.abs(whaleWidthFor(columns + 1) - whaleWidthFor(columns))
+    const jump = Math.abs(whaleSizeFor(columns + 1).width - whaleSizeFor(columns).width)
     if (jump > maxJump) maxJump = jump
   }
   expect(maxJump).toBeLessThanOrEqual(5)
   // 两端夹住，中间线性
-  expect(whaleWidthFor(10)).toBe(150)
-  expect(whaleWidthFor(200)).toBe(300)
-  expect(whaleWidthFor(60)).toBeGreaterThan(200)
+  expect(whaleSizeFor(200).width).toBe(300)
+  expect(whaleSizeFor(60).width).toBeGreaterThan(200)
 })
 
-test('鲸鱼高度严格等于画布比例', () => {
-  for (const columns of [20, 40, 60, 80, 100]) {
-    const w = whaleWidthFor(columns)
-    const h = w * WHALE_ASPECT
-    expect(Math.abs(h / w - 320 / 620) < 1e-12).toBe(true)
+test('鲸鱼高度严格等于画布比例，且不低于最小高度', () => {
+  for (const columns of [1, 10, 20, 40, 60, 80, 100, 200]) {
+    const { width, height } = whaleSizeFor(columns)
+    // 比例严格保持：引擎的 preserveAspectRatio 不会留白抖动
+    expect(Math.abs(height / width - 320 / 620) < 1e-12).toBe(true)
+    // 最小高度是真正的下界：面板再窄也不会缩到看不清
+    expect(height).toBeGreaterThanOrEqual(WHALE_MIN_HEIGHT - 1e-9)
   }
 })
 

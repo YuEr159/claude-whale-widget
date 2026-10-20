@@ -27,7 +27,7 @@ import {
   unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { WHALE_ASPECT, moodOf, whaleSvg, whaleWidthFor } from '../hooks/whale-art.ts'
+import { WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   heatLevel,
@@ -282,16 +282,19 @@ test('代码改动：单独成段、零值省略、其余口径不重复', () =>
   assert.equal(bandDiffText({ added: 0, removed: 0 }), '')
 })
 
-test('鲸鱼尺寸连续，高度严格按画布比例', () => {
+test('鲸鱼尺寸连续，高度严格按画布比例且不低于最小高度', () => {
   let maxJump = 0
   for (let columns = 16; columns <= 140; columns += 1) {
-    const jump = Math.abs(whaleWidthFor(columns + 1) - whaleWidthFor(columns))
+    const jump = Math.abs(whaleSizeFor(columns + 1).width - whaleSizeFor(columns).width)
     if (jump > maxJump) maxJump = jump
   }
   assert.ok(maxJump <= 5, `最大跳变 ${maxJump}px`)
-  assert.equal(whaleWidthFor(10), 150)
-  assert.equal(whaleWidthFor(200), 300)
-  assert.ok(Math.abs((200 * WHALE_ASPECT) / 200 - 320 / 620) < 1e-12)
+  assert.equal(whaleSizeFor(200).width, 300)
+  for (const columns of [1, 10, 40, 100, 200]) {
+    const { width, height } = whaleSizeFor(columns)
+    assert.ok(Math.abs(height / width - 320 / 620) < 1e-12, `${columns} 列比例失守`)
+    assert.ok(height >= WHALE_MIN_HEIGHT - 1e-9, `${columns} 列高度 ${height} 低于下限`)
+  }
 })
 
 test('概览与模型页的整形', () => {

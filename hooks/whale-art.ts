@@ -18,24 +18,40 @@ export const WHALE_CANVAS = { width: 620, height: 320 } as const
 export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
 
 /**
- * 面板宽度（字符列）→ 立绘显示宽度（CSS 像素）。
+ * 立绘的高度下限（CSS 像素）。
  *
- * 一条连续的公式，没有「宽/窄两套系数」的阈值切换：
- * 立绘占面板宽度的 55%，再夹在 [MIN, MAX] 之间。因为夹取的两端都是常数，
- * 宽度变化时结果要么完全不动（夹住时），要么按 0.55 × 8px 线性变化，
- * 不会出现跳变。
+ * 宽度与高度由画布比例绑定，所以「最小高度」就是真正的下界：面板再窄，
+ * 鲸鱼也至少有这么高，不会缩成一团看不清的色块。
  */
-export function whaleWidthFor(columns: number): number {
-  const pxPerColumn = 8
-  const share = 0.55
-  return Math.max(WHALE_MIN_WIDTH, Math.min(columns * pxPerColumn * share, WHALE_MAX_WIDTH))
-}
+export const WHALE_MIN_HEIGHT = 96
 
-/** 立绘的最小显示宽度：再小就只剩一团色块。 */
-export const WHALE_MIN_WIDTH = 150
+/**
+ * 由最小高度反推出的最小宽度。
+ *
+ * 尺寸最终由 `whaleSizeFor()` 一次算定，这个常量只用于断言与文档：
+ * 任何显示尺寸都必须同时满足 `height ≥ WHALE_MIN_HEIGHT`。
+ */
+export const WHALE_MIN_WIDTH = WHALE_MIN_HEIGHT / WHALE_ASPECT
 
 /** 立绘的最大显示宽度：超过它面板会显得头重脚轻。 */
 export const WHALE_MAX_WIDTH = 300
+
+/**
+ * 面板宽度（字符列）→ 立绘的显示尺寸，宽高严格按画布比例。
+ *
+ * 先按面板宽度算出理想宽度，再把它夹进「最小高度」与「最大宽度」之间，
+ * 最后**由宽度推出高度**。这样两个不变量同时成立：
+ *   - 高度永远 ≥ `WHALE_MIN_HEIGHT`；
+ *   - 高宽比永远等于画布比例，`preserveAspectRatio` 不会留白抖动。
+ */
+export function whaleSizeFor(columns: number): { width: number; height: number } {
+  const pxPerColumn = 8
+  const share = 0.55
+  const byPanel = columns * pxPerColumn * share
+  // 宽度下界由最小高度决定，上界是面板观感的极限。
+  const width = Math.max(WHALE_MIN_WIDTH, Math.min(byPanel, WHALE_MAX_WIDTH))
+  return { width, height: width * WHALE_ASPECT }
+}
 
 /** 鲸鱼的状态：决定气泡配色与提示语。 */
 export type WhaleMood = 'idle' | 'working' | 'busy' | 'tired' | 'sleep'
@@ -116,21 +132,27 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
 }
 
 /**
- * 生成整幅 SVG：左上气泡 + 右下原图鲸鱼。
+ * 生成整幅 SVG：左边气泡 + 右下原图鲸鱼。
  *
  * 鲸鱼以 512px 的内嵌 PNG 呈现，`preserveAspectRatio` 保持比例；画布
  * 620×320 与原版 1026×700 的构图比例接近。
  *
+ * **鲸鱼的位置不随气泡变化**：无论气泡画不画、画几行，鲸鱼都钉在同一个
+ * `translate(318 16)` 上。这样点开 / 收起泡泡时画面不会跳，鲸鱼也不会
+ * 因为左边让出空间而挪位——它始终在右下角。
+ *
  * @param mood 情绪，决定气泡配色
  * @param lines 气泡里最多三行文字（第一行标签、第二行金额、第三行提示）
- * @param options `isAnimating` 为真时鲸鱼轻微上下浮动（SMIL，无需脚本）
+ * @param options `isAnimating` 为真时鲸鱼轻微上下浮动（SMIL，无需脚本）；
+ *   `isBubbleOpen` 为假时整块气泡（含尾巴与小泡）不画，只留鲸鱼
  */
 export function whaleSvg(
   mood: WhaleMood,
   lines: readonly string[],
-  options: { isAnimating?: boolean; isCompact?: boolean } = {},
+  options: { isAnimating?: boolean; isCompact?: boolean; isBubbleOpen?: boolean } = {},
 ): string {
   const isAnimating = options.isAnimating ?? true
+  const isBubbleOpen = options.isBubbleOpen ?? true
   // 常驻条很小（显示约 46×24 像素），用小图省内存；面板用大图保证清晰。
   const asset = options.isCompact ? WHALE_ASSETS.small : WHALE_ASSETS.large
   // 呼吸：整体上下浮动 ±4px。SMIL 在无脚本沙箱里也能跑。
@@ -140,8 +162,8 @@ export function whaleSvg(
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" role="img">` +
-    bubbleSvg(lines, mood) +
-    // 鲸鱼：原图右下角贴边，尺寸 300×300
+    (isBubbleOpen ? bubbleSvg(lines, mood) : '') +
+    // 鲸鱼：原图右下角贴边，尺寸 300×300。位置与气泡是否展开无关。
     `<g transform="translate(318 16)">` +
     float +
     `<image x="0" y="0" width="300" height="300" preserveAspectRatio="xMaxYMax meet" href="data:image/png;base64,${asset}"/>` +
