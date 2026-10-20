@@ -11,6 +11,32 @@
  */
 import { WHALE_ASSETS } from './whale-asset.ts'
 
+/** 面板立绘的画布尺寸；外部显示尺寸必须按这个比例算，否则会留白抖动。 */
+export const WHALE_CANVAS = { width: 620, height: 320 } as const
+
+/** 画布的高宽比，外部计算 height 时直接乘它。 */
+export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
+
+/**
+ * 面板宽度（字符列）→ 立绘显示宽度（CSS 像素）。
+ *
+ * 一条连续的公式，没有「宽/窄两套系数」的阈值切换：
+ * 立绘占面板宽度的 55%，再夹在 [MIN, MAX] 之间。因为夹取的两端都是常数，
+ * 宽度变化时结果要么完全不动（夹住时），要么按 0.55 × 8px 线性变化，
+ * 不会出现跳变。
+ */
+export function whaleWidthFor(columns: number): number {
+  const pxPerColumn = 8
+  const share = 0.55
+  return Math.max(WHALE_MIN_WIDTH, Math.min(columns * pxPerColumn * share, WHALE_MAX_WIDTH))
+}
+
+/** 立绘的最小显示宽度：再小就只剩一团色块。 */
+export const WHALE_MIN_WIDTH = 150
+
+/** 立绘的最大显示宽度：超过它面板会显得头重脚轻。 */
+export const WHALE_MAX_WIDTH = 300
+
 /** 鲸鱼的状态：决定气泡配色与提示语。 */
 export type WhaleMood = 'idle' | 'working' | 'busy' | 'tired' | 'sleep'
 
@@ -113,7 +139,7 @@ export function whaleSvg(
     : ''
 
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 320" width="620" height="320" role="img">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" role="img">` +
     bubbleSvg(lines, mood) +
     // 鲸鱼：原图右下角贴边，尺寸 300×300
     `<g transform="translate(318 16)">` +

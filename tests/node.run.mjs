@@ -29,7 +29,15 @@ import {
   unpricedNote,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { moodOf, whaleSvg } from '../hooks/whale-art.ts'
+import { WHALE_ASPECT, moodOf, whaleSvg, whaleWidthFor } from '../hooks/whale-art.ts'
+import {
+  barText,
+  heatLevel,
+  hourLabel,
+  isPlaceholderModel,
+  maskModel,
+  modelRows,
+} from '../hooks/usage-overview.ts'
 
 test('价格表只认官方模型，缓存按 1.25x / 0.1x', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -250,4 +258,35 @@ test('用量条摘要按偏好切换口径', () => {
     '上下文 33% · 本会话 $0.50',
   )
   assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'session', 'window'].sort())
+})
+
+test('鲸鱼尺寸连续，高度严格按画布比例', () => {
+  let maxJump = 0
+  for (let columns = 16; columns <= 140; columns += 1) {
+    const jump = Math.abs(whaleWidthFor(columns + 1) - whaleWidthFor(columns))
+    if (jump > maxJump) maxJump = jump
+  }
+  assert.ok(maxJump <= 5, `最大跳变 ${maxJump}px`)
+  assert.equal(whaleWidthFor(10), 150)
+  assert.equal(whaleWidthFor(200), 300)
+  assert.ok(Math.abs((200 * WHALE_ASPECT) / 200 - 320 / 620) < 1e-12)
+})
+
+test('概览与模型页的整形', () => {
+  assert.equal(hourLabel(17), '5 PM')
+  assert.equal(hourLabel(0), '12 AM')
+  assert.ok(maskModel('deepseek-v4-flash').includes('*'))
+  assert.equal(heatLevel(90, 100), 4)
+  assert.equal(heatLevel(0, 100), 0)
+  assert.ok(isPlaceholderModel('auto'))
+  assert.ok(!isPlaceholderModel('deepseek-v4-flash'))
+
+  const rows = modelRows([
+    { model: 'auto', isPriced: false, input: 900, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 90 },
+    { model: 'deepseek-v4-flash', isPriced: false, input: 100, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 10 },
+  ])
+  assert.deepEqual(rows.map(r => r.model), ['deepseek-v4-flash'])
+  assert.equal(rows[0].cost, null)
+  assert.equal(rows[0].share, 1)
+  assert.equal(barText(1, 4), '████')
 })

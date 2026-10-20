@@ -20,6 +20,14 @@ import { costOf } from './pricing.ts'
 import { clip, pct, tokens, usd, countdown } from './format.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
 import {
+  barText,
+  calendarHeat,
+  maskModel,
+  modelRows,
+  overviewCards,
+  overviewFooter,
+} from './usage-overview.ts'
+import {
   PANEL_DETAIL_OPTIONS,
   addModelSpend,
   contextHeadline,
@@ -37,7 +45,7 @@ import {
   windowSourceText,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { emblemOf, moodOf, whaleSvg } from './whale-art.ts'
+import { WHALE_ASPECT, emblemOf, moodOf, whaleSvg, whaleWidthFor } from './whale-art.ts'
 
 const PLUGIN = 'whale-usage' as const
 const PANE = 'whale'
@@ -53,6 +61,8 @@ const DEFAULT_PREFS: Prefs = {
   scanIntervalMs: 5 * 60_000,
   // 面板默认按原生 /usage、/context 的详细视图展示。
   panelDetail: 'detail',
+  // 默认落在概览页。
+  panelPage: 'overview',
 }
 
 const EMPTY_SCAN: ScanRecord = {
@@ -364,14 +374,18 @@ export const register: Register = (on, options) => {
     const data = record.data
     const today = data?.today
 
-    // 面板尺寸：鲸鱼固定在右下角，宽度按面板宽度缩放但不吃掉整行。
+    // 面板尺寸：鲸鱼固定在右下角。
     // Svg 的 width/height 是 CSS 像素，bodyColumns 是字符列；等宽字体一列约 8px。
+    //
+    // 三条约束，缺一条都会让鲸鱼在拖动面板宽度时抖动：
+    //   1. 不用「宽面板 / 窄面板」两套系数——那会在阈值处突变（60 列时曾一次缩 84px）；
+    //      改成一条连续的公式，窄时占比大、宽时占比小，中间平滑过渡。
+    //   2. 高度必须严格等于 width × 画布高宽比（320/620）。比例不一致时
+    //      `preserveAspectRatio` 会留白并上下居中，且留白量随宽度抖动。
+    //   3. 右下角对齐用显式列宽，不用 `100%`——后者依赖父容器的解析宽度。
     const width = e.props.bodyColumns
-    const isWide = width >= 60
-    const pxWidth = width * 8
-    const byColumns = Math.floor(isWide ? pxWidth * 0.45 : pxWidth * 0.8)
-    const whaleWidth = Math.max(150, Math.min(byColumns, 300))
-    const whaleHeight = Math.round(whaleWidth * 0.52)
+    const whaleWidth = whaleWidthFor(width)
+    const whaleHeight = whaleWidth * WHALE_ASPECT
 
     const whale = Svg ? (
       <Svg
@@ -537,8 +551,10 @@ export const register: Register = (on, options) => {
 
     // 本地历史：今日一行、区间一行、逐模型一行。
     // 数据新鲜度贴在标题旁：过期时标黄，避免把 10 分钟前的数字当实时。
+    const page = prefsNow.panelPage ?? DEFAULT_PREFS.panelPage
     const freshness = freshnessOf(record.lastRunAt, now, prefsNow.scanIntervalMs)
-    const history = (
+    // 本地数据的状态与新鲜度：数字本身在概览页，这里只留「数据可不可信」的提示。
+    const historyHead = (
       <>
         <Text dimColor={!freshness.isStale}>
           {record.isRunning ? '正在统计…' : `本地 ${freshness.text}`}
@@ -548,30 +564,117 @@ export const register: Register = (on, options) => {
         {!record.isRunning && !record.lastError && !today && (
           <Text dimColor>还没有统计结果</Text>
         )}
-        {today && (
-          <Text>
-            今日 {usd(today.cost)} ·{' '}
-            {tokens(today.input + today.cacheRead + today.cacheWrite + today.output)} tok ·{' '}
-            {today.messages} 条
-          </Text>
+      </>
+    )
+
+    // 页签：概览 / 模型，对应原生用量页的两个标签。
+    const pageTabs = (
+      <Box flexDirection="row" gap={1} marginTop={1}>
+        {(
+          [
+            { id: 'overview', label: '概览' },
+            { id: 'models', label: '模型' },
+          ] as const
+        ).map(tab => (
+          <Button
+            key={`whale-tab-${tab.id}`}
+            plain
+            label={page === tab.id ? `[${tab.label}]` : tab.label}
+            onPress={() => {
+              void (async () => {
+                const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                  ...(latest.value ?? DEFAULT_PREFS),
+                  panelPage: tab.id,
+                })
+              })()
+            }}
+          />
+        ))}
+      </Box>
+    )
+
+    // 「概览 / 模型」两页，对应原生用量页的两个标签。
+    const overview = data?.overview
+    const cards = overviewCards(overview, data?.daily ?? [], prefsNow.historyDays, data?.total.cost ?? 0)
+    const calendar = calendarHeat(data?.daily ?? [])
+    const rows = modelRows(data?.byModel ?? [])
+
+    // 热力图的色阶：0 档用主题的 inactive，越满越亮。
+    const heatColor = (level: number) =>
+      level === 0
+        ? 'inactive'
+        : level === 1
+          ? 'subtle'
+          : level === 2
+            ? 'suggestion'
+            : level === 3
+              ? 'claude'
+              : 'promptBorder'
+
+    const overviewPage = (
+      <>
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          {cards.map((card, index) => (
+            <Box
+              key={`whale-card-${index}`}
+              flexDirection="column"
+              borderStyle="round"
+              borderDimColor
+              paddingX={1}
+              minWidth={16}
+            >
+              <Text dimColor>{card.label}</Text>
+              <Text bold>{card.value}</Text>
+              {card.hint && <Text dimColor>{card.hint}</Text>}
+            </Box>
+          ))}
+        </Box>
+        {calendar.columns.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            {Array.from({ length: 7 }, (_, weekday) => (
+              <Box key={`whale-heat-${weekday}`} flexDirection="row">
+                {calendar.columns.map((column, columnIndex) => {
+                  const cell = column[weekday]
+                  return (
+                    <Text
+                      key={`whale-heat-${weekday}-${columnIndex}`}
+                      color={cell ? heatColor(cell.level) : undefined}
+                      dimColor={!cell || cell.level === 0}
+                    >
+                      {cell ? '■' : ' '}
+                    </Text>
+                  )
+                })}
+              </Box>
+            ))}
+          </Box>
         )}
-        {today && data && (
-          <Text dimColor>
-            共 {usd(data.total.cost)} ·{' '}
-            {tokens(
-              data.total.input + data.total.cacheRead + data.total.cacheWrite + data.total.output,
-            )}{' '}
-            tok
-          </Text>
+        <Text dimColor>{overviewFooter(overview, data?.total.cost ?? 0)}</Text>
+      </>
+    )
+
+    const modelsPage = (
+      <>
+        {rows.length === 0 ? (
+          <Text dimColor>还没有统计数据</Text>
+        ) : (
+          rows.slice(0, 10).map((row, index) => (
+            <Box key={`whale-mrow-${index}`} flexDirection="column">
+              <Box flexDirection="row" gap={1}>
+                <Text>{clip(row.model, 26)}</Text>
+                <Text color="claude">{barText(row.share)}</Text>
+                <Text dimColor>{tokens(row.tokens)} tok</Text>
+                {row.cost !== null && <Text dimColor>{usd(row.cost)}</Text>}
+              </Box>
+              <Text dimColor>
+                {row.messages.toLocaleString('en-US')} 条
+                {row.cost === null ? ' · 未收录价格' : ''}
+              </Text>
+            </Box>
+          ))
         )}
-        {data && data.byModel.length > 0 && (
-          <Text dimColor>
-            {data.byModel
-              .slice(0, 3)
-              .map(m => `${clip(m.model.replace('claude-', ''), 14)} ${usd(m.cost)}`)
-              .join('  ')}
-          </Text>
-        )}
+        <Text dimColor>{overviewFooter(overview, data?.total.cost ?? 0)}</Text>
       </>
     )
 
@@ -687,27 +790,9 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // 鲸鱼固定在面板右下角：数据一栏在上，鲸鱼独占最后一行并靠右。
-    // 详细视图把「按模型」「上下文明细」接在本地历史之后，控制行留在数据与鲸鱼之间。
-    if (isWide) {
-      return (
-        <Box flexDirection="column">
-          <Box flexDirection="column">
-            <Text bold>Claude 用量</Text>
-            {windows}
-            {session}
-            {byModelSection}
-            {contextSection}
-            {history}
-          </Box>
-          {controls}
-          <Box flexDirection="row" justifyContent="flex-end" width="100%">
-            {whale}
-          </Box>
-        </Box>
-      )
-    }
-
+    // 鲸鱼固定在面板右下角：数据在上，鲸鱼独占最后一行并靠右。
+    // 对齐用显式列宽（bodyColumns）而不是 `100%`：后者要等父容器先解析出宽度，
+    // 面板被压缩时会跟着内容浮动。
     return (
       <Box flexDirection="column">
         <Text bold>Claude 用量</Text>
@@ -715,9 +800,11 @@ export const register: Register = (on, options) => {
         {session}
         {byModelSection}
         {contextSection}
-        {history}
+        {historyHead}
+        {pageTabs}
+        {page === 'models' ? modelsPage : overviewPage}
         {controls}
-        <Box flexDirection="row" justifyContent="flex-end" width="100%">
+        <Box flexDirection="row" justifyContent="flex-end" width={width}>
           {whale}
         </Box>
       </Box>
