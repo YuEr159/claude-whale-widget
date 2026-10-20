@@ -59,8 +59,60 @@ export function countdown(resetsAt: string | undefined, now: number): string {
 /** 把一行文字压到 `max` 个显示宽度以内，超出用省略号。 */
 export function clip(text: string, max: number): string {
   if (max <= 1) return ''
-  if (text.length <= max) return text
-  return `${text.slice(0, max - 1)}…`
+  if (displayWidth(text) <= max) return text
+  // 按显示宽度截，不能按码点数：一个汉字占两格，按 length 截会留下半格。
+  let out = ''
+  let used = 0
+  for (const ch of text) {
+    const w = charWidth(ch)
+    if (used + w > max - 1) break
+    out += ch
+    used += w
+  }
+  return `${out}…`
+}
+
+/** 单个字符占几列：CJK、全角标点与常见表情算两列，其余一列。 */
+function charWidth(ch: string): number {
+  const code = ch.codePointAt(0) ?? 0
+  // 组合附加符不占位
+  if (code >= 0x0300 && code <= 0x036f) return 0
+  if (
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe6f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1f64f) ||
+    (code >= 0x1f900 && code <= 0x1f9ff)
+  ) {
+    return 2
+  }
+  return 1
+}
+
+/**
+ * 一段文字在等宽终端里占几列。
+ *
+ * 表格对齐必须用它而不是 `String.length`：`DeepSeek Flash` 与 `GLM Flash`
+ * 码点数不同、显示宽度也不同，用 `length` 补空格会让第二列歪掉。
+ */
+export function displayWidth(text: string): number {
+  let width = 0
+  for (const ch of text) width += charWidth(ch)
+  return width
+}
+
+/**
+ * 把一个单元格补到指定显示宽度。
+ *
+ * `align: 'right'` 是数字列用的——右对齐时个位对齐，大小一眼可比。
+ */
+export function padCell(text: string, width: number, align: 'left' | 'right' = 'left'): string {
+  const gap = Math.max(0, width - displayWidth(text))
+  return align === 'right' ? `${' '.repeat(gap)}${text}` : `${text}${' '.repeat(gap)}`
 }
 
 /**

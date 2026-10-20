@@ -47,12 +47,36 @@ const PRICES = [
   ['claude-3-haiku', 0.25, 1.25],
 ]
 
+/**
+ * 第三方模型的独立定价规则，与 hooks/pricing.ts 的 `THIRD_PARTY` 一一对应。
+ *
+ * 这一族模型的缓存折扣比例与 Anthropic 完全不同（DeepSeek 2%、Qwen 45%、
+ * Kimi 88%），也都不单独收缓存写入费，所以逐家给数字，不套 1.25x / 0.1x。
+ *
+ * - DeepSeek Flash：官方非高峰价（高峰翻倍，所以算出来是下限）。型号写法在网关里
+ *   不统一（`deepseek-flash` / `DeepSeek-V4.1-Flash-1017` / `deepseek-v4-flash`），
+ *   用「含 deepseek 且含 flash」识别。
+ * - Qwen3.8 27B、Kimi K3：OpenRouter 的基础价（美元 / 每百万 token）。
+ *   本机日志里的这两个名字就是走第三方网关调用的，用它的基础价最接近。
+ */
+const THIRD_PARTY_PRICES = [
+  [
+    /deepseek.*flash|flash.*deepseek/i,
+    { input: 0.15, output: 0.6, cacheWrite: 0, cacheRead: 0.003 },
+  ],
+  [/qwen3\.8-27b|qwen-3\.8-27b/, { input: 0.04, output: 1.35, cacheWrite: 0, cacheRead: 0.018 }],
+  [/kimi[-_ ]?k3\b|moonshot.*k3/, { input: 0.239, output: 11.936, cacheWrite: 0, cacheRead: 0.21 }],
+]
+
 function priceOf(model) {
   const id = model.toLowerCase()
   for (const [prefix, input, output] of PRICES) {
     if (id.startsWith(prefix)) {
       return { input, output, cacheWrite: input * 1.25, cacheRead: input * 0.1 }
     }
+  }
+  for (const [test, p] of THIRD_PARTY_PRICES) {
+    if (test.test(id)) return p
   }
   return undefined
 }
@@ -70,6 +94,9 @@ function dayKey(timestamp) {
 /**
  * 日志里同一条 assistant 消息会被写成多行（流式增量），必须按 message.id 去重，
  * 否则用量会被重复累加几倍。
+ *
+ * 返回每个文件的 `mtimeMs` 与 `size`：增量缓存靠这两个值判断「这个文件上次
+ * 扫过之后有没有变」。它们只是文件系统的元数据，不是路径之外的任何内容。
  */
 function collectFiles(root, days) {
   const cutoff = Date.now() - days * 86_400_000
@@ -88,7 +115,7 @@ function collectFiles(root, days) {
       } else if (entry.name.endsWith('.jsonl')) {
         try {
           const stat = fs.statSync(full)
-          if (stat.mtimeMs >= cutoff) files.push(full)
+          if (stat.mtimeMs >= cutoff) files.push({ path: full, mtimeMs: stat.mtimeMs, size: stat.size })
         } catch {
           /* 单个文件读不到就跳过，不影响整体 */
         }
@@ -100,149 +127,287 @@ function collectFiles(root, days) {
 }
 
 /**
- * @param {string} root  日志根目录（`~/.claude/projects`）
- * @param {number} days  统计最近多少天
+ * 解析**一个**日志文件，返回它贡献的增量。
+ *
+ * 抽成独立函数是为了增量缓存：文件没变就整段跳过，不再读 800 MB。
+ * `seen` 由调用方传入并在文件之间共享——同一条 message.id 可能跨文件重复，
+ * 去重必须跨文件才有意义。
+ *
+ * 返回的每一项都是可加的：天数、模型、逐日逐模型都只累加数字。
  */
-export function aggregate(root, days) {
-  const cutoff = Date.now() - days * 86_400_000
-  const files = collectFiles(root, days)
+function scanFile(file, cutoff, seen) {
+  const out = {
+    byDay: new Map(),
+    byModel: new Map(),
+    byModelCount: new Map(),
+    byHour: new Array(24).fill(0),
+    byTurnDay: new Map(),
+    byDayModel: new Map(),
+    unparsed: 0,
+    skipped: 0,
+    /** 本文件新增进 `seen` 的 message.id，缓存复用时据此补齐跨文件去重。 */
+    seenIds: [],
+  }
+  const bump = (map, key, delta) => map.set(key, (map.get(key) ?? 0) + delta)
 
-  /** 去重键是 message.id；同一条消息可能跨文件重复出现。 */
-  const seen = new Set()
-  const byDay = new Map()
-  const byModel = new Map()
-  // 概览卡片用：模型按「消息条数」排名（含未收录价格的第三方模型，
-  // 只记模型名与条数，不记金额）；按小时统计消息数取峰值。
-  const byModelCount = new Map()
-  const byHour = new Array(24).fill(0)
-  // 逐日轮次（用户输入次数），给 GitHub 式的轮次柱状图用。
-  const byTurnDay = new Map()
-  let unparsed = 0
-  let skipped = 0
-
-  const bucketOf = day => {
-    let bucket = byDay.get(day)
-    if (!bucket) {
-      bucket = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 0 }
-      byDay.set(day, bucket)
-    }
-    return bucket
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return out
   }
 
-  for (const file of files) {
-    let text
+  let start = 0
+  while (start < text.length) {
+    let end = text.indexOf('\n', start)
+    if (end < 0) end = text.length
+    const line = text.slice(start, end)
+    start = end + 1
+    if (line.length === 0) continue
+    // 便宜的预筛：99% 的行既不含 usage 也不是 user 行，先跳过大半，
+    // 省掉 JSON.parse 的开销。
+    const hasUsage = line.includes('"usage"')
+    const hasUser = line.includes('"type":"user"')
+    if (!hasUsage && !hasUser) continue
+    let row
     try {
-      text = fs.readFileSync(file, 'utf8')
+      row = JSON.parse(line)
     } catch {
+      out.unparsed += 1
       continue
     }
-    let start = 0
-    while (start < text.length) {
-      let end = text.indexOf('\n', start)
-      if (end < 0) end = text.length
-      const line = text.slice(start, end)
-      start = end + 1
-      if (line.length === 0) continue
-      // 便宜的预筛：99% 的行既不含 usage 也不是 user 行，先跳过大半，
-      // 省掉 JSON.parse 的开销。
-      const hasUsage = line.includes('"usage"')
-      const hasUser = line.includes('"type":"user"')
-      if (!hasUsage && !hasUser) continue
-      let row
-      try {
-        row = JSON.parse(line)
-      } catch {
-        unparsed += 1
+    // 轮次：一条用户真正输入的消息算一轮。
+    // 工具结果回填的行也标成 user，靠 promptId / toolUseResult 区分。
+    if (row?.type === 'user') {
+      const isToolResult = row.toolUseResult !== undefined || row.promptId === undefined
+      if (!isToolResult) {
+        const day = dayKey(row.timestamp)
+        const stamp = Date.parse(row.timestamp)
+        if (day && !(stamp < cutoff)) bump(out.byTurnDay, day, 1)
+      }
+      continue
+    }
+    if (row?.type !== 'assistant') continue
+    const message = row.message
+    const usage = message?.usage
+    if (!usage) continue
+
+    const day = dayKey(row.timestamp)
+    if (!day) continue
+    // 文件按修改时间粗筛，但同一个文件里可能混着更早的行：逐行再按日期裁一次，
+    // 否则「最近 7 天」里会冒出 20 多天前的数据。
+    const stamp = Date.parse(row.timestamp)
+    if (stamp < cutoff) continue
+
+    const id = message.id
+    if (typeof id === 'string' && id.length > 0) {
+      if (seen.has(id)) {
+        out.skipped += 1
         continue
       }
-      // 轮次：一条用户真正输入的消息算一轮。
-      // 工具结果回填的行也标成 user，靠 promptId / toolUseResult 区分。
-      if (row?.type === 'user') {
-        const isToolResult = row.toolUseResult !== undefined || row.promptId === undefined
-        if (!isToolResult) {
-          const day = dayKey(row.timestamp)
-          const stamp = Date.parse(row.timestamp)
-          if (day && !(stamp < cutoff)) {
-            byTurnDay.set(day, (byTurnDay.get(day) ?? 0) + 1)
-          }
-        }
-        continue
+      seen.add(id)
+      out.seenIds.push(id)
+    }
+
+    const input = Number(usage.input_tokens) || 0
+    const output = Number(usage.output_tokens) || 0
+    const cacheRead = Number(usage.cache_read_input_tokens) || 0
+    const cacheWrite = Number(usage.cache_creation_input_tokens) || 0
+    const model = typeof message.model === 'string' ? message.model : '(unknown)'
+
+    let bucket = out.byDay.get(day)
+    if (!bucket) {
+      bucket = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 0 }
+      out.byDay.set(day, bucket)
+    }
+    bucket.input += input
+    bucket.output += output
+    bucket.cacheRead += cacheRead
+    bucket.cacheWrite += cacheWrite
+    bucket.messages += 1
+
+    // 峰值时段：按本地时区的小时归组。
+    const hour = new Date(row.timestamp).getHours()
+    if (hour >= 0 && hour < 24) out.byHour[hour] += 1
+
+    // 常用模型：所有模型都计数，包括未收录价格的。
+    bump(out.byModelCount, model, 1)
+
+    // 逐模型明细收录**所有**模型：未收录价格的第三方模型也要出现在排行里，
+    // 只是 cost 记 0，由界面标成「未收录价格」——否则模型页在只用第三方
+    // 模型的机器上会整页空白。
+    const price = priceOf(model)
+    const cost = price
+      ? (input * price.input +
+          output * price.output +
+          cacheWrite * price.cacheWrite +
+          cacheRead * price.cacheRead) /
+        1_000_000
+      : 0
+    bucket.cost += cost
+
+    let entry = out.byModel.get(model)
+    if (!entry) {
+      entry = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        messages: 0,
+        // 这个模型是否有价格；界面据此决定显示金额还是「未收录价格」。
+        isPriced: price !== undefined,
       }
-      if (row?.type !== 'assistant') continue
-      const message = row.message
-      const usage = message?.usage
-      if (!usage) continue
+      out.byModel.set(model, entry)
+    }
+    entry.input += input
+    entry.output += output
+    entry.cacheRead += cacheRead
+    entry.cacheWrite += cacheWrite
+    entry.messages += 1
+    entry.cost += cost
 
-      const day = dayKey(row.timestamp)
-      if (!day) continue
-      // 文件按修改时间粗筛，但同一个文件里可能混着更早的行：逐行再按日期裁一次，
-      // 否则「最近 7 天」里会冒出 20 多天前的数据。
-      if (Date.parse(row.timestamp) < cutoff) continue
-
-      const id = message.id
-      if (typeof id === 'string' && id.length > 0) {
-        if (seen.has(id)) {
-          skipped += 1
-          continue
-        }
-        seen.add(id)
+    // 逐日逐模型：只累加「输入（含缓存读）」与「输出」两个口径，
+    // 与模型页柱子要表达的东西一一对应。引擎内部标识不进来。
+    if (!model.startsWith('<') && model !== 'auto' && model !== '(unknown)' && model !== '') {
+      let perDay = out.byDayModel.get(day)
+      if (!perDay) {
+        perDay = new Map()
+        out.byDayModel.set(day, perDay)
       }
-
-      const input = Number(usage.input_tokens) || 0
-      const output = Number(usage.output_tokens) || 0
-      const cacheRead = Number(usage.cache_read_input_tokens) || 0
-      const cacheWrite = Number(usage.cache_creation_input_tokens) || 0
-      const model = typeof message.model === 'string' ? message.model : '(unknown)'
-
-      const bucket = bucketOf(day)
-      bucket.input += input
-      bucket.output += output
-      bucket.cacheRead += cacheRead
-      bucket.cacheWrite += cacheWrite
-      bucket.messages += 1
-
-      // 峰值时段：按本地时区的小时归组。
-      const hour = new Date(row.timestamp).getHours()
-      if (hour >= 0 && hour < 24) byHour[hour] += 1
-
-      // 常用模型：所有模型都计数，包括未收录价格的。
-      byModelCount.set(model, (byModelCount.get(model) ?? 0) + 1)
-
-      // 逐模型明细收录**所有**模型：未收录价格的第三方模型也要出现在排行里，
-      // 只是 cost 记 0，由界面标成「未收录价格」——否则模型页在只用第三方
-      // 模型的机器上会整页空白。
-      const price = priceOf(model)
-      const cost = price
-        ? (input * price.input +
-            output * price.output +
-            cacheWrite * price.cacheWrite +
-            cacheRead * price.cacheRead) /
-          1_000_000
-        : 0
-      bucket.cost += cost
-
-      let entry = byModel.get(model)
-      if (!entry) {
-        entry = {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          cost: 0,
-          messages: 0,
-          // 这个模型是否有价格；界面据此决定显示金额还是「未收录价格」。
-          isPriced: price !== undefined,
-        }
-        byModel.set(model, entry)
+      const inTok = input + cacheRead + cacheWrite
+      const cell = perDay.get(model)
+      if (cell) {
+        cell.input += inTok
+        cell.output += output
+        cell.cost += cost
+      } else {
+        perDay.set(model, { input: inTok, output, cost })
       }
-      entry.input += input
-      entry.output += output
-      entry.cacheRead += cacheRead
-      entry.cacheWrite += cacheWrite
-      entry.messages += 1
-      entry.cost += cost
     }
   }
+  return out
+}
+
+/**
+ * 把一个文件的增量并进总账。
+ *
+ * 增量可以缓存、可以重放，所以合并必须是纯加法：同一批文件重放多少次，
+ * 只要调用方保证每个文件只并一次，结果就与全量扫描一致。
+ */
+function mergeScan(acc, part) {
+  acc.unparsed += part.unparsed
+  acc.skipped += part.skipped
+  part.byHour.forEach((count, hour) => {
+    acc.byHour[hour] += count
+  })
+  for (const [day, b] of part.byDay) {
+    let bucket = acc.byDay.get(day)
+    if (!bucket) {
+      bucket = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, messages: 0 }
+      acc.byDay.set(day, bucket)
+    }
+    bucket.input += b.input
+    bucket.output += b.output
+    bucket.cacheRead += b.cacheRead
+    bucket.cacheWrite += b.cacheWrite
+    bucket.cost += b.cost
+    bucket.messages += b.messages
+  }
+  for (const [model, entry] of part.byModel) {
+    let held = acc.byModel.get(model)
+    if (!held) {
+      held = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 0, isPriced: entry.isPriced }
+      acc.byModel.set(model, held)
+    }
+    held.input += entry.input
+    held.output += entry.output
+    held.cacheRead += entry.cacheRead
+    held.cacheWrite += entry.cacheWrite
+    held.messages += entry.messages
+    held.cost += entry.cost
+  }
+  for (const [model, count] of part.byModelCount) {
+    acc.byModelCount.set(model, (acc.byModelCount.get(model) ?? 0) + count)
+  }
+  for (const [day, turns] of part.byTurnDay) {
+    acc.byTurnDay.set(day, (acc.byTurnDay.get(day) ?? 0) + turns)
+  }
+  for (const [day, perDay] of part.byDayModel) {
+    let held = acc.byDayModel.get(day)
+    if (!held) {
+      held = new Map()
+      acc.byDayModel.set(day, held)
+    }
+    for (const [model, cell] of perDay) {
+      const prev = held.get(model)
+      if (prev) {
+        prev.input += cell.input
+        prev.output += cell.output
+        prev.cost += cell.cost
+      } else {
+        held.set(model, { ...cell })
+      }
+    }
+  }
+}
+
+/**
+ * 一天的用量：轮次（用户输入次数）与消息数。
+ *
+ * 两者分别统计：轮次来自 `type: "user"` 且不是工具回填的行，消息数来自
+ * `type: "assistant"` 且带 usage 的行（已按 message.id 去重）。
+ *
+ * **增量缓存**：`cache` 是上一次扫描留下的按文件指纹（`mtimeMs:size`）索引。
+ * 没变的文件直接取上次的结果，只有新增或改动过的文件才重新读。日志是只追加的，
+ * 一个 400 天窗口里绝大多数文件都不会再变，所以这一步把每次扫描从「读 800 MB」
+ * 降到「读几个刚写过的文件」。缓存只存在内存里（由调用方持有），不落盘。
+ *
+ * @param {string} root  日志根目录（`~/.claude/projects`）
+ * @param {number} days  统计最近多少天
+ * @param {Map<string, {fingerprint: string, part: object}>} [cache]
+ */
+export function aggregate(root, days, cache) {
+  const cutoff = Date.now() - days * 86_400_000
+  const files = collectFiles(root, days)
+  const acc = {
+    byDay: new Map(),
+    byModel: new Map(),
+    byModelCount: new Map(),
+    byHour: new Array(24).fill(0),
+    byTurnDay: new Map(),
+    byDayModel: new Map(),
+    unparsed: 0,
+    skipped: 0,
+  }
+  /** 去重键是 message.id；同一条消息可能跨文件重复出现。 */
+  const seen = new Set()
+  let reused = 0
+  let rescanned = 0
+
+  for (const file of files) {
+    const fingerprint = `${file.mtimeMs}:${file.size}`
+    const held = cache?.get(file.path)
+    if (held && held.fingerprint === fingerprint) {
+      // 没变：并进上次的结果。它见过的 message.id 也要放回 `seen`——
+      // 跨文件去重靠这个集合，缺了它们后面读到的文件会重复计数。
+      for (const id of held.seenIds) seen.add(id)
+      mergeScan(acc, held.part)
+      reused += 1
+      continue
+    }
+    const part = scanFile(file.path, cutoff, seen)
+    // 记下这个文件自己见过的 message.id：缓存复用时要把它们重新放回
+    // `seen`，否则后读的文件会与缓存里的文件重复计数。
+    const seenIds = part.seenIds
+    if (cache) cache.set(file.path, { fingerprint, part, seenIds })
+    mergeScan(acc, part)
+    rescanned += 1
+  }
+
+  const { byDay, byModel, byModelCount, byHour, byTurnDay, byDayModel } = acc
+  const unparsed = acc.unparsed
+  const skipped = acc.skipped
 
   const today = dayKey(new Date().toISOString())
   const daysSorted = [...byDay.keys()].sort()
@@ -319,7 +484,7 @@ export function aggregate(root, days) {
     /** 概览：有消息的会话数、有消息的天数、峰值小时（0–23）、常用模型。 */
     overview: {
       // 一个日志文件对应一个会话（文件名就是 sessionId）；同名的只算一次。
-      sessions: new Set(files.map(file => path.basename(file, '.jsonl'))).size,
+      sessions: new Set(files.map(file => path.basename(file.path, '.jsonl'))).size,
       activeDays: daysSorted.length,
       peakHour,
       peakHourMessages: peakCount,
@@ -333,23 +498,118 @@ export function aggregate(root, days) {
     today: { day: today, ...todayBucket },
     total,
     daily,
-    /** 逐日轮次（用户输入次数），只含有轮次的日子。 */
-    turnsDaily: [...byTurnDay.entries()]
-      .map(([day, turns]) => ({ day, turns }))
+    /**
+     * 逐日轮次与消息数。取「有轮次」与「有消息」两边的并集：
+     * 只补轮次会漏掉纯 assistant 记录的日子，只补消息会漏掉只有提问的日子。
+     */
+    turnsDaily: [...new Set([...byTurnDay.keys(), ...byDay.keys()])]
+      .map(day => ({
+        day,
+        turns: byTurnDay.get(day) ?? 0,
+        messages: byDay.get(day)?.messages ?? 0,
+      }))
       .sort((a, b) => (a.day < b.day ? -1 : 1)),
     byModel: [...byModel.entries()]
       .map(([model, v]) => ({ model, ...v }))
       .sort((a, b) => b.cost - a.cost),
+    /**
+     * 逐日逐模型用量（in = 输入含缓存读/写，out = 输出）。
+     *
+     * 只含非占位模型；零值日不补，界面按窗口自己补 0。
+     */
+    modelDaily: [...byDayModel.entries()]
+      .map(([day, perDay]) => ({
+        day,
+        models: [...perDay.entries()]
+          .map(([model, v]) => ({ model, input: v.input, output: v.output, cost: v.cost }))
+          .sort((a, b) => b.input + b.output - (a.input + a.output)),
+      }))
+      .sort((a, b) => (a.day < b.day ? -1 : 1)),
     skippedDuplicates: skipped,
   }
+}
+
+/**
+ * 把内存里的缓存折成可 JSON 序列化的形状。
+ *
+ * 缓存本来是一堆 Map，JSON 存不下 Map，所以逐层摊平成数组。只含
+ * 「文件路径 → 指纹 + 该文件的数字增量」，没有任何日志正文。
+ */
+function packCache(cache) {
+  const out = []
+  for (const [file, held] of cache) {
+    out.push([
+      file,
+      held.fingerprint,
+      [...held.part.byDay.entries()],
+      [...held.part.byModel.entries()],
+      [...held.part.byModelCount.entries()],
+      held.part.byHour,
+      [...held.part.byTurnDay.entries()],
+      [...held.part.byDayModel.entries()].map(([day, perDay]) => [day, [...perDay.entries()]]),
+      held.part.unparsed,
+      held.part.skipped,
+      held.seenIds,
+    ])
+  }
+  return out
+}
+
+/** `packCache` 的逆操作；形状不对就当作没有缓存。 */
+function unpackCache(raw) {
+  if (!Array.isArray(raw)) return new Map()
+  const cache = new Map()
+  for (const row of raw) {
+    if (!Array.isArray(row) || row.length < 11) continue
+    const [
+      file,
+      fingerprint,
+      byDay,
+      byModel,
+      byModelCount,
+      byHour,
+      byTurnDay,
+      byDayModel,
+      unparsed,
+      skipped,
+      seenIds,
+    ] = row
+    if (typeof file !== 'string' || typeof fingerprint !== 'string') continue
+    cache.set(file, {
+      fingerprint,
+      part: {
+        byDay: new Map(byDay ?? []),
+        byModel: new Map(byModel ?? []),
+        byModelCount: new Map(byModelCount ?? []),
+        byHour: Array.isArray(byHour) ? byHour : new Array(24).fill(0),
+        byTurnDay: new Map(byTurnDay ?? []),
+        byDayModel: new Map((byDayModel ?? []).map(([day, perDay]) => [day, new Map(perDay ?? [])])),
+        unparsed: Number(unparsed) || 0,
+        skipped: Number(skipped) || 0,
+        seenIds: Array.isArray(seenIds) ? seenIds : [],
+      },
+      seenIds: Array.isArray(seenIds) ? seenIds : [],
+    })
+  }
+  return cache
 }
 
 const isMain = process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]))
 if (isMain) {
   const root = process.argv[2]
   const days = Number(process.argv[3]) || 7
+  // 缓存通过 stdin 传入、经 stdout 回传：插件在两次扫描之间把它留在内存里。
+  // 不写任何缓存文件——PRIVACY.md 的「不落盘」承诺因此照旧成立。
+  let cache = new Map()
   try {
-    process.stdout.write(JSON.stringify(aggregate(root, days)))
+    const input = fs.readFileSync(0, 'utf8')
+    if (input.trim().length > 0) cache = unpackCache(JSON.parse(input))
+  } catch {
+    /* 没有 stdin 或内容坏了：退回全量扫描，不影响正确性 */
+  }
+  try {
+    const result = aggregate(root, days, cache)
+    process.stdout.write(JSON.stringify({ ...result, cache: packCache(cache) }))
   } catch (error) {
     process.stdout.write(
       JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),

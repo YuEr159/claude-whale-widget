@@ -13,12 +13,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { costOf, priceOf } from '../hooks/pricing.ts'
-import { clip, countdown, pct, tokens, usd } from '../hooks/format.ts'
+import { clip, countdown, displayWidth, padCell, pct, tokens, usd } from '../hooks/format.ts'
 import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
   countPatchLines,
-  detailOf,
   duration,
   limitRows,
   meterText,
@@ -30,10 +29,12 @@ import {
 import { WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
+  canonicalModelName,
   heatLevel,
   hourLabel,
   isPlaceholderModel,
   maskModel,
+  modelDetailRows,
   modelRows,
   contextPartKind,
   contextParts,
@@ -43,21 +44,87 @@ import {
   rasterizeTurnBars,
   turnBars,
   turnBarsCaption,
-  turnPages,
 } from '../hooks/usage-overview.ts'
-import { contextChartSvg, pageOf, turnChartSvg } from '../hooks/chart-art.ts'
-import { UNPRICED, provenanceNotesFor, usdEstimate } from '../hooks/provenance.ts'
+import {
+  HEAT_CELL,
+  HEAT_OPACITY,
+  HEAT_ZERO_FILL,
+  HEAT_ZERO_OPACITY,
+  contextChartSvg,
+  heatColumnCount,
+  heatWindowDays,
+  modelFill,
+  modelStackSvg,
+  pageOf,
+  turnHeatHeight,
+  turnHeatSvg,
+} from '../hooks/chart-art.ts'
+import { UNPRICED, usdEstimate } from '../hooks/provenance.ts'
+import { FILLS, isLightTheme, panelFillFor } from '../hooks/panel-fill.ts'
 
-test('价格表只认官方模型，缓存按 1.25x / 0.1x', () => {
+test('价格表：官方模型按 1.25x / 0.1x 缓存计，DeepSeek Flash 单独一套', () => {
   const opus = priceOf('claude-opus-5-5')
   assert.ok(opus)
   assert.equal(opus.input, 4)
   assert.ok(Math.abs(opus.cacheWrite - 5) < 1e-9)
   assert.ok(Math.abs(opus.cacheRead - 0.4) < 1e-9)
-  assert.equal(priceOf('deepseek-v4-flash'), undefined)
-  assert.equal(priceOf('qwen3.8-27b'), undefined)
   assert.equal(priceOf('<synthetic>'), undefined)
   assert.equal(priceOf('auto'), undefined)
+
+  // DeepSeek Flash：非高峰价，缓存命中是输入价的 2%，不收缓存写入费。
+  const flash = priceOf('deepseek-flash')
+  assert.ok(flash)
+  assert.equal(flash.input, 0.15)
+  assert.equal(flash.output, 0.6)
+  assert.equal(flash.cacheRead, 0.003)
+  assert.equal(flash.cacheWrite, 0)
+})
+
+test('DeepSeek Flash 的型号写法大小写与前后缀都模糊识别', () => {
+  // 网关里出现过的各种写法都要落到同一条规则上。
+  for (const id of [
+    'deepseek-flash',
+    'DeepSeek-Flash',
+    'DEEPSEEK-FLASH',
+    'deepseek-v4-flash',
+    'DeepSeek-V4.1-Flash-1017',
+    'deepseek-ai/DeepSeek-Flash',
+  ]) {
+    assert.ok(priceOf(id), `${id} 应当被识别为 Flash`)
+    assert.equal(priceOf(id).input, 0.15)
+  }
+  // 不是 Flash 的 DeepSeek 型号仍按未收录处理，不拿 Flash 的价硬套。
+  assert.equal(priceOf('deepseek-v4-pro'), undefined)
+  assert.equal(priceOf('deepseek-chat'), undefined)
+})
+
+test('Qwen 3.8 27B 与 Kimi K3 按 OpenRouter 基础价收录', () => {
+  // 数字来自 OpenRouter 的模型接口，单位已从「每 token」换算成「每百万 token」。
+  const qwen = priceOf('qwen3.8-27b')
+  assert.ok(qwen)
+  assert.equal(qwen.input, 0.04)
+  assert.equal(qwen.output, 1.35)
+  assert.equal(qwen.cacheRead, 0.018, '缓存读是输入价的 45%，不是 Anthropic 的 10%')
+  assert.equal(qwen.cacheWrite, 0, '这类模型不单独收缓存写入费')
+  // 网关会加命名空间前缀，也要认得出来。
+  assert.equal(priceOf('qwen/qwen3.8-27b').input, 0.04)
+
+  const kimi = priceOf('kimi-k3')
+  assert.ok(kimi)
+  assert.equal(kimi.input, 0.239)
+  assert.equal(kimi.output, 11.936)
+  assert.equal(kimi.cacheRead, 0.21)
+  assert.equal(priceOf('moonshotai/kimi-k3').output, 11.936)
+  assert.equal(priceOf('Kimi-K3').input, 0.239)
+
+  // 金额按四类 token 相加，与手算一致。
+  const cost = costOf('qwen3.8-27b', {
+    input: 1_000_000,
+    output: 1_000_000,
+    cacheWrite: 0,
+    cacheRead: 1_000_000,
+  })
+  assert.ok(Math.abs(cost - (0.04 + 1.35 + 0.018)) < 1e-9)
 })
 
 test('长前缀优先匹配', () => {
@@ -239,11 +306,6 @@ test('上下文 breakdown 整形', () => {
   assert.equal(toContextDetail({ categories: [] }), undefined)
 })
 
-test('面板详细程度默认详细', () => {
-  assert.equal(detailOf({}), 'detail')
-  assert.equal(detailOf({ panelDetail: 'simple' }), 'simple')
-})
-
 
 test('用量条摘要按偏好切换口径', () => {
   const view = toUsageView({
@@ -255,14 +317,23 @@ test('用量条摘要按偏好切换口径', () => {
     context: { window: 1_000_000, percent: 12 },
   })
   const now = Date.parse('2026-10-20T12:00:00Z')
-  assert.ok(bandSummary(view, 'window', now).includes('5h 40%'))
+  assert.ok(bandSummary(view, ['window'], now).includes('5h 40%'))
   // 金额一律带估算标记：面板里没有一笔钱来自账单。
-  assert.equal(bandSummary(view, 'session', now), '本会话 ≈$2.00')
-  assert.equal(bandSummary(view, 'cost', now), '上下文 12%')
-  assert.equal(bandSummary(view, 'context', now), '5h 40% · 7d 70%')
+  assert.equal(bandSummary(view, ['session'], now), '本会话 ≈$2.00')
+  assert.equal(bandSummary(view, ['cost'], now), '上下文 12%')
+  assert.equal(bandSummary(view, ['context'], now), '5h 40% · 7d 70%')
   assert.equal(
-    bandSummary(toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } }), 'window', 0),
+    bandSummary(toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } }), ['window'], 0),
     '上下文 33% · 本会话 ≈$0.50',
+  )
+  // 多选：按固定次序拼接，与勾选先后无关；重复项只出现一次。
+  assert.equal(
+    bandSummary(view, ['context', 'window'], now),
+    '5h 40% · 2h00m 后重置 · 5h 40% · 7d 70%',
+  )
+  assert.equal(
+    bandSummary(view, ['window', 'context', 'window'], now),
+    '5h 40% · 2h00m 后重置 · 5h 40% · 7d 70%',
   )
   assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'diff', 'session', 'window'].sort())
 })
@@ -272,10 +343,10 @@ test('代码改动：单独成段、零值省略、其余口径不重复', () =>
   const now = Date.parse('2026-10-20T12:00:00Z')
   const diff = { added: 128, removed: 34 }
 
-  assert.equal(bandSummary(view, 'diff', now, diff), '+128 -34')
-  assert.equal(bandSummary(view, 'diff', now, { added: 0, removed: 0 }), '本会话还没有代码改动')
+  assert.equal(bandSummary(view, ['diff'], now, diff), '+128 -34')
+  assert.equal(bandSummary(view, ['diff'], now, { added: 0, removed: 0 }), '本会话还没有代码改动')
   // 其余口径的摘要里不含改动：增删要分色，由渲染层追加。
-  assert.ok(!bandSummary(view, 'window', now, diff).includes('+128'))
+  assert.ok(!bandSummary(view, ['window'], now, diff).includes('+128'))
   // 只有一边有改动时，零的那一边不显示。
   assert.equal(bandDiffText({ added: 5, removed: 0 }), '+5')
   assert.equal(bandDiffText({ added: 0, removed: 3 }), '-3')
@@ -316,28 +387,110 @@ test('概览与模型页的整形', () => {
   assert.equal(barText(1, 4), '████')
 })
 
+test('模型名归并：同一款模型的几种写法合成一行', () => {
+  // 网关会给同一个模型换着写法记，四种写法都该落到同一个展示名上。
+  for (const id of [
+    'deepseek-flash',
+    'DeepSeek-Flash',
+    'deepseek-v4-flash',
+    'deepseek-v4-1-flash',
+    'deepseek-ai/DeepSeek-Flash',
+  ]) {
+    assert.equal(canonicalModelName(id), 'DeepSeek Flash', `${id} 应当归并为 DeepSeek Flash`)
+  }
+  // 不同档位不合并。
+  assert.equal(canonicalModelName('deepseek-v4-pro'), 'DeepSeek Pro')
+  assert.equal(canonicalModelName('GLM-5.3-Flash'), 'GLM Flash')
+  assert.notEqual(canonicalModelName('GLM-5.3'), 'GLM Flash')
+  assert.equal(canonicalModelName('kimi-k3'), 'Kimi')
+  // 认不出的原样保留，不被吞成一个兜底名。
+  assert.equal(canonicalModelName('probe'), 'probe')
+})
+
+test('模型明细：归并后金额相加，全无价格才是 null', () => {
+  const rows = modelDetailRows([
+    // 同一款 Flash 的两个写法：各自的估算值要加起来。
+    { model: 'deepseek-flash', isPriced: true, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.15, messages: 10 },
+    { model: 'DeepSeek-Flash', isPriced: true, input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0, cost: 0.6, messages: 5 },
+    // 没有价格的模型：金额是 null，不是 0。
+    { model: 'qwen3.8-27b', isPriced: false, input: 500, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 1 },
+    // 占位标识不进表。
+    { model: 'auto', isPriced: false, input: 900, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 9 },
+  ])
+
+  assert.equal(rows.length, 2, '两个 Flash 写法应当合成一行，占位标识被过滤')
+  const flash = rows.find(row => row.model === 'DeepSeek Flash')
+  assert.ok(flash)
+  assert.equal(flash.input, 1_000_000)
+  assert.equal(flash.output, 1_000_000)
+  assert.ok(Math.abs((flash.cost ?? 0) - 0.75) < 1e-9, '两个写法的金额应当相加')
+  assert.deepEqual(flash.aliases.sort(), ['DeepSeek-Flash', 'deepseek-flash'].sort())
+
+  const qwen = rows.find(row => row.model === 'Qwen 27B')
+  assert.ok(qwen)
+  assert.equal(qwen.cost, null, '没有公开价格的模型不该记成 0')
+})
+
+test('表格对齐：按显示宽度补空格，中文与英文混排也不歪', () => {
+  // 中文占两格：`模型` 是 4 列宽，不是 2。
+  assert.equal(displayWidth('模型'), 4)
+  assert.equal(displayWidth('DeepSeek Flash'), 14)
+  assert.equal(displayWidth('abc'), 3)
+  // 补到同一宽度后，显示宽度必须相等——否则表格会歪。
+  const cells = ['模型', 'DeepSeek Flash', 'Qwen 27B', 'GLM Flash']
+  const widths = cells.map(text => displayWidth(padCell(text, 14)))
+  assert.deepEqual(new Set(widths), new Set([14]))
+  // 右对齐：空格在前。
+  assert.equal(padCell('5', 4, 'right'), '   5')
+  assert.equal(padCell('5', 4, 'left'), '5   ')
+  // 超宽时按显示宽度截断，不留半格。
+  assert.ok(displayWidth(clip('DeepSeek Flash', 6)) <= 6)
+})
+
 test('上下文堆叠柱与轮次柱', () => {
-  const { bars, peak } = contextStack([
+  const { bars, peak, yMax } = contextStack([
     { seq: 1, percent: 20, tokens: 1000, at: 0 },
     { seq: 2, percent: 90, tokens: 2000, at: 1 },
   ], 24, 10)
   assert.equal(bars.length, 2)
   assert.equal(peak, 90)
+  // 纵轴自适应：取峰值（90 + 10 缓冲）的 1.1 倍并向上取整到 5 的倍数 = 110 → 夹到 100。
+  assert.equal(yMax, 100)
+  // 柱子的总高是「已用 + 缓冲」占纵轴的比例，不再是恒定 100%。
   for (const bar of bars) {
     const total = bar.segments.reduce((sum, s) => sum + s.ratio, 0)
-    assert.ok(Math.abs(total - 1) < 1e-9)
+    assert.ok(total <= 1 + 1e-9, `柱子溢出：${total}`)
+    assert.ok(total > 0)
   }
   assert.equal(rasterizeStacks(bars, 4).length, 4)
 
   const tb = turnBars([
-    { day: '2026-10-18', turns: 10 },
-    { day: '2026-10-20', turns: 30 },
+    { day: '2026-10-18', turns: 10, messages: 100 },
+    { day: '2026-10-20', turns: 30, messages: 300 },
   ], 4)
   assert.equal(tb.length, 4)
   assert.equal(tb[tb.length - 1].turns, 30)
   assert.equal(tb[tb.length - 1].ratio, 1)
   assert.equal(tb.find(b => b.day === '2026-10-19').turns, 0)
-  assert.ok(turnBarsCaption(tb).includes('峰值 30 轮'))
+  // 图注同时给轮次与消息数：两个量都是读者会问的「这段时间用了多少」。
+  assert.ok(turnBarsCaption(tb).includes('40 轮'))
+  assert.ok(turnBarsCaption(tb).includes('400 条消息'))
+})
+
+test('纵轴自适应：低用量时柱子矮，不必撑满画布', () => {
+  // 整段用量都只有两三成：旧几何下柱子照样满格，看不出「其实很空」。
+  const { bars, yMax } = contextStack([
+    { seq: 1, percent: 20, tokens: 1, at: 0 },
+    { seq: 2, percent: 30, tokens: 1, at: 1 },
+  ], 24, 0)
+  // 峰值 30 → 1.1 倍向上取整到 5 的倍数 = 35。
+  assert.equal(yMax, 35)
+  const heights = bars.map(bar => bar.segments.reduce((sum, s) => sum + s.ratio, 0))
+  // 最高那根顶到 30/35 ≈ 86%，留一点头；矮的那根明显更矮。
+  assert.ok(Math.abs(heights[1] - 30 / 35) < 1e-9)
+  assert.ok(Math.abs(heights[0] - 20 / 35) < 1e-9)
+  // 自适应模式不画空闲段：它会把柱子重新补满，抵消自适应的意义。
+  assert.ok(!bars.some(bar => bar.segments.some(s => s.kind === 'free')))
 })
 
 test('图表翻页：0 贴住最新，越翻越往历史走', () => {
@@ -363,39 +516,118 @@ test('图表翻页：0 贴住最新，越翻越往历史走', () => {
   assert.equal(tiny.pages, 1)
 })
 
-test('轮次图按天分页，窗口天数固定', () => {
+test('轮次热图：窗口固定（默认半年），不再分页', () => {
+  // 数据跨 30 天：窗口给 7 天时就只画最后 7 天，给 180 天时补齐成 180 格。
   const days = [
-    { day: '2026-09-21', turns: 3 },
-    { day: '2026-10-20', turns: 9 },
+    { day: '2026-09-21', turns: 3, messages: 30 },
+    { day: '2026-10-20', turns: 9, messages: 90 },
   ]
-  const newest = turnPages(days, 7, 0)
-  assert.equal(newest.endDay, '2026-10-20')
-  assert.equal(newest.maxOffset, 4) // 9-21..10-20 共 30 天，ceil(30/7)=5 页
-  assert.equal(newest.page, 5)
-
-  const prev = turnPages(days, 7, 1)
-  assert.equal(prev.endDay, '2026-10-13')
-
-  const oldest = turnPages(days, 7, 99)
-  assert.equal(oldest.page, 1)
-
-  // 指定的右端要真的落在图的最后一根柱子上。
-  const bars = turnBars(days, 7, prev.endDay)
-  assert.equal(bars[bars.length - 1].day, '2026-10-13')
+  const bars = turnBars(days, 7)
   assert.equal(bars.length, 7)
-
-  // 没有数据时给今天，且翻不动。
-  const empty = turnPages([], 7, 2)
-  assert.equal(empty.maxOffset, 0)
-  assert.equal(empty.pages, 1)
+  assert.equal(bars[bars.length - 1].day, '2026-10-20')
+  assert.equal(bars[bars.length - 1].turns, 9)
+  // 180 天窗口：缺的日子补 0，时间轴不断档。
+  const half = turnBars(days, 180)
+  assert.equal(half.length, 180)
+  assert.equal(half[half.length - 1].day, '2026-10-20')
+  assert.equal(half.filter(bar => bar.turns === 0).length, 178)
 })
 
 test('两张图在空数据时也给出合法 SVG', () => {
-  for (const svg of [contextChartSvg([], 320), turnChartSvg([], 320, 7)]) {
+  for (const svg of [contextChartSvg([], 320), turnHeatSvg([], 320, 7)]) {
     assert.ok(svg.startsWith('<svg'))
     assert.ok(svg.endsWith('</svg>'))
     assert.ok(!svg.includes('NaN'))
   }
+})
+
+test('轮次热图：方块固定大小、按周分列、色标随当屏最大值自适应', () => {
+  // 每天唯一：日期重复会被按天索引覆盖，测出来的就不是「有高有低」的分布。
+  const days = Array.from({ length: 60 }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 7, 1 + index))
+    return {
+      day: date.toISOString().slice(0, 10),
+      turns: index === 3 ? 40 : 4,
+      messages: index === 3 ? 400 : 40,
+    }
+  })
+  const svg = turnHeatSvg(days, 320)
+
+  // 圆角矩形：rx 与 ry 都在且相等，宽高相等（圆角正方）。
+  // 属性顺序不固定，所以逐条 rect 里按名取，不靠位置。
+  const rects = [...svg.matchAll(/<rect\b([^>]*)>/g)].map(m => m[1])
+  assert.ok(rects.length > 0, '应当画出方块')
+  const attr = (body, name) => {
+    const hit = new RegExp(`${name}="([\\d.]+)"`).exec(body)
+    return hit ? Number(hit[1]) : undefined
+  }
+  for (const body of rects) {
+    assert.equal(attr(body, 'rx'), attr(body, 'ry'), '圆角两轴必须相等')
+    assert.equal(attr(body, 'width'), attr(body, 'height'), '方块必须是正方形')
+    // 方块大小固定：与窗口宽度无关。
+    assert.equal(attr(body, 'width'), HEAT_CELL, '方块边长应当是固定值')
+  }
+  const ys = new Set(rects.map(body => attr(body, 'y')))
+  assert.equal(ys.size, 7, '固定 7 行')
+
+  // 色标自适应：最热的那天用最不透明的一档，其余按比例落在较淡的档。
+  assert.ok(svg.includes(`fill-opacity="${HEAT_OPACITY[4].toFixed(2)}"`), '最热的一格应当最实')
+  assert.ok(svg.includes(`fill-opacity="${HEAT_OPACITY[1].toFixed(2)}"`), '低用量的一格应当较淡')
+
+  // 同样的数据、把峰值拉高，最热色仍出现（说明是按当屏最大值算，不是绝对阈值）
+  const hotter = days.map(d => (d.turns > 0 ? { ...d, turns: d.turns * 10 } : d))
+  const hotSvg = turnHeatSvg(hotter, 320)
+  assert.ok(hotSvg.includes(`fill-opacity="${HEAT_OPACITY[4].toFixed(2)}"`))
+})
+
+test('热图默认按消息数着色，0 值用中性底而不是最淡一档', () => {
+  // 三天里中间那天没有用量：`turnBars` 补出来的 0 值格子必须与「用量最少
+  // 的一格」区分开。窗口跨度由数据自己决定（这里是 3 天）。
+  const days = [
+    { day: '2026-10-18', turns: 5, messages: 500 },
+    { day: '2026-10-20', turns: 1, messages: 10 },
+  ]
+  // 默认口径就是消息数：不看参数也该按消息着色。
+  const svg = turnHeatSvg(days, 320)
+  assert.ok(svg.includes(HEAT_ZERO_FILL), '0 值格子应当用中性底色')
+  assert.ok(
+    svg.includes(`fill-opacity="${HEAT_ZERO_OPACITY.toFixed(2)}"`),
+    '0 值底色应当半透明，深浅主题都成立',
+  )
+  assert.match(svg, /消息 · 最近 \d+ 天 · 共 510 条消息 · 峰值 500 条消息/)
+
+  // 切到轮次口径：图注与量纲跟着变。
+  const turnSvg = turnHeatSvg(days, 320, 'turns')
+  assert.match(turnSvg, /轮次 · 最近 \d+ 天 · 共 6 轮 · 峰值 5 轮/)
+})
+
+test('热图：窗口宽度决定列数，方块大小不变', () => {
+  // 「随窗口宽度增加而色块数量增加」——列数变多、天数变多，方块不放大。
+  assert.ok(heatColumnCount(900) > heatColumnCount(320), '宽面板应当放下更多列')
+  assert.ok(heatColumnCount(320) > heatColumnCount(120), '窄面板列数更少')
+  assert.equal(heatWindowDays(900), heatColumnCount(900) * 7)
+  // 高度只由 7 行固定方块决定，与宽度无关。
+  assert.equal(turnHeatHeight(), turnHeatHeight())
+  assert.equal(HEAT_CELL % 1, 0, '方块边长是整数像素')
+
+  // 同一份数据在两种宽度下：窄的格子更少、方块一样大。
+  // 日期必须逐天递增——重复的日期会被按天索引覆盖，跨度变 1 天。
+  const days = Array.from({ length: 400 }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 0, 1 + index))
+    return {
+      day: date.toISOString().slice(0, 10),
+      turns: index % 7,
+      messages: index,
+    }
+  })
+  const widths = [200, 900].map(width => {
+    const svg = turnHeatSvg(days, width)
+    const rects = [...svg.matchAll(/<rect\b([^>]*)>/g)].map(m => m[1])
+    const cells = rects.map(body => Number(/width="([\d.]+)"/.exec(body)?.[1]))
+    return { count: rects.length, cell: cells[0] }
+  })
+  assert.ok(widths[1].count > widths[0].count, '宽面板应当有更多格子')
+  assert.equal(widths[0].cell, widths[1].cell, '方块大小不随宽度变')
 })
 
 test('上下文分类：按行名归一，只取已用行', () => {
@@ -434,7 +666,7 @@ test('上下文分类：同一类合并，零值与坏值丢弃', () => {
   assert.equal(parts[0].tokens, 3_000)
 })
 
-test('有构成数据时柱子按内容分类堆叠，总高仍是窗口 100%', () => {
+test('有构成数据时柱子按内容分类堆叠，高度按自适应纵轴算', () => {
   const turns = [
     {
       seq: 1,
@@ -450,20 +682,26 @@ test('有构成数据时柱子按内容分类堆叠，总高仍是窗口 100%', 
     // 老记录：没有 parts，退回单色「已用」。
     { seq: 2, percent: 20, tokens: 500, at: 1 },
   ]
-  const { bars } = contextStack(turns, 24, 10)
+  // 峰值 50 + 10 缓冲 = 60 → ×1.1 = 66 → 向上取整到 5 的倍数 = 70。
+  const { bars, yMax } = contextStack(turns, 24, 10)
+  assert.equal(yMax, 70)
   assert.equal(bars.length, 2)
   assert.equal(bars[0].hasParts, true)
   assert.equal(bars[1].hasParts, false)
 
-  // 第一根：三种分类各按 token 比例分掉 50%，再加 10% 缓冲与 40% 空闲。
+  // 第一根：三种分类按 token 比例分掉 50%，再加 10 缓冲；自适应模式不画空闲。
   const kinds = bars[0].segments.map(s => s.kind)
-  assert.deepEqual(kinds, ['messages', 'system', 'memory', 'buffer', 'free'])
-  const sum = bars[0].segments.reduce((acc, s) => acc + s.ratio, 0)
-  assert.ok(Math.abs(sum - 1) < 1e-9)
-  assert.ok(Math.abs(bars[0].segments[0].ratio - 0.3) < 1e-9)
+  assert.deepEqual(kinds, ['messages', 'system', 'memory', 'buffer'])
+  // 三种分类合计 50%，占纵轴 50/70。
+  const usedShare = bars[0].segments
+    .filter(s => s.kind !== 'buffer')
+    .reduce((acc, s) => acc + s.ratio, 0)
+  assert.ok(Math.abs(usedShare - 50 / 70) < 1e-9)
+  // 最大那一类占已用的 3/5。
+  assert.ok(Math.abs(bars[0].segments[0].ratio - (300_000 / 500_000) * (50 / 70)) < 1e-9)
 
-  // 第二根只有「已用 / 缓冲 / 空闲」三段。
-  assert.deepEqual(bars[1].segments.map(s => s.kind), ['used', 'buffer', 'free'])
+  // 第二根只有「已用 / 缓冲」两段，没有空闲补满。
+  assert.deepEqual(bars[1].segments.map(s => s.kind), ['used', 'buffer'])
 })
 
 test('图例跟着这一屏出现过的分段走，顺序稳定', () => {
@@ -480,17 +718,30 @@ test('图例跟着这一屏出现过的分段走，顺序稳定', () => {
   }], 24, 20)
   const legend = stackLegendOf(withParts.bars)
   // 顺序按 CONTEXT_PART_LABELS：system → tools → memory → mcp → agents → messages，
-  // 末尾才是缓冲与空闲。
-  assert.deepEqual(legend.map(item => item.kind), ['system', 'mcp', 'messages', 'buffer', 'free'])
+  // 末尾才是缓冲。自适应纵轴下不再画空闲段，所以图例里也没有它。
+  assert.deepEqual(legend.map(item => item.kind), ['system', 'mcp', 'messages', 'buffer'])
   // 没出现过的分类不进图例。
   assert.ok(!legend.some(item => item.kind === 'memory'))
   assert.ok(!legend.some(item => item.kind === 'tools'))
 })
 
-test('只有老记录时图例退回三段骨架', () => {
+test('只有老记录时图例退回两段骨架', () => {
   const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
   const legend = stackLegendOf(legacy.bars)
-  assert.deepEqual(legend.map(item => item.kind), ['used', 'buffer', 'free'])
+  assert.deepEqual(legend.map(item => item.kind), ['used', 'buffer'])
+})
+
+test('固定纵轴 100% 时保留旧行为：柱子补满，含空闲段', () => {
+  const { bars, yMax } = contextStack(
+    [{ seq: 1, percent: 30, tokens: 1, at: 0 }],
+    24,
+    10,
+    { yMax: 100 },
+  )
+  assert.equal(yMax, 100)
+  assert.deepEqual(bars[0].segments.map(s => s.kind), ['used', 'buffer', 'free'])
+  const sum = bars[0].segments.reduce((acc, s) => acc + s.ratio, 0)
+  assert.ok(Math.abs(sum - 1) < 1e-9, `柱子应当补满到 100%，实际 ${sum}`)
 })
 
 test('金额一律带估算标记，零与缺失值除外', () => {
@@ -503,11 +754,64 @@ test('金额一律带估算标记，零与缺失值除外', () => {
   assert.equal(UNPRICED, '未收录价格')
 })
 
-test('来源脚注只解释出现过的数字', () => {
-  const none = provenanceNotesFor(false, false)
-  assert.deepEqual(none.map(n => n.topic), ['带 ≈ 的金额'])
-  const ctxOnly = provenanceNotesFor(false, true)
-  assert.deepEqual(ctxOnly.map(n => n.topic), ['带 ≈ 的金额', '上下文柱子'])
-  const all = provenanceNotesFor(true, true)
-  assert.deepEqual(all.map(n => n.topic), ['带 ≈ 的金额', '上下文柱子', '本地历史'])
+test('压缩标记：只落在压缩后的第一轮', () => {
+  const turns = [
+    { seq: 1, percent: 20, tokens: 1, at: 0 },
+    { seq: 2, percent: 80, tokens: 1, at: 1, afterCompact: true },
+    { seq: 3, percent: 30, tokens: 1, at: 2 },
+  ]
+  const { bars } = contextStack(turns, 24, 0)
+  assert.deepEqual(bars.map(bar => bar.isAfterCompact), [false, true, false])
+  // 老记录里没有这个字段：一律按「否」处理，不会凭空画线。
+  const legacy = contextStack([{ seq: 1, percent: 10, tokens: 1, at: 0 }], 24, 0)
+  assert.equal(legacy.bars[0].isAfterCompact, false)
+})
+
+test('压缩处画竖向虚线，其余柱子不画', () => {
+  const svg = contextChartSvg(
+    [
+      { seq: 1, percent: 20, tokens: 1, at: 0 },
+      { seq: 2, percent: 80, tokens: 1, at: 1, afterCompact: true },
+    ],
+    320,
+    24,
+    0,
+  )
+  // 虚线是唯一带 dasharray 的元素，数量应当与压缩处一致。
+  const dashes = svg.match(/stroke-dasharray/g) ?? []
+  assert.equal(dashes.length, 1)
+  assert.ok(svg.includes('stroke-dasharray="2 2"'))
+  // 图的说明文字里也要提一句，读屏用户才知道那里发生了什么。
+  assert.ok(svg.includes('1 处压缩'))
+})
+
+test('横轴标出轮次序号，密集时抽稀但首尾保留', () => {
+  const turns = Array.from({ length: 30 }, (_, index) => ({
+    seq: index + 1,
+    percent: 20,
+    tokens: 1,
+    at: index,
+  }))
+  const svg = contextChartSvg(turns, 320, 30, 0)
+  // 最后一个轮次序号一定出现；第一个也在（index 0 必然被 0 % step 选中）。
+  assert.ok(svg.includes('>1</text>'))
+  assert.ok(svg.includes('>30</text>'))
+  // 抽稀生效：30 根柱子、320px 宽时不可能把 30 个数字全画出来。
+  const labels = svg.match(/text-anchor="middle" font-size="9"/g) ?? []
+  assert.ok(labels.length < 30, `标签数 ${labels.length} 似乎没有抽稀`)
+  assert.ok(labels.length >= 4, `标签数 ${labels.length} 太少，横轴读不出位置`)
+})
+
+test('面板底色跟着主题走，读不到时退回深色', () => {
+  assert.equal(isLightTheme('light'), true)
+  assert.equal(isLightTheme('light-daltonized'), true)
+  assert.equal(isLightTheme('dark'), false)
+  assert.equal(isLightTheme(undefined), false)
+
+  const rows = [{ key: 'theme', value: 'light' }]
+  assert.equal(panelFillFor(rows).backgroundColor, FILLS.light.backgroundColor)
+  assert.equal(panelFillFor([{ key: 'theme', value: 'dark' }]).backgroundColor, FILLS.dark.backgroundColor)
+  // 没有 config 行（老引擎、被管理员锁掉）时按深色处理。
+  assert.equal(panelFillFor(undefined).backgroundColor, FILLS.dark.backgroundColor)
+  assert.equal(panelFillFor([]).backgroundColor, FILLS.dark.backgroundColor)
 })

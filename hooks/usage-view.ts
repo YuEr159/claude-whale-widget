@@ -4,7 +4,7 @@
  * 这里不碰 `$`，只做数据整形，方便单测，也避免把 `$` 传进辅助函数
  * （插件校验器要求 `$` 只出现在 `$.noun.method(...)` 的调用点）。
  */
-import type { Prefs } from '../types'
+import type { BandMetric } from '../types'
 import { pct, countdown, diffLines } from './format.ts'
 import { usdEstimate } from './provenance.ts'
 
@@ -86,9 +86,11 @@ export function bandDiffText(diff: BandDiff | undefined): string {
 }
 
 /**
- * 用量条那一行摘要，按偏好切换口径。
+ * 用量条那一行摘要，按选中的几类口径拼接。
  *
- * `diff` 是一个并列口径：选中它时这一条只显示代码改动，还没有改动就明说。
+ * 多选时**按 `BAND_METRIC_OPTIONS` 的固定次序**拼，与勾选先后无关——条子上
+ * 的数字位置一旦随点击顺序漂移，读者就得每次重新找。同一类只出现一次。
+ * `diff` 是一个并列口径：选中它时把代码改动写进摘要，还没有改动就明说。
  * 其余口径下这里**不拼**改动——增删要用两种颜色区分（diffAdded /
  * diffRemoved），拼成纯字符串就没法上色了；改由调用方在同一个 Text 里
  * 用嵌套 Text 追加。
@@ -99,33 +101,44 @@ export function bandDiffText(diff: BandDiff | undefined): string {
  */
 export function bandSummary(
   view: UsageView,
-  metric: Prefs['bandMetric'],
+  metrics: readonly BandMetric[],
   now: number,
   diff?: BandDiff,
 ): string {
   const five = pct(view.fiveHour?.percentUsed)
   const seven = pct(view.sevenDay?.percentUsed)
 
-  switch (metric) {
-    case 'diff':
-      // 专门看改动时可以单独成段；没有改动就明说，而不是留一条空条。
-      return bandDiffText(diff) || '本会话还没有代码改动'
-    case 'session':
-      return `本会话 ${usdEstimate(view.costUsd)}`
-    case 'cost':
-      return `上下文 ${pct(view.contextPercent)}`
-    case 'context':
-      return `5h ${five} · 7d ${seven}`
-    default:
-      // 没有订阅额度窗口时（第三方网关、API key 计费），退回上下文占用 + 会话花费，
-      // 这两项在任何计费方式下都有读数。
-      if (!view.fiveHour && !view.sevenDay) {
-        return `上下文 ${pct(view.contextPercent)} · 本会话 ${usdEstimate(view.costUsd)}`
-      }
-      return view.fiveHour
-        ? `5h ${five} · ${countdown(view.fiveHour.resetsAt, now)} 后重置`
-        : `5h ${five} · 7d ${seven}`
+  const one = (metric: BandMetric): string => {
+    switch (metric) {
+      case 'diff':
+        return bandDiffText(diff) || '本会话还没有代码改动'
+      case 'session':
+        return `本会话 ${usdEstimate(view.costUsd)}`
+      case 'cost':
+        return `上下文 ${pct(view.contextPercent)}`
+      case 'context':
+        return `5h ${five} · 7d ${seven}`
+      default:
+        // 没有订阅额度窗口时（第三方网关、API key 计费），退回上下文占用 + 会话花费，
+        // 这两项在任何计费方式下都有读数。
+        if (!view.fiveHour && !view.sevenDay) {
+          return `上下文 ${pct(view.contextPercent)} · 本会话 ${usdEstimate(view.costUsd)}`
+        }
+        return view.fiveHour
+          ? `5h ${five} · ${countdown(view.fiveHour.resetsAt, now)} 后重置`
+          : `5h ${five} · 7d ${seven}`
+    }
   }
+
+  const seen = new Set<BandMetric>()
+  const parts: string[] = []
+  for (const option of BAND_METRIC_OPTIONS) {
+    if (!metrics.includes(option.value) || seen.has(option.value)) continue
+    seen.add(option.value)
+    const text = one(option.value)
+    if (text.length > 0) parts.push(text)
+  }
+  return parts.join(' · ')
 }
 
 /** 面板气泡里的三行。 */
@@ -137,12 +150,18 @@ export function bubbleLines(view: UsageView, now: number): string[] {
   ].filter(line => line.length > 0)
 }
 
-/** 用量条显示口径的选择项，面板与默认值共用。 */
-export const BAND_METRIC_OPTIONS: ReadonlyArray<{ value: Prefs['bandMetric']; label: string }> = [
+/**
+ * 用量条能显示的口径，面板与默认值共用。
+ *
+ * 这几项的次序就是拼接口径的次序——读者选了「额度窗口」与「代码改动」时，
+ * 条子上先出现额度、再出现改动，不会因为勾选先后而变。`diff` 与 `window`
+ * 互斥，见 `BAND_METRIC_OPTIONS` 的调用方。
+ */
+export const BAND_METRIC_OPTIONS: ReadonlyArray<{ value: BandMetric; label: string }> = [
   { value: 'window', label: '额度窗口' },
-  { value: 'session', label: '本会话花费' },
-  { value: 'cost', label: '上下文占用' },
   { value: 'context', label: '5h + 7d' },
+  { value: 'cost', label: '上下文占用' },
+  { value: 'session', label: '本会话花费' },
   { value: 'diff', label: '代码改动' },
 ]
 
