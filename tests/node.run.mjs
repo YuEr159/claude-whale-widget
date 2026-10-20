@@ -17,8 +17,6 @@ import { clip, countdown, pct, tokens, usd } from '../hooks/format.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
-  contextHeadline,
-  contextRowText,
   countPatchLines,
   detailOf,
   duration,
@@ -236,11 +234,8 @@ test('上下文 breakdown 整形', () => {
   assert.ok(detail)
   if (!detail) return
   assert.equal(detail?.rows.length, 2)
-  assert.deepEqual(detail?.grid[0][0], { name: 'Messages', color: 'promptBorder', isFilled: true })
-  assert.equal(detail?.grid[0][1].isFilled, false)
-  assert.ok(contextHeadline(detail).includes('上下文 50%'))
+  assert.deepEqual(detail?.rows[0], { name: 'Messages', tokens: 40_000, kind: 'used' })
   assert.ok(windowSourceText(detail).includes('模型自身上限'))
-  assert.ok(contextRowText(detail.rows[0]).includes('(40%)'))
   assert.equal(toContextDetail({ categories: [] }), undefined)
 })
 
@@ -491,10 +486,10 @@ test('金额一律带估算标记，零与缺失值除外', () => {
 })
 
 test('来源脚注只解释出现过的数字', () => {
-  const none = provenanceNotesFor(false, false, false)
+  const none = provenanceNotesFor(false, false)
   assert.deepEqual(none.map(n => n.topic), ['带 ≈ 的金额'])
-  const ctxOnly = provenanceNotesFor(false, true, true)
-  assert.deepEqual(ctxOnly.map(n => n.topic), ['带 ≈ 的金额', '上下文柱子', '上下文明细'])
-  const all = provenanceNotesFor(true, true, true)
-  assert.deepEqual(all.map(n => n.topic), ['带 ≈ 的金额', '上下文柱子', '上下文明细', '本地历史'])
+  const ctxOnly = provenanceNotesFor(false, true)
+  assert.deepEqual(ctxOnly.map(n => n.topic), ['带 ≈ 的金额', '上下文柱子'])
+  const all = provenanceNotesFor(true, true)
+  assert.deepEqual(all.map(n => n.topic), ['带 ≈ 的金额', '上下文柱子', '本地历史'])
 })
