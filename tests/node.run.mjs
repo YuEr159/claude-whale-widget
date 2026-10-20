@@ -262,14 +262,15 @@ test('面板详细程度默认详细', () => {
   assert.equal(detailOf({ panelDetail: 'simple' }), 'simple')
 })
 
-test('常驻条用像素女仆：40×40、硬边、无位图', () => {
+test('常驻条用极简像素女仆：16×15 格、path 合并', () => {
   const svg = whaleBandSvg('idle')
   assert.ok(svg.startsWith('<svg'))
   assert.ok(svg.endsWith('</svg>'))
-  assert.ok(svg.includes('viewBox="0 0 40 40"'))
+  assert.ok(svg.includes('viewBox="0 0 64 60"'))
   assert.ok(svg.includes('shape-rendering="crispEdges"'))
   assert.ok(!svg.includes('<image'))
   assert.ok(!svg.includes('base64'))
-  assert.ok(svg.length < 30000)
-  assert.ok(whaleBandSvg('working').includes('#9fb0d8'))
+  assert.ok(svg.length < 2000)
+  assert.ok(!whaleBandSvg('idle').includes('<rect width="64"'))
+  assert.ok(whaleBandSvg('sleep').includes('<rect width="64" height="60"'))
 })

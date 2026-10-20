@@ -337,8 +337,8 @@ export const register: Register = (on, options) => {
         <Svg
           source={whaleBandSvg(mood)}
           alt={`小鲸鱼：${summary}`}
-          width={36}
-          height={36}
+          width={48}
+          height={45}
         />
         <Box key="whale-band-fill" flexGrow={1} />
         <Text dimColor>{summary}</Text>

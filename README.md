@@ -11,8 +11,8 @@ Claude Code 桌面端的小鲸鱼挂件：**prompt 上方常驻一条**，点开
 🐳                                             5h 23% · 2h13m 后重置  [面板]
 ```
 
-常驻条里是**像素风的二次元女仆**（40×40 手绘网格，纯矢量、放大不发虚），
-配色取自原版立绘（蓝发、白围裙）；面板里仍是原版素材内嵌的立绘。
+常驻条里是**极简像素的二次元女仆**：16×15 格、纯矢量、path 合并，画法照抄
+桌面端的 Clawd（头身比 1.5:1）；面板里仍是原版素材内嵌的立绘。
 
 ## 显示什么
 
@@ -107,7 +107,7 @@ node --test tests/node.run.mjs          # 不依赖 CLI 的等价测试
 
 面板里的小鲸鱼原图来自 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MIT），
 按显示尺寸重采样后内嵌进 SVG。常驻条的像素女仆是照着原图配色另行绘制的
-40×40 网格。完整署名与许可见 [NOTICE.md](NOTICE.md)。
+16×15 网格。完整署名与许可见 [NOTICE.md](NOTICE.md)。
 
 ## 隐私
 

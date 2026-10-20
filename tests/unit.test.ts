@@ -316,17 +316,17 @@ test('面板详细程度：缺字段按默认详细读', () => {
   expect(detailOf({ panelDetail: 'detail' })).toBe('detail')
 })
 
-test('常驻条用像素女仆：40×40、硬边、无位图', () => {
+test('常驻条用极简像素女仆：16×15 格、path 合并', () => {
   const svg = whaleBandSvg('idle')
   expect(svg.startsWith('<svg')).toBe(true)
   expect(svg.endsWith('</svg>')).toBe(true)
-  expect(svg).toContain('viewBox="0 0 40 40"')
+  expect(svg).toContain('viewBox="0 0 64 60"')
   expect(svg).toContain('shape-rendering="crispEdges"')
   // 纯矢量：没有内嵌位图，尺寸远小于 Svg 的 source 上限
   expect(svg).not.toContain('<image')
   expect(svg).not.toContain('base64')
-  expect(svg.length).toBeLessThan(30000)
-  // 上班时多两滴汗
-  expect(whaleBandSvg('working')).toContain('#9fb0d8')
-  expect(whaleBandSvg('idle')).not.toContain('y="8" width="1" height="2"')
+  expect(svg.length).toBeLessThan(2000)
+  // 情绪只叠一层色，不新增彩色格子
+  expect(whaleBandSvg('idle')).not.toContain('<rect width="64"')
+  expect(whaleBandSvg('sleep')).toContain('<rect width="64" height="60"')
 })
