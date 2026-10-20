@@ -15,17 +15,31 @@
  */
 import type { Register } from 'claude-code'
 
-import type { LocalUsage, ModelSpend, Prefs, ScanRecord, SessionTotals, TurnSpend } from '../types'
+import type {
+  ContextTurn,
+  LocalUsage,
+  ModelSpend,
+  Prefs,
+  ScanRecord,
+  SessionTotals,
+  TurnSpend,
+} from '../types'
 import { costOf } from './pricing.ts'
 import { clip, pct, tokens, usd, countdown } from './format.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
 import {
   barText,
-  calendarHeat,
+  contextStack,
   maskModel,
   modelRows,
   overviewCards,
   overviewFooter,
+  rasterizeStacks,
+  rasterizeTurnBars,
+  stackCaption,
+  stackColor,
+  turnBars,
+  turnBarsCaption,
 } from './usage-overview.ts'
 import {
   PANEL_DETAIL_OPTIONS,
@@ -80,6 +94,9 @@ const PANEL_REFRESH_MS = 30_000
 
 /** 用户点了「刷新」时置真，下一次定时检查会忽略间隔立即扫。 */
 let isScanForced = false
+
+/** 逐轮上下文占比最多保留多少轮。 */
+const CONTEXT_TURNS_KEPT = 60
 
 /** 扫描进行中的互斥标记：避免定时检查与手动刷新同时启动两个 node 进程。 */
 let isScanning = false
@@ -233,6 +250,26 @@ export const register: Register = (on, options) => {
         addModelSpend(heldByModel.value ?? [], entry),
       )
 
+      // 逐轮上下文占比：面板据此画堆叠柱状图。
+      // 只保留最近 60 轮——再长的历史在面板里也画不下，而状态是会话级的，
+      // 没必要无限增长。
+      const heldContext = await $.state.get({ plugin: 'whale-usage', key: 'contextTurns' } as const)
+      const contextTurns: ContextTurn[] = heldContext.value ?? []
+      const live = await $.session.usage().catch(() => undefined)
+      const percent = toUsageView(live).contextPercent
+      if (percent !== undefined) {
+        const usedTokens =
+          usage.input_tokens +
+          usage.cache_read_input_tokens +
+          usage.cache_creation_input_tokens +
+          usage.output_tokens
+        const history = [
+          ...contextTurns,
+          { seq: spend.seq, percent, tokens: usedTokens, at: spend.at },
+        ].slice(-CONTEXT_TURNS_KEPT)
+        await $.state.set({ plugin: 'whale-usage', key: 'contextTurns' } as const, history)
+      }
+
       const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
       if ((heldPrefs.value ?? DEFAULT_PREFS).isTurnCostOn) {
         const label = cost === undefined ? '未收录模型' : usd(cost)
@@ -368,6 +405,8 @@ export const register: Register = (on, options) => {
     const totals = heldTotals.value ?? EMPTY_TOTALS
     const heldByModel = await $.state.get({ plugin: 'whale-usage', key: 'byModel' } as const)
     const byModel = heldByModel.value ?? []
+    const heldContextTurns = await $.state.get({ plugin: 'whale-usage', key: 'contextTurns' } as const)
+    const contextTurns = heldContextTurns.value ?? []
 
     const mood = moodOf(view.fiveHour?.percentUsed ?? view.sevenDay?.percentUsed, false)
     const lines = bubbleLines(view, now)
@@ -480,6 +519,49 @@ export const register: Register = (on, options) => {
           ))}
           {unpricedNote(modelSpends) && <Text dimColor>{unpricedNote(modelSpends)}</Text>}
         </>
+      ) : null
+
+    // 上下文占比的堆叠柱状图：每根柱子是一轮，柱内按「已用 / 压缩缓冲 / 空闲」
+    // 分段堆叠。高度按窗口的 100% 算，所以柱子之间的高低差直接就是占比走势。
+    const bufferPct =
+      contextDetail && contextDetail.rawMaxTokens > 0 && contextDetail.autoCompactThreshold
+        ? ((contextDetail.rawMaxTokens - contextDetail.autoCompactThreshold) /
+            contextDetail.rawMaxTokens) *
+          100
+        : 0
+    const stacks = contextStack(contextTurns, 24, Math.max(0, bufferPct))
+    const stackRows = width >= 60 ? 8 : 6
+    const stackGrid = rasterizeStacks(stacks.bars, stackRows)
+    const contextChart =
+      stacks.bars.length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold dimColor>
+            上下文占比
+          </Text>
+          {stackGrid.map((line, rowIndex) => (
+            <Box key={`whale-stack-${rowIndex}`} flexDirection="row">
+              {line.map((bar, barIndex) => (
+                <Text
+                  key={`whale-stack-${rowIndex}-${barIndex}`}
+                  color={stackColor(bar[0] ?? null)}
+                >
+                  {/* 空闲段用 `·` 而不是空格：深色背景下一根柱子要有可见的轮廓，
+                      否则只有「已用」那一段悬空，看不出柱子的总量。 */}
+                  {bar[0] === 'used' ? '█' : bar[0] === 'buffer' ? '▒' : '·'}
+                </Text>
+              ))}
+            </Box>
+          ))}
+          <Box flexDirection="row" gap={1}>
+            <Text color="claude">█</Text>
+            <Text dimColor>已用</Text>
+            <Text color="subtle">█</Text>
+            <Text dimColor>压缩缓冲</Text>
+            <Text color="inactive">█</Text>
+            <Text dimColor>空闲</Text>
+          </Box>
+          <Text dimColor>{stackCaption(stacks.bars.length, stacks.peak)}</Text>
+        </Box>
       ) : null
 
     // 上下文明细：原生 /context 的网格 + 逐项。只有拿到 breakdown 才画。
@@ -597,7 +679,6 @@ export const register: Register = (on, options) => {
     // 「概览 / 模型」两页，对应原生用量页的两个标签。
     const overview = data?.overview
     const cards = overviewCards(overview, data?.daily ?? [], prefsNow.historyDays, data?.total.cost ?? 0)
-    const calendar = calendarHeat(data?.daily ?? [])
     const rows = modelRows(data?.byModel ?? [])
 
     // 热力图的色阶：0 档用主题的 inactive，越满越亮。
@@ -611,6 +692,11 @@ export const register: Register = (on, options) => {
             : level === 3
               ? 'claude'
               : 'promptBorder'
+
+    // 轮次历史：GitHub 贡献图那种「每天一根柱」，柱高＝当天轮次。
+    const turnHistory = turnBars(data?.turnsDaily ?? [], prefsNow.historyDays)
+    const turnRows = 6
+    const turnGrid = rasterizeTurnBars(turnHistory, turnRows)
 
     const overviewPage = (
       <>
@@ -630,24 +716,25 @@ export const register: Register = (on, options) => {
             </Box>
           ))}
         </Box>
-        {calendar.columns.length > 0 && (
+        {turnHistory.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            {Array.from({ length: 7 }, (_, weekday) => (
-              <Box key={`whale-heat-${weekday}`} flexDirection="row">
-                {calendar.columns.map((column, columnIndex) => {
-                  const cell = column[weekday]
-                  return (
-                    <Text
-                      key={`whale-heat-${weekday}-${columnIndex}`}
-                      color={cell ? heatColor(cell.level) : undefined}
-                      dimColor={!cell || cell.level === 0}
-                    >
-                      {cell ? '■' : ' '}
-                    </Text>
-                  )
-                })}
+            <Text bold dimColor>
+              轮次历史
+            </Text>
+            {turnGrid.map((line, rowIndex) => (
+              <Box key={`whale-turn-${rowIndex}`} flexDirection="row">
+                {line.map((cell, index) => (
+                  <Text
+                    key={`whale-turn-${rowIndex}-${index}`}
+                    color={cell === 'bar' ? 'claude' : 'inactive'}
+                    dimColor={cell !== 'bar'}
+                  >
+                    {cell === 'bar' ? '█' : '▁'}
+                  </Text>
+                ))}
               </Box>
             ))}
+            <Text dimColor>{turnBarsCaption(turnHistory)}</Text>
           </Box>
         )}
         <Text dimColor>{overviewFooter(overview, data?.total.cost ?? 0)}</Text>
@@ -798,6 +885,7 @@ export const register: Register = (on, options) => {
         <Text bold>Claude 用量</Text>
         {windows}
         {session}
+        {contextChart}
         {byModelSection}
         {contextSection}
         {historyHead}

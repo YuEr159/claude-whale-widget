@@ -37,6 +37,11 @@ import {
   isPlaceholderModel,
   maskModel,
   modelRows,
+  contextStack,
+  rasterizeStacks,
+  rasterizeTurnBars,
+  turnBars,
+  turnBarsCaption,
 } from '../hooks/usage-overview.ts'
 
 test('价格表只认官方模型，缓存按 1.25x / 0.1x', () => {
@@ -289,4 +294,28 @@ test('概览与模型页的整形', () => {
   assert.equal(rows[0].cost, null)
   assert.equal(rows[0].share, 1)
   assert.equal(barText(1, 4), '████')
+})
+
+test('上下文堆叠柱与轮次柱', () => {
+  const { bars, peak } = contextStack([
+    { seq: 1, percent: 20, tokens: 1000, at: 0 },
+    { seq: 2, percent: 90, tokens: 2000, at: 1 },
+  ], 24, 10)
+  assert.equal(bars.length, 2)
+  assert.equal(peak, 90)
+  for (const bar of bars) {
+    const total = bar.segments.reduce((sum, s) => sum + s.ratio, 0)
+    assert.ok(Math.abs(total - 1) < 1e-9)
+  }
+  assert.equal(rasterizeStacks(bars, 4).length, 4)
+
+  const tb = turnBars([
+    { day: '2026-10-18', turns: 10 },
+    { day: '2026-10-20', turns: 30 },
+  ], 4)
+  assert.equal(tb.length, 4)
+  assert.equal(tb[tb.length - 1].turns, 30)
+  assert.equal(tb[tb.length - 1].ratio, 1)
+  assert.equal(tb.find(b => b.day === '2026-10-19').turns, 0)
+  assert.ok(turnBarsCaption(tb).includes('峰值 30 轮'))
 })
