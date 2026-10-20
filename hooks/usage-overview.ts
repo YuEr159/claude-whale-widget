@@ -36,19 +36,17 @@ export function hourLabel(hour: number | null): string {
 }
 
 /**
- * 模型名的脱敏写法：保留前三位与末尾，中间用 `*`。
+ * 模型名在卡片里的写法。
  *
- * 原生用量页也这么做（`Dee**** 4 Flash`）。这里的目的不是隐藏模型身份，
- * 而是避免长 id 撑破卡片；模型全名在「模型」页里完整显示。
+ * 原生用量页会把中间几位打成 `*`（`Dee**** 4 Flash`），这里不跟：数据来自
+ * 本机日志，没有任何要藏的东西，打码只会让人认不出是哪个模型、还把「这是
+ * 匿名数据」的意思误传给读者。名字太长撑破卡片时才截断，并且是截断而不是
+ * 打码——读者至少知道它被截了。
  */
 export function maskModel(model: string | null): string {
   if (!model) return '—'
   const text = model.replace(/^claude-/, '')
-  if (text.length <= 6) return text
-  const head = text.slice(0, 3)
-  const tail = text.slice(-4)
-  const stars = '*'.repeat(Math.min(Math.max(text.length - 7, 3), 6))
-  return `${head}${stars} ${tail}`
+  return text.length > 18 ? `${text.slice(0, 17)}…` : text
 }
 
 /** 概览页的四张卡。`windowDays` 用于标注统计范围。 */

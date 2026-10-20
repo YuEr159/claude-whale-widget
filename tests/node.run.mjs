@@ -371,7 +371,7 @@ test('鲸鱼尺寸连续，高度严格按画布比例且不低于最小高度',
 test('概览与模型页的整形', () => {
   assert.equal(hourLabel(17), '5 PM')
   assert.equal(hourLabel(0), '12 AM')
-  assert.ok(maskModel('deepseek-v4-flash').includes('*'))
+  assert.equal(maskModel('deepseek-v4-flash'), 'deepseek-v4-flash')
   assert.equal(heatLevel(90, 100), 4)
   assert.equal(heatLevel(0, 100), 0)
   assert.ok(isPlaceholderModel('auto'))
