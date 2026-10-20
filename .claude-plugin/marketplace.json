@@ -1,0 +1,16 @@
+{
+  "name": "whale-usage-marketplace",
+  "owner": {
+    "name": "YuEr159",
+    "url": "https://github.com/YuEr159"
+  },
+  "plugins": [
+    {
+      "name": "whale-usage",
+      "source": "./",
+      "description": "Claude 版小鲸鱼挂件：prompt 上方常驻一条，侧边面板看额度窗口、会话花费、上下文占用与本地用量",
+      "version": "0.1.0",
+      "license": "MIT"
+    }
+  ]
+}

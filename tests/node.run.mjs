@@ -14,7 +14,21 @@ import { test } from 'node:test'
 
 import { costOf, priceOf } from '../hooks/pricing.ts'
 import { clip, countdown, pct, tokens, usd } from '../hooks/format.ts'
-import { bandSummary, toUsageView } from '../hooks/usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
+import {
+  addModelSpend,
+  contextHeadline,
+  contextRowText,
+  countPatchLines,
+  detailOf,
+  duration,
+  limitRows,
+  meterText,
+  sortModelSpends,
+  toContextDetail,
+  unpricedNote,
+  windowSourceText,
+} from '../hooks/usage-detail.ts'
 import { moodOf, whaleSvg } from '../hooks/whale-art.ts'
 
 test('价格表只认官方模型，缓存按 1.25x / 0.1x', () => {
@@ -139,4 +153,111 @@ test('SVG 合法、文字转义、动画可选', () => {
   assert.ok(!svg.includes('<b>'))
   assert.ok(!whaleSvg('sleep', ['休息'], { isAnimating: false }).includes('animateTransform'))
   assert.ok(whaleSvg('working', ['x']).includes('animateTransform'))
+})
+
+test('数据新鲜度：刚更新、分钟、小时、过期判定', () => {
+  const now = 1_000_000
+  const never = freshnessOf(null, now, 300_000)
+  assert.equal(never.text, '尚未统计')
+  assert.equal(never.isStale, false)
+
+  assert.equal(freshnessOf(now - 30_000, now, 300_000).text, '刚刚更新')
+
+  const five = freshnessOf(now - 5 * 60_000, now, 300_000)
+  assert.equal(five.text, '5 分钟前')
+  assert.equal(five.isStale, false)
+
+  assert.equal(freshnessOf(now - 11 * 60_000, now, 300_000).isStale, true)
+  assert.equal(freshnessOf(now - 90 * 60_000, now, 300_000).text, '1 小时前')
+  assert.equal(freshnessOf(now - 99 * 60_000, now, 0).isStale, false)
+})
+
+test('上方条口径选项覆盖全部四种取值', () => {
+  assert.deepEqual(
+    BAND_METRIC_OPTIONS.map(o => o.value).sort(),
+    ['context', 'cost', 'session', 'window'].sort(),
+  )
+})
+
+test('额度窗口按原生 /usage 的标题与顺序排列', () => {
+  const rows = limitRows([
+    { kind: 'seven_day', percentUsed: 70 },
+    { kind: 'five_hour', percentUsed: 40 },
+    { kind: 'seven_day_sonnet', percentUsed: 22 },
+    { kind: 'spend_limit', percentUsed: 88 },
+  ])
+  assert.deepEqual(rows.map(r => r.title), [
+    'Current session',
+    'Current week (all models)',
+    'Current week (Sonnet only)',
+    'spend_limit',
+  ])
+})
+
+test('额度条、时长、diff 计行', () => {
+  assert.equal(meterText(50), '█████░░░░░')
+  assert.equal(meterText(140), '██████████')
+  assert.equal(duration(3_725_000), '1h 2m 5s')
+  assert.deepEqual(
+    countPatchLines([{ lines: ['@@ x @@', '--- a', '+++ b', ' same', '-old', '+new', '+more'] }]),
+    { added: 2, removed: 1 },
+  )
+})
+
+test('按模型累加与排序', () => {
+  const one = addModelSpend([], {
+    model: 'claude-opus-5-5', input: 100, output: 50, cacheRead: 10, cacheWrite: 5, cost: 0.5, turns: 1,
+  })
+  const two = addModelSpend(one, {
+    model: 'claude-opus-5-5', input: 200, output: 60, cacheRead: 0, cacheWrite: 0, cost: 0.25, turns: 1,
+  })
+  assert.equal(two[0].input, 300)
+  assert.ok(Math.abs((two[0].cost ?? 0) - 0.75) < 1e-9)
+  assert.equal(two[0].turns, 2)
+
+  const sorted = sortModelSpends([
+    { model: 'unknown-x', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: null, turns: 9 },
+    { model: 'claude-opus', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 2, turns: 1 },
+  ])
+  assert.equal(sorted[0].model, 'claude-opus')
+  assert.ok(unpricedNote(sorted)?.includes('unknown-x'))
+})
+
+test('上下文 breakdown 整形', () => {
+  const detail = toContextDetail({
+    categories: [
+      { name: 'Messages', tokens: 40_000, kind: 'used', color: 'promptBorder' },
+      { name: 'Free space', tokens: 50_000, kind: 'free', color: 'inactive' },
+    ],
+    totalTokens: 50_000,
+    rawMaxTokens: 100_000,
+    percentage: 50,
+    autocompactSource: 'auto',
+    isAutoCompactEnabled: true,
+    autoCompactThreshold: 90_000,
+    model: 'Opus 5.5',
+    gridRows: [[
+      { categoryName: 'Messages', color: 'promptBorder', isFilled: true },
+      { categoryName: 'Free space', color: 'inactive', isFilled: false },
+    ]],
+    memoryFiles: [{ path: '/x/CLAUDE.md', type: 'Project', tokens: 1200 }],
+    mcpTools: [{ name: 'mcp__linear__issue', serverName: 'linear', tokens: 800 }],
+    agents: [{ agentType: 'Explore', source: 'builtin', tokens: 300 }],
+    skills: { totalSkills: 10, includedSkills: 4, tokens: 900 },
+    slashCommands: { totalCommands: 6, includedCommands: 6, tokens: 400 },
+  })
+  assert.ok(detail)
+  if (!detail) return
+  assert.equal(detail?.rows.length, 2)
+  assert.deepEqual(detail?.grid[0][0], { name: 'Messages', color: 'promptBorder', isFilled: true })
+  assert.equal(detail?.grid[0][1].isFilled, false)
+  assert.ok(contextHeadline(detail).includes('上下文 50%'))
+  assert.ok(windowSourceText(detail).includes('模型自身上限'))
+  assert.ok(contextRowText(detail.rows[0]).includes('(40%)'))
+  assert.equal(toContextDetail({ categories: [] }), undefined)
+})
+
+test('面板详细程度默认详细', () => {
+  assert.equal(detailOf({}), 'detail')
+  assert.equal(detailOf({ panelDetail: 'simple' }), 'simple')
 })

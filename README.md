@@ -13,15 +13,34 @@ Claude Code 桌面端的小鲸鱼挂件：**prompt 上方常驻一条**，点开
 
 ## 显示什么
 
+面板分「简洁」和「详细」两档，默认详细——详细视图把 Claude 原生 `/usage`
+与 `/context` 两块面的字段都搬了过来。
+
 | 数据 | 来源 | 说明 |
 |---|---|---|
 | **额度窗口 5h / 7d** | `$.session.usage()` | 订阅账号的 5 小时 / 7 天窗口百分比与重置倒计时 |
+| **全部额度窗口** | `$.session.usage().rateLimits` | 详细视图按原生标题逐条列：Current session、Current week (all models)、Current week (Sonnet only)，网关窗口原样列出，每条配一条方块进度条 |
 | **会话花费** | `$.session.usage().cost` | 本会话累计美元数（`/cost` 口径） |
-| **每轮消耗** | `turn.complete` 事件 | 每轮结束后的真实 token，按官方价格估算并弹提示 |
+| **会话时长 / 轮次 / 代码增删** | `turn.complete`、`tool.call` | 墙钟时长按轮累加；Edit / Write 只数 diff 的增删行，不保留行内容 |
+| **按模型用量** | `turn.complete` | 每个模型的 token、估算金额、轮次，按花费降序 |
 | **上下文占用** | `$.session.usage().context` | 上下文窗口已用百分比与 token 数 |
+| **上下文明细** | `$.session.usage({ breakdown })` | 原生 `/context` 的 10×10 网格 + 逐项（系统提示、消息、空闲、压缩缓冲），以及记忆文件、MCP 工具、自定义 agent、技能与斜杠命令的计数 |
+| **每轮消耗** | `turn.complete` 事件 | 每轮结束后的真实 token，按官方价格估算；默认不弹提示，可在面板打开 |
 | **本地历史用量** | `~/.claude/projects/*.jsonl` | 今日 / 最近 N 天的 token 与估算金额，跨会话汇总 |
 
 小鲸鱼会随用量变表情：正常 → 忙碌 → 疲惫 → 睡着（额度接近上限）。工作中会喷水。
+
+### 详细视图与原生面板的差异
+
+两项原生面板有、这里没有的，如实说明，不拿别的数字硬凑：
+
+- **Total duration (API)**：引擎只提供每轮的墙钟时长（`turn.complete` 的 `durationMs`），
+  没有单独的 API 耗时，所以这里显示的是墙钟时长。
+- **子代理的消耗**：子代理的轮次在它自己的循环里结束，主线程不汇总；这里的
+  「按模型」只统计主线程。
+
+`/context` 的明细用 `summary` 粒度：全部本地估算，不发 token 计数请求，所以面板
+每次重绘都不会打 API。需要 `full` 的精确计数时用原生 `/context`。
 
 ## 安装
 
@@ -43,15 +62,21 @@ cp -r . "$HOME/.claude/dev-mods/<会话 id>/whale-usage"
 claude --plugin-dir "/path/to/whale-usage"
 ```
 
-**3. 长期启用**
+**3. 从插件市场一条命令安装（长期启用）**
 
-把目录写进环境变量 `CLAUDE_CODE_PLUGIN_DIRS`，或在插件市场配置里登记。
+本仓库自带 `.claude-plugin/marketplace.json`，直接装即可：
+
+```
+/plugin install whale-usage --marketplace YuEr159/claude-whale-widget
+```
+
+也可以把目录写进环境变量 `CLAUDE_CODE_PLUGIN_DIRS`。
 
 装好后：
 
 - 输入 `/whale` 打开侧边面板；
 - 输入 `/whale-band` 显示 / 隐藏上方常驻条；
-- 面板里可以切换统计范围、开关轮次提示、显示 / 隐藏上方条。
+- 面板里可以切换详细 / 简洁、上方条口径、统计范围，开关轮次提示与上方条。
 
 ## 怎么测
 
@@ -104,9 +129,11 @@ claude plugin validate .
 
 ```
 .claude-plugin/plugin.json   manifest（userConfig 的默认值）
+.claude-plugin/marketplace.json  插件市场清单，供 /plugin install
 hooks/hooks.json             入口声明
 hooks/register.tsx           全部 hook：命令、渲染、轮次、定时扫描
 hooks/usage-view.ts          纯计算：用量 → 界面文字
+hooks/usage-detail.ts        纯计算：/usage 与 /context 明细 → 面板行
 hooks/whale-art.ts           小鲸鱼画面（内嵌原图 + 代码绘制的气泡）
 hooks/whale-asset.ts         原图的两档 base64 资产
 hooks/pricing.ts             官方模型价格表

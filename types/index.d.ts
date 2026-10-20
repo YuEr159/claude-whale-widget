@@ -54,8 +54,12 @@ export type Prefs = {
   bandMetric: 'window' | 'session' | 'cost' | 'context'
   /** 本地历史扫描统计最近多少天。 */
   historyDays: number
-  /** 是否在每轮结束后弹出本轮消耗提示。 */
+  /** 是否在每轮结束后弹出本轮消耗提示（默认关，避免每轮打断）。 */
   isTurnCostOn: boolean
+  /** 本地数据多久重新扫描一次；0 表示只在手动刷新时扫。 */
+  scanIntervalMs: number
+  /** 面板显示详细视图还是只保留概览。 */
+  panelDetail: 'simple' | 'detail'
 }
 
 /** 一轮对话的消耗（turn.complete 时记下，供提示用）。 */
@@ -70,7 +74,33 @@ export type TurnSpend = {
   cacheWrite: number
   /** 按官方价格估算的美元；模型未收录时为 null。 */
   cost: number | null
+  /** 本轮墙钟时长，毫秒。 */
+  durationMs: number
   at: number
+}
+
+/** 会话累计，供面板「总量」一节用；全部是数字。 */
+export type SessionTotals = {
+  /** 主线程各轮墙钟时长之和，毫秒。 */
+  wallMs: number
+  /** 主线程的轮次数。 */
+  turns: number
+  /** Edit / Write 带来的新增行数。 */
+  linesAdded: number
+  /** Edit / Write 带来的删除行数。 */
+  linesRemoved: number
+}
+
+/** 一个模型的累计用量，供面板「按模型」一节用。 */
+export type ModelSpend = {
+  model: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  /** 按官方价格估算的美元；模型未收录时为 null。 */
+  cost: number | null
+  turns: number
 }
 
 declare module 'claude-code' {
@@ -79,6 +109,8 @@ declare module 'claude-code' {
       prefs: Prefs
       scan: ScanRecord
       lastTurn: TurnSpend | null
+      totals: SessionTotals
+      byModel: ModelSpend[]
     }
   }
 }
