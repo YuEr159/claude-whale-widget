@@ -27,7 +27,7 @@ import type {
 import { costOf } from './pricing.ts'
 import { clip, pct, tokens, countdown } from './format.ts'
 import { UNPRICED, provenanceNotesFor, usdEstimate } from './provenance.ts'
-import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
 import { CHART_LEGEND, contextChartSvg, pageOf, turnChartSvg } from './chart-art.ts'
 import {
   barText,
@@ -370,7 +370,14 @@ export const register: Register = (on, options) => {
 
     const view = toUsageView(await $.session.usage().catch(() => undefined))
     const now = await $.clock.now()
-    const summary = bandSummary(view, prefsNow.bandMetric, now)
+    // 读 `totals` 有两个作用：拿到代码改动行数，并让这条用量条成为该状态的
+    // 订阅者——Edit / Write 的 `state.set` 会重绘读过它的绘制点，条子随即更新。
+    // 这就是「随代码改动实时变化」的全部机制，不需要额外的定时器。
+    const heldTotals = await $.state.get({ plugin: 'whale-usage', key: 'totals' } as const)
+    const totals = heldTotals.value ?? EMPTY_TOTALS
+    const diff = { added: totals.linesAdded, removed: totals.linesRemoved }
+    const summary = bandSummary(view, prefsNow.bandMetric, now, diff)
+    const diffText = bandDiffText(diff)
 
     const { Box, Text, Button } = $.ui.resolve(e)
     return (
@@ -382,7 +389,25 @@ export const register: Register = (on, options) => {
         width={e.props.bodyColumns}
         gap={1}
       >
-        <Text dimColor>{summary}</Text>
+        <Text dimColor>
+          {summary}
+          {/* 选中「代码改动」口径时，改动已经在 summary 里，这里不再重复。
+              其余口径下把它作为后缀，增删各用主题的 diff 色，一眼分得清。
+              为零的一边不画（`+5` 比 `+5 -0` 干净）。 */}
+          {prefsNow.bandMetric !== 'diff' && diffText !== '' ? (
+            <>
+              {'  '}
+              {totals.linesAdded > 0 && (
+                <Text color="diffAdded">{`+${totals.linesAdded}`}</Text>
+              )}
+              {totals.linesRemoved > 0 && (
+                <Text color="diffRemoved">
+                  {`${totals.linesAdded > 0 ? ' ' : ''}-${totals.linesRemoved}`}
+                </Text>
+              )}
+            </>
+          ) : null}
+        </Text>
         <Button
           key="whale-open"
           plain

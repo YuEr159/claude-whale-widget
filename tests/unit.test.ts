@@ -7,7 +7,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { costOf, priceOf } from '../hooks/pricing'
 import { clip, countdown, pct, tokens, usd } from '../hooks/format'
-import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view'
+import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view'
 import {
   addModelSpend,
   countPatchLines,
@@ -322,6 +322,30 @@ test('用量条摘要按偏好切换口径', () => {
   expect(bandSummary(view, 'context', now)).toBe('5h 40% · 7d 70%')
 })
 
+test('代码改动可以单独成段，其余口径不带它', () => {
+  const view = toUsageView({
+    rateLimits: [{ kind: 'five_hour', percentUsed: 40 }],
+    cost: { usd: 2 },
+    context: { window: 1_000_000, percent: 12 },
+  })
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  const diff = { added: 128, removed: 34 }
+
+  // 选中「代码改动」：这一条就是改动本身。
+  expect(bandSummary(view, 'diff', now, diff)).toBe('+128 -34')
+  // 还没有改动时明说，不留空条。
+  expect(bandSummary(view, 'diff', now, { added: 0, removed: 0 })).toBe('本会话还没有代码改动')
+  // 其余口径的摘要不含改动——增删要分色，由渲染层追加，不拼进字符串。
+  expect(bandSummary(view, 'window', now, diff)).not.toContain('+128')
+  expect(bandDiffText(diff)).toBe('+128 -34')
+  expect(bandDiffText({ added: 0, removed: 0 })).toBe('')
+})
+
+test('只在一边有改动时省略零的那一边', () => {
+  expect(bandDiffText({ added: 5, removed: 0 })).toBe('+5')
+  expect(bandDiffText({ added: 0, removed: 3 })).toBe('-3')
+})
+
 test('没有额度窗口时用量条退回上下文 + 会话花费', () => {
   const view = toUsageView({
     rateLimits: [],
@@ -331,9 +355,9 @@ test('没有额度窗口时用量条退回上下文 + 会话花费', () => {
   expect(bandSummary(view, 'window', 0)).toBe('上下文 33% · 本会话 ≈$0.50')
 })
 
-test('用量条口径选项覆盖全部四种取值', () => {
+test('用量条口径选项覆盖全部取值', () => {
   expect(BAND_METRIC_OPTIONS.map(o => o.value).sort()).toEqual(
-    ['context', 'cost', 'session', 'window'].sort(),
+    ['context', 'cost', 'diff', 'session', 'window'].sort(),
   )
 })
 

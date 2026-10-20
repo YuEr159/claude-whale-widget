@@ -5,7 +5,7 @@
  * （插件校验器要求 `$` 只出现在 `$.noun.method(...)` 的调用点）。
  */
 import type { Prefs } from '../types'
-import { pct, countdown } from './format.ts'
+import { pct, countdown, diffLines } from './format.ts'
 import { usdEstimate } from './provenance.ts'
 
 export type RateLimitView = {
@@ -73,11 +73,43 @@ export function toUsageView(usage: unknown): UsageView {
   }
 }
 
-/** 用量条那一行摘要，按偏好切换口径。 */
-export function bandSummary(view: UsageView, metric: Prefs['bandMetric'], now: number): string {
+/** 用量条要显示的一段代码改动。 */
+export type BandDiff = {
+  added: number
+  removed: number
+}
+
+/** 改动行数的文字：`+128 -34`；两边都是 0 时为空串。 */
+export function bandDiffText(diff: BandDiff | undefined): string {
+  if (!diff) return ''
+  return diffLines(diff.added, diff.removed)
+}
+
+/**
+ * 用量条那一行摘要，按偏好切换口径。
+ *
+ * `diff` 是一个并列口径：选中它时这一条只显示代码改动，还没有改动就明说。
+ * 其余口径下这里**不拼**改动——增删要用两种颜色区分（diffAdded /
+ * diffRemoved），拼成纯字符串就没法上色了；改由调用方在同一个 Text 里
+ * 用嵌套 Text 追加。
+ *
+ * 之所以能做到「实时」：用量条在渲染时读了 `totals`，而 `$.state.set`
+ * 会重绘读过该值的绘制点——Edit / Write 一写入，条子就跟着重画，
+ * 不靠定时轮询。
+ */
+export function bandSummary(
+  view: UsageView,
+  metric: Prefs['bandMetric'],
+  now: number,
+  diff?: BandDiff,
+): string {
   const five = pct(view.fiveHour?.percentUsed)
   const seven = pct(view.sevenDay?.percentUsed)
+
   switch (metric) {
+    case 'diff':
+      // 专门看改动时可以单独成段；没有改动就明说，而不是留一条空条。
+      return bandDiffText(diff) || '本会话还没有代码改动'
     case 'session':
       return `本会话 ${usdEstimate(view.costUsd)}`
     case 'cost':
@@ -111,6 +143,7 @@ export const BAND_METRIC_OPTIONS: ReadonlyArray<{ value: Prefs['bandMetric']; la
   { value: 'session', label: '本会话花费' },
   { value: 'cost', label: '上下文占用' },
   { value: 'context', label: '5h + 7d' },
+  { value: 'diff', label: '代码改动' },
 ]
 
 /**

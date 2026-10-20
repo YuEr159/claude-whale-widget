@@ -14,7 +14,7 @@ import { test } from 'node:test'
 
 import { costOf, priceOf } from '../hooks/pricing.ts'
 import { clip, countdown, pct, tokens, usd } from '../hooks/format.ts'
-import { BAND_METRIC_OPTIONS, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
   countPatchLines,
@@ -264,7 +264,22 @@ test('用量条摘要按偏好切换口径', () => {
     bandSummary(toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } }), 'window', 0),
     '上下文 33% · 本会话 ≈$0.50',
   )
-  assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'session', 'window'].sort())
+  assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'diff', 'session', 'window'].sort())
+})
+
+test('代码改动：单独成段、零值省略、其余口径不重复', () => {
+  const view = toUsageView({ rateLimits: [{ kind: 'five_hour', percentUsed: 40 }], cost: { usd: 2 } })
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  const diff = { added: 128, removed: 34 }
+
+  assert.equal(bandSummary(view, 'diff', now, diff), '+128 -34')
+  assert.equal(bandSummary(view, 'diff', now, { added: 0, removed: 0 }), '本会话还没有代码改动')
+  // 其余口径的摘要里不含改动：增删要分色，由渲染层追加。
+  assert.ok(!bandSummary(view, 'window', now, diff).includes('+128'))
+  // 只有一边有改动时，零的那一边不显示。
+  assert.equal(bandDiffText({ added: 5, removed: 0 }), '+5')
+  assert.equal(bandDiffText({ added: 0, removed: 3 }), '-3')
+  assert.equal(bandDiffText({ added: 0, removed: 0 }), '')
 })
 
 test('鲸鱼尺寸连续，高度严格按画布比例', () => {
