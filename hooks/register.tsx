@@ -1005,10 +1005,10 @@ export const register: Register = (on, options) => {
             </Box>
             {Svg ? (
               <Svg
-                source={modelStackSvg(stack.bars, modelChartWidth, stack.yMax, stack.models, chart)}
+                source={modelStackSvg(stack.bars, modelChartWidth, stack.yMax, stack.models, chart, grain)}
                 alt={modelStackCaption(stack.bars, grain)}
                 width={modelChartWidth}
-                height={96}
+                height={110}
               />
             ) : (
               <Text dimColor>{modelStackCaption(stack.bars, grain)}</Text>
