@@ -571,6 +571,7 @@ export const register: Register = (on, options) => {
       today: data?.today,
       total: data?.total,
       windowDays: data?.windowDays,
+      mood,
     })
     const bubblePage = bubblePagesNow[Math.floor(now / BUBBLE_PAGE_MS) % bubblePagesNow.length]!
     const lines = bubblePage.lines

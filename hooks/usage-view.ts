@@ -5,6 +5,7 @@
  * （插件校验器要求 `$` 只出现在 `$.noun.method(...)` 的调用点）。
  */
 import type { BandMetric } from '../types'
+import type { WhaleMood } from './whale-art.ts'
 import { pct, countdown, diffLines, tokens } from './format.ts'
 import { usdEstimate } from './provenance.ts'
 
@@ -172,8 +173,42 @@ export function bubbleLines(view: UsageView, now: number): string[] {
  */
 export type BubblePage = {
   /** 这一页的稳定标识，用来做 key、也方便测试断言顺序。 */
-  id: 'limit' | 'context' | 'session' | 'local'
+  id: 'limit' | 'context' | 'session' | 'local' | 'whale'
   lines: readonly string[]
+}
+
+/**
+ * 鲸鱼娘在气泡里说的三行话，按情绪各一段。
+ *
+ * **每句话的长度由气泡的几何锁死。** 椭圆是 cx 228 / cy 112 / rx 146 / ry 90，
+ * 描边 11px 向外扩，内缘因此是 rx 140.5 / ry 84.5。三行的基线 y 分别是
+ * 96 / 142 / 188，按椭圆方程取基线处的净宽，约为 275 / 261 / 122px；再按
+ * 25 / 46 / 21px 的字号折算，每行只放得下约 11 / 5 / 5 个汉字。**第三行最窄**
+ * ——它的基线已经贴近椭圆底端，左右各只剩 61px。SVG 不会自动折行，写长了
+ * 就被椭圆描边压住，所以这一页的文案不能像别的页那样随手改长。
+ * `tests/node.run.mjs` 有一条测试按这个公式锁住每一句的宽度。
+ *
+ * 文案出自萌娘百科「DeepSeek 娘」词条：
+ *   - 「探索未至之境」是官方口号；
+ *   - 「内心 OS 很长」是词条里的萌点，她对每个要求都要「思考再三」；
+ *   - 「已思考 4 秒」是网页端思考链的原文案；
+ *   - 「胃口特别大、总吃不饱」，爱吃白米饭与 Token；
+ *   - 「我去吃饭，测完告诉我就行」是被玩出圈的口头禅；
+ *   - 「大肥鱼」来自识图上线后她对自己的评价（「吃白饭的蓝色大肥鱼」）；
+ *   - 「Let me go~」：上下文溢出时输出成串 Let me 开头的内容，被调侃成开小差唱歌；
+ *   - 「DeepSleep」：算力吃紧时执行的 sleep 命令，被写成打瞌睡。
+ */
+const WHALE_TRAITS: Record<WhaleMood, readonly [string, string, string]> = {
+  idle: ['探索未至之境', '开小差', 'Let me~'],
+  working: ['内心 OS 很长', '思考中', '已思考 4s'],
+  busy: ['胃口特别大', '又饿了', '偷吃 Token'],
+  tired: ['我去吃饭了', '大肥鱼', '测完告诉我'],
+  sleep: ['DeepSleep', '睡着了', '做梦吃米饭'],
+}
+
+/** 某个情绪下鲸鱼娘的三行台词；每一行都已按气泡的可用宽度裁剪过。 */
+export function whaleTraitOf(mood: WhaleMood): readonly [string, string, string] {
+  return WHALE_TRAITS[mood]
 }
 
 /** 轮播用到的额外事实；不传就只剩额度与花费两页。 */
@@ -185,6 +220,8 @@ export type BubbleFacts = {
   /** 跨 `windowDays` 天的本地总量，字段同上。 */
   total?: { cost: number; messages: number }
   windowDays?: number
+  /** 当前情绪，决定台词页说什么。默认 `idle`。 */
+  mood?: WhaleMood
 }
 
 /**
@@ -258,10 +295,13 @@ export function bubblePages(
     })
   }
 
-  // 一页都没有（首次打开、还没扫到任何数据）：留一页说明，别让泡泡空着。
-  if (pages.length === 0) {
-    return [{ id: 'session', lines: ['小鲸鱼', usdEstimate(view.costUsd), ''].filter(l => l.length > 0) }]
-  }
+  // 5. 人设页：鲸鱼娘的口头禅。**永远排最后**，且不参与「有没有数据」的判断
+  // ——它不表达任何读数，存在的意义是让轮播里有一页像角色在说话，而不是
+  // 一串数字。排最后还有一个好处：数据页的次序与数量不受它影响，读者看惯的
+  // 「额度 → 上下文 → 本会话 → 本地」不会因为它在中间而被拆开。
+  pages.push({ id: 'whale', lines: whaleTraitOf(facts.mood ?? 'idle') })
+
+  // 一页都没有（首次打开、还没扫到任何数据）：上面那页台词仍然在，泡泡不会空。
   return pages
 }
 

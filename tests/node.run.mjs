@@ -14,7 +14,7 @@ import { test } from 'node:test'
 
 import { costOf, isEnginePriced, priceOf } from '../hooks/pricing.ts'
 import { clip, countdown, displayWidth, padCell, pct, tokens, usd } from '../hooks/format.ts'
-import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, freshnessOf, toUsageView, whaleTraitOf } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
   countPatchLines,
@@ -24,7 +24,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
+import { WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, WHALE_MIN_WIDTH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   canonicalModelName,
@@ -393,11 +393,21 @@ test('鲸鱼尺寸连续，高度严格按画布比例且不低于最小高度',
     if (jump > maxJump) maxJump = jump
   }
   assert.ok(maxJump <= 5, `最大跳变 ${maxJump}px`)
-  assert.equal(whaleSizeFor(200).width, 300)
+
+  // 上限跟着 `WHALE_MAX_WIDTH` 走，别在这里另写一个数——以前这条断言把
+  // 300 写死了，改上限时它先红，而真正该守的是「不超过上限」。
+  assert.equal(whaleSizeFor(200).width, WHALE_MAX_WIDTH)
+  assert.equal(WHALE_MAX_WIDTH, 380)
+
+  // 下限同理：断言「不低于最小高度」与「窄面板确实落到下限」，不写死数值。
+  assert.equal(whaleSizeFor(1).width, WHALE_MIN_WIDTH)
+  assert.equal(WHALE_MIN_HEIGHT, 120)
+
   for (const columns of [1, 10, 40, 100, 200]) {
     const { width, height } = whaleSizeFor(columns)
     assert.ok(Math.abs(height / width - 320 / 620) < 1e-12, `${columns} 列比例失守`)
     assert.ok(height >= WHALE_MIN_HEIGHT - 1e-9, `${columns} 列高度 ${height} 低于下限`)
+    assert.ok(width <= WHALE_MAX_WIDTH + 1e-9, `${columns} 列宽度 ${width} 超过上限`)
   }
 })
 
@@ -1288,8 +1298,8 @@ test('泡泡轮播：每页三行，主角在第二行；没有数据的页整�
     windowDays: 30,
   })
 
-  // 四页都在：额度、上下文、本会话、本地历史，次序固定。
-  assert.deepEqual(pages.map(p => p.id), ['limit', 'context', 'session', 'local'])
+  // 五页都在，次序固定：数据四页在前，人设页压轴。
+  assert.deepEqual(pages.map(p => p.id), ['limit', 'context', 'session', 'local', 'whale'])
 
   // 每页至少两行（第一行标题 + 第二行主角），且不超过三行——`bubbleSvg`
   // 只画前三行，多出来的会被静默截掉。
@@ -1306,18 +1316,65 @@ test('泡泡轮播：每页三行，主角在第二行；没有数据的页整�
   assert.equal(pages[3].lines[1], '≈$0.42')
 
   // 没有本地扫描结果时，那一页整页不出现——不画一行「—」占位。
+  // 人设页与数据无关，永远在。
   const noLocal = bubblePages(view, now, { totals: { wallMs: 0, turns: 0, linesAdded: 0, linesRemoved: 0 } })
-  assert.deepEqual(noLocal.map(p => p.id), ['limit', 'context', 'session'])
+  assert.deepEqual(noLocal.map(p => p.id), ['limit', 'context', 'session', 'whale'])
 
-  // 什么数据都没有时留一页说明，泡泡不空着。
+  // 什么数据都没有时也只剩人设页——泡泡不空着，轮播还有东西可看。
   const empty = bubblePages(toUsageView(undefined), now)
-  assert.equal(empty.length, 1)
-  assert.equal(empty[0].id, 'session')
-  assert.ok(empty[0].lines.length >= 1)
+  assert.deepEqual(empty.map(p => p.id), ['whale'])
+  assert.equal(empty[0].lines.length, 3)
 })
 
-test('气泡的尾巴与小泡都朝右下指向鲸鱼，且不压到它身上', () => {
+test('人设页的每句台词都放得进气泡椭圆', () => {
+  // 气泡几何与 `bubbleSvg` 保持一致：cx 228 / cy 112 / rx 146 / ry 90，
+  // 描边 11px 向外扩，文字只占内缘以内的空间。
+  const CX = 228
+  const CY = 112
+  const RX = 146 - 11 / 2
+  const RY = 90 - 11 / 2
+  // 三行的基线（三行齐全时）：96 / 142 / 188；字号 25 / 46 / 21。
+  const rows = [
+    { y: 96, size: 25 },
+    { y: 142, size: 46 },
+    { y: 188, size: 21 },
+  ]
+
+  // 文字宽度的保守估计：汉字与全角标点按 1em，ASCII 按 0.62em（比常见
+  // 无衬线体的 .55em 更宽，宁可高估、不可低估）。
+  const widthOf = (text, size) => {
+    let em = 0
+    for (const ch of text) {
+      em += /[　-鿿＀-￯]/.test(ch) ? 1 : 0.62
+    }
+    return em * size
+  }
+
+  for (const mood of ['idle', 'working', 'busy', 'tired', 'sleep']) {
+    const lines = whaleTraitOf(mood)
+    assert.equal(lines.length, 3, `${mood} 应有三行台词`)
+    lines.forEach((line, index) => {
+      const { y, size } = rows[index]
+      // 基线处的椭圆半宽；文字左右对称，所以整行不得超过两倍半宽。
+      const halfWidth = RX * Math.sqrt(Math.max(0, 1 - ((y - CY) / RY) ** 2))
+      const available = halfWidth * 2
+      assert.ok(
+        widthOf(line, size) <= available,
+        `${mood} 第 ${index + 1} 行「${line}」估算宽 ${widthOf(line, size).toFixed(0)}px，超过气泡可用的 ${available.toFixed(0)}px`,
+      )
+    })
+  }
+
+  // 台词确实跟着情绪走——五个情绪不该冒出同一句话。
+  const firstLines = ['idle', 'working', 'busy', 'tired', 'sleep'].map(m => whaleTraitOf(m)[0])
+  assert.equal(new Set(firstLines).size, firstLines.length)
+})
+
+test('气泡没有尾巴，两颗小泡朝右下指向鲸鱼且不压到它身上', () => {
   const svg = whaleSvg('idle', ['a', 'b', 'c'], { isAnimating: false })
+
+  // **没有尾巴。** 尾巴曾从椭圆左下甩出去，是纯装饰，还会被误读成「漏气」。
+  assert.ok(!svg.includes('<path'), '气泡里不该再有 path（尾巴已删除）')
 
   /** 从 SVG 里取出一类元素的中心点。 */
   const ellipseCenters = [...svg.matchAll(/<ellipse cx="([\d.]+)" cy="([\d.]+)"/g)].map(m => ({
@@ -1329,7 +1386,7 @@ test('气泡的尾巴与小泡都朝右下指向鲸鱼，且不压到它身上',
   const [big, small1, small2] = ellipseCenters
 
   // 鲸鱼画在 translate(318 16)，原图 300×300 按 xMaxYMax 对齐，实际占
-  // x [378, 620]、y [236?..]——保守取左边界 378 就够判断「有没有压上去」。
+  // x [378, 620]。保守取左边界 378 就够判断「有没有压上去」。
   const WHALE_LEFT = 378
 
   // 1. 小泡一个比一个小，一个比一个靠右下。
@@ -1338,30 +1395,13 @@ test('气泡的尾巴与小泡都朝右下指向鲸鱼，且不压到它身上',
   assert.ok(small2.x > small1.x, '小泡 2 在小泡 1 右侧')
   assert.ok(small2.y > small1.y, '小泡 2 在小泡 1 下方')
 
-  // 2. 两颗小泡都留在鲸鱼左侧，别压到脸上（算上最大半径 15）。
+  // 2. 两颗小泡都留在鲸鱼左侧，别压到脸上（算上各自半径）。
   assert.ok(small1.x + 15 < WHALE_LEFT, `小泡 1 的右缘 ${small1.x + 15} 不该越过鲸鱼左边界`)
   assert.ok(small2.x + 9 < WHALE_LEFT, `小泡 2 的右缘 ${small2.x + 9} 不该越过鲸鱼左边界`)
 
-  // 3. 尾巴**朝右下**伸：起点在大泡上，终点比起点更靠右、更靠下。
-  //    回归：原来是 `M132 200 q-22 22 -38 38`——向左下，正对着鲸鱼的
-  //    反方向，整条气泡链看起来在往地上漏气。
-  const tail = svg.match(/<path d="M([\d.]+) ([\d.]+) q(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+)"/)
-  assert.ok(tail, '找不到尾巴的 path')
-  // `q dx1 dy1 dx dy` 的后两对都是**相对**起点的偏移，不是绝对坐标。
-  const [, startX, startY, dCtrlX, dCtrlY, dEndX, dEndY] = tail.map(Number)
-  const endX = startX + dEndX
-  const endY = startY + dEndY
-  assert.ok(endX > startX, '尾巴终点在起点右侧')
-  assert.ok(endY > startY, '尾巴终点在起点下方')
-  // 控制点也要朝右，否则曲线会先往回勾。
-  assert.ok(dCtrlX > 0, '尾巴的控制点在右侧')
-  assert.ok(dCtrlY > 0, '尾巴的控制点在下方')
-  const sx = startX
-  const sy = startY
-
-  // 4. 尾巴根部落在大泡边缘附近（椭圆参数 ≈ 1），不是从半空中飘出来的。
-  const rx = 146
-  const ry = 90
-  const onEdge = ((sx - big.x) / rx) ** 2 + ((sy - big.y) / ry) ** 2
-  assert.ok(onEdge > 0.9 && onEdge < 1.1, `尾巴根部应贴在大泡边缘上，实际椭圆参数 ${onEdge.toFixed(2)}`)
+  // 3. 两颗小泡朝右下延伸，且都在大泡之外（不压在大泡身上）。
+  for (const [name, p] of [['小泡 1', small1], ['小泡 2', small2]]) {
+    const onEdge = ((p.x - big.x) / 146) ** 2 + ((p.y - big.y) / 90) ** 2
+    assert.ok(onEdge > 1.05, `${name} 应在气泡椭圆之外，实际椭圆参数 ${onEdge.toFixed(2)}`)
+  }
 })

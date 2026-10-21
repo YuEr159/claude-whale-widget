@@ -17,7 +17,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
+import { WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
 import {
   barText,
   calendarHeat,
@@ -470,8 +470,8 @@ test('鲸鱼尺寸：连续公式，没有阈值跳变', () => {
     if (jump > maxJump) maxJump = jump
   }
   expect(maxJump).toBeLessThanOrEqual(5)
-  // 两端夹住，中间线性
-  expect(whaleSizeFor(200).width).toBe(300)
+  // 两端夹住，中间线性。上限跟常量走，不在测试里另写一个数。
+  expect(whaleSizeFor(200).width).toBe(WHALE_MAX_WIDTH)
   expect(whaleSizeFor(60).width).toBeGreaterThan(200)
 })
 
