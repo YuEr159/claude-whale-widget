@@ -399,6 +399,21 @@ test('用量条摘要按偏好切换口径', () => {
   assert.deepEqual(BAND_METRIC_OPTIONS.map(o => o.value).sort(), ['context', 'cost', 'diff', 'session', 'window'].sort())
 })
 
+test('用量条的本会话花费优先用插件价格表', () => {
+  // 引擎只认第一方价目表，第三方模型按默认模型估：同一批 token，
+  // DeepSeek Flash 按官方价 $3.05，引擎估成 $258.98。
+  const view = toUsageView({
+    rateLimits: [],
+    cost: { usd: 258.98 },
+    context: { window: 200_000, percent: 33 },
+  })
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  // 传了插件算出的花费就用它；没传才退回引擎读数。
+  assert.equal(bandSummary(view, ['session'], now, 3.05), '本会话 ≈$3.05')
+  assert.equal(bandSummary(view, ['session'], now), '本会话 ≈$258.98')
+  assert.equal(bandSummary(view, ['session'], now, undefined), '本会话 ≈$258.98')
+})
+
 test('代码改动：摘要里不拼它（分色由渲染层做），文字本身零值省略', () => {
   const view = toUsageView({ rateLimits: [{ kind: 'five_hour', percentUsed: 40 }], cost: { usd: 2 } })
   const now = Date.parse('2026-10-20T12:00:00Z')

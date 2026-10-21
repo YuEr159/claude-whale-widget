@@ -439,6 +439,46 @@ test('点用量条口径给出开/关提示', async ($, on) => {
 })
 
 /**
+ * 「轮次费用提示」也是开关，切换时要回一句提示。
+ *
+ * 与口径按钮同理：这个开关只改变方块自身的明暗，画面别处一字不动。
+ * 不开口的读者点一下只看到方块变色，不知道那一下生效了没有，也不知道
+ * 这个开关管的是什么（它只弹「上一轮」那一次提示，不改面板里的读数）。
+ */
+test('切换「轮次费用提示」给出开/关提示', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const toasts: string[] = []
+  on('ui.toast', async ($2: any, e: any, next: any) => {
+    toasts.push(e.text)
+    return next(e)
+  })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+  await ui.press({ key: 'whale-tab-settings' })
+
+  // 默认关；点一下开启，提示要说清楚它干什么。
+  await ui.press({ key: 'whale-turn-cost' })
+  expect(toasts.some(text => text.includes('轮次费用提示') && text.includes('已开启'))).toBe(true)
+  expect(toasts.some(text => text.includes('每轮结束时弹一次'))).toBe(true)
+
+  // 再点一次关掉，提示要说「已关闭」，且不再带开启那句解释。
+  await ui.press({ key: 'whale-turn-cost' })
+  expect(toasts.some(text => text.includes('轮次费用提示') && text.includes('已关闭'))).toBe(true)
+
+  await ui.unmount()
+})
+
+/**
  * 最后一个口径不能被取消掉，但那次点击也不能静默消失。
  *
  * 回归：`if (next.length === 0) return` 什么都不做，读者点了一下、界面纹丝
@@ -693,21 +733,22 @@ test('切到「代码改动」口径后，用量条改说没有改动', async ($
 })
 
 /**
- * 「本会话花费」在用到未收录价格的模型时要说明它是怎么来的。
+ * 「本会话花费」优先用插件价目表，而不是引擎 `/cost`。
  *
- * 回归：面板上这一格取的是引擎 `/cost` 的会话累计，而引擎只认自己的价目表；
- * 遇到第三方网关的模型名（`deepseek-v4-flash` 之类）就按**默认模型的价格**
- * 估——引擎源码对这个字段的原话是 "costUSD is a guess at the default
- * model's rate"，原生 `/cost` 也因此会打一行 "costs may be inaccurate due
- * to usage of unknown models"。
+ * 回归：面板与用量条这一格早先取引擎 `/cost` 的会话累计，而引擎只认自己
+ * 的价目表；遇到第三方网关的模型名（`deepseek-v4-flash` 之类）就按
+ * **默认模型的价格**估——引擎源码对这个字段的原话是 "costUSD is a guess
+ * at the default model's rate"。实测同一个会话，DeepSeek Flash 按官方价
+ * 约 $3，引擎估成 $258.98，而「用量概览」里跨 30 天的总额才十几美元。
  *
- * 后果是同一个会话在面板上显示上百美元，而「用量概览」里跨 30 天的总额
- * 才十几美元——两个数字口径不同，并排摆着却不说明，就成了自相矛盾。
+ * 现在逐模型累加插件价目表算出的 `cost`；只有某一款模型未收录价格时才
+ * 退回引擎读数，并挂一句「按默认模型价估」。
  *
- * 这条测试走一遍真实的 `turn.complete`：让本轮记下一个没有公开价格的模型，
- * 再看面板有没有把那句说明画出来。
+ * 这条测试走一遍真实的 `turn.complete`：本轮用一个**插件价目表里有价**的
+ * 第三方模型，断言面板显示的是插件算出的数（约 $0.0002），而不是引擎
+ * 报的 $231.5。
  */
-test('用到未收录价格的模型时，本会话花费标明「按默认模型价估」', async ($, on) => {
+test('本会话花费用插件价目表算，不用引擎 /cost 的估值', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
@@ -746,17 +787,24 @@ test('用到未收录价格的模型时，本会话花费标明「按默认模�
   })
 
   const tree = JSON.stringify(await ui.drawn())
-  expect(tree).toContain('含引擎未收录的模型')
+  // 插件价目表：DeepSeek Flash 输入 $0.15/M、输出 $0.60/M。
+  // 1000 × 0.15/1e6 + 10 × 0.60/1e6 = $0.000156 → $0.0002。
+  expect(tree).toContain('≈$0.0002')
+  // 引擎那个离谱读数不该出现。
+  expect(tree).not.toContain('231.5')
+  // 有插件价就不需要那句免责说明。
+  expect(tree).not.toContain('含引擎未收录的模型')
 
   await ui.unmount()
 })
 
 /**
- * 反过来：本会话用的模型全都有价时，不该挂那句免责说明。
+ * 反过来：某一款模型**插件价目表也没收录**时，退回引擎读数并挂免责说明。
  *
- * 那就成了「每块表下面都有一行废话」，真正需要看的人反而不看了。
+ * 那种情况下插件算不出完整的花费，少算一笔比显示一个偏高的估值更糟。
+ * 免责说明让读者知道这个数是引擎按默认模型估的，不是账单。
  */
-test('模型全都有价时，本会话花费不挂免责说明', async ($, on) => {
+test('插件价目表也没收录时，退回引擎读数并挂免责说明', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
@@ -771,7 +819,8 @@ test('模型全都有价时，本会话花费不挂免责说明', async ($, on) 
     isAborted: false,
     turnId: 'turn-1',
     usage: {
-      model: 'claude-sonnet-5-5',
+      // 插件价目表里没有这一款。
+      model: 'some-unknown-gateway-model',
       input_tokens: 1_000,
       output_tokens: 10,
       cache_read_input_tokens: 0,
@@ -790,7 +839,9 @@ test('模型全都有价时，本会话花费不挂免责说明', async ($, on) 
   })
 
   const tree = JSON.stringify(await ui.drawn())
-  expect(tree).not.toContain('含引擎未收录的模型')
+  // 退回引擎读数，并说明它是估的。
+  expect(tree).toContain('≈$1.25')
+  expect(tree).toContain('含引擎未收录的模型')
 
   await ui.unmount()
 })

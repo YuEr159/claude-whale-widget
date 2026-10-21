@@ -30,7 +30,7 @@ Claude Code 桌面端的小鲸鱼挂件：**输入框上方一条用量摘要 + 
 |---|---|---|
 | **额度窗口 5h / 7d** | `$.session.usage()` | 订阅账号的 5 小时 / 7 天窗口百分比与重置倒计时 |
 | **全部额度窗口** | `$.session.usage().rateLimits` | 按原生标题逐条列：Current session、Current week (all models)、Current week (Sonnet only)，网关窗口原样列出，每条配一条方块进度条 |
-| **会话花费** | `$.session.usage().cost` | 本会话累计美元数（`/cost` 口径） |
+| **会话花费** | `turn.complete` 逐模型累加插件价目表 | 本会话累计美元数。引擎 `/cost`（`$.session.usage().cost`）只在某一款模型插件也没收录时兜底，并注明是估的 |
 | **会话时长 / 轮次 / 代码增删** | `turn.complete`、`tool.call` | 墙钟时长按轮累加；Edit / Write 只数 diff 的增删行，不保留行内容 |
 | **按模型用量** | `turn.complete` | 每个模型的 token、估算金额、轮次，按花费降序 |
 | **上下文占用** | `$.session.usage().context` | 上下文窗口已用百分比与 token 数 |
@@ -216,17 +216,20 @@ node scripts/make-preview.mjs
 没有一笔金额来自账单，所以 `≈` 不是可关的装饰：关掉它，界面就会把估算冒充成
 消费记录。想做账请以 Anthropic 控制台为准。
 
-**面板顶部那一格「本会话花费」另有一个坑**：它取的是引擎 `/cost` 的会话
-累计，而引擎只认 Anthropic 第一方的价目表。遇到第三方网关的模型名它会
-**按默认模型的价格**估（引擎里这个字段的原话是 "costUSD is a guess at the
-default model's rate"，原生 `/cost` 也会打一行 "costs may be inaccurate due
-to usage of unknown models"）。实测同一批 token：DeepSeek Flash 按官方价
-$3.05，引擎按默认模型估成 $258.98。所以面板上那个数字可能高于「用量概览」里
-跨 30 天的总额——两个数字口径不同。既然本会话用过引擎不认识的模型，那一行
-会跟在金额后面说明它按什么估的；用的是第一方模型时不加这句。
+**「本会话花费」优先按插件自己的价目表算**，面板顶部、用量条、气泡三处同一个
+数。早先它取引擎 `/cost` 的会话累计，而引擎只认 Anthropic 第一方的价目表：遇到
+第三方网关的模型名它会**按默认模型的价格**估（引擎里这个字段的原话是
+"costUSD is a guess at the default model's rate"，原生 `/cost` 也会打一行
+"costs may be inaccurate due to usage of unknown models"）。实测同一批 token：
+DeepSeek Flash 按官方价 $3.05，引擎按默认模型估成 $258.98。
+
+现在逐模型累加 `byModel[].cost`（`turn.complete` 写入时已按价格表算过）。只有
+某一款模型**插件价目表也没收录**时才退回引擎读数，并在金额后面注明「含引擎未
+收录的模型，按默认模型价估」——那种情况下这个数本来就不完整，少算一笔比显示
+一个偏高的估更糟，读者需要知道。
 
 注意这与 `priceOf` 是两回事：插件自己给 DeepSeek 收录了价格（概览与模型页
-用的是它），但引擎那边仍然不认识，两件事不能混。
+用的是它），引擎那边仍然不认识，两件事不能混。
 
 「用量概览」的数字来自本地日志扫描，不是账号级别的统计：它只覆盖这台机器上的会话，
 不含其他设备或 claude.ai 网页端。这和原生用量页的口径一致（原生页也标注了这一点）。

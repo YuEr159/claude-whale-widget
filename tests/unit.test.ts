@@ -416,6 +416,29 @@ test('用量条摘要按偏好切换口径', () => {
   )
 })
 
+/**
+ * 用量条的「本会话花费」优先用插件价目表，而不是引擎 `/cost`。
+ *
+ * 回归：引擎只认第一方价目表，第三方模型按默认模型估——同一批 token，
+ * DeepSeek Flash 按官方价 $3.05，引擎估成 $258.98。面板气泡早就改用插件
+ * 价目表了，用量条却还在读 `view.costUsd`，两边并排放着数字差几十倍。
+ */
+test('用量条的本会话花费优先用插件价格表', () => {
+  const view = toUsageView({
+    rateLimits: [],
+    // 引擎按默认模型估出来的离谱读数。
+    cost: { usd: 258.98 },
+    context: { window: 200_000, percent: 33 },
+  })
+  const now = Date.parse('2026-10-20T12:00:00Z')
+
+  // 传了插件算出的花费：用它。
+  expect(bandSummary(view, ['session'], now, 3.05)).toBe('本会话 ≈$3.05')
+  // 没传（某一款模型未收录价格）：退回引擎读数，至少不会少算一笔。
+  expect(bandSummary(view, ['session'], now)).toBe('本会话 ≈$258.98')
+  expect(bandSummary(view, ['session'], now, undefined)).toBe('本会话 ≈$258.98')
+})
+
 test('代码改动的文字带增删号；摘要里不拼它，由渲染层分色追加', () => {
   const view = toUsageView({
     rateLimits: [{ kind: 'five_hour', percentUsed: 40 }],
