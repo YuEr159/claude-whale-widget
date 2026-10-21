@@ -448,8 +448,11 @@ test('没有额度窗口时，额度类口径写出实情而不是换别项的�
   // 回归：以前这里退回「上下文 33% · 本会话 ≈$0.50」，于是点「额度窗口」
   // 得到的是上下文与会话花费的内容——看起来像开关选错了项。
   expect(bandSummary(view, ['window'], 0)).toBe('无额度窗口')
-  expect(bandSummary(view, ['context'], 0)).toBe('无额度窗口')
-  // 两条都选时，同一句话不印两遍。
+  // 「5h + 7d」不说这句话：那是「额度窗口」的消息，说了就成了同一句。
+  // 以前两项都返回它、靠文本去重只印一遍，结果关掉「额度窗口」后条子
+  // 一个字都不变，读者以为开关坏了。
+  expect(bandSummary(view, ['context'], 0)).toBe('')
+  // 两条都选时只有「额度窗口」说话。
   expect(bandSummary(view, ['window', 'context'], 0)).toBe('无额度窗口')
   // 有额度的口径照常工作，不受影响。
   expect(bandSummary(view, ['cost'], 0)).toBe('上下文 33%')

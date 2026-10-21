@@ -86,7 +86,7 @@ export function bandDiffText(diff: BandDiff | undefined): string {
   return diffLines(diff.added, diff.removed)
 }
 
-/** 没有订阅额度窗口时，额度类口径在条子上写的唯一一句话。 */
+/** 没有订阅额度窗口时，「额度窗口」这一口径在条子上写的唯一一句话。 */
 const NO_LIMITS = '无额度窗口'
 
 /**
@@ -122,13 +122,16 @@ export function bandSummary(
       case 'cost':
         return `上下文 ${pct(view.contextPercent)}`
       case 'context':
-        // 没有订阅额度窗口时（第三方网关、API key 计费），这条口径自己
-        // 说出实情。**不能**偷偷换成「上下文 + 花费」——那会让读者点了
-        // 「5h + 7d」却看到「上下文占用」的内容，以为开关坏掉或选错了项。
-        if (!hasLimits) return NO_LIMITS
+        // 没有额度窗口时**什么都不说**，而不是跟着写「无额度窗口」。
+        //
+        // 那句话是「额度窗口」这一项的消息。以前两项都返回它，靠后面的
+        // 文本去重才只显示一遍——于是关掉「额度窗口」后，「5h + 7d」照样
+        // 说出同一句话，读者点了开关条子毫无变化，以为开关坏了。
+        // 没有数据就不该替这一项发言；`window` 那句已经把情况说清楚。
+        if (!hasLimits) return ''
         return windowShowsFive ? `7d ${seven}` : `5h ${five} · 7d ${seven}`
       default:
-        // `window` 同理：点了「额度窗口」，条子上就该是额度窗口的消息。
+        // `window`：点了「额度窗口」，条子上就该是额度窗口的消息。
         if (!hasLimits) return NO_LIMITS
         return view.fiveHour
           ? `5h ${five} · ${countdown(view.fiveHour.resetsAt, now)} 后重置`
