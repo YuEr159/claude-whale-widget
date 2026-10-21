@@ -94,9 +94,17 @@ test('窄面板同样是鲸鱼在最后一行靠右', async ($, on) => {
   await ui.unmount()
 })
 
-test('泡泡默认收起：SVG 里没有气泡椭圆，只有鲸鱼', async ($, on) => {
+/**
+ * 泡泡**常驻**：打开面板就该看到气泡，不需要点。
+ *
+ * 这替代了原来「点鲸鱼才展开」的交互——点击区在引擎里没法精确对齐立绘
+ * （`Svg` 按 CSS 像素布局、`Box` 按字符格布局，两者之间没有换算），
+ * 与其留一个「点鲸鱼底部没反应」的死角，不如把数字直接画出来。
+ */
+test('泡泡常驻：一打开就有气泡，不需要点', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
 
   const ui = await $.ui.mount({
     plugin: 'whale-usage',
@@ -109,43 +117,37 @@ test('泡泡默认收起：SVG 里没有气泡椭圆，只有鲸鱼', async ($, 
 
   const svg = findLastSvg(await ui.drawn())
   const source = String(svg?.props?.source ?? '')
-  // 气泡是 <ellipse>，鲸鱼是 <image>；收起时只该有后者。
-  expect(source).not.toContain('<ellipse')
+  expect(source).toContain('<ellipse')
   expect(source).toContain('<image')
-  // 展开的入口要在场，否则点不开。
-  expect(await ui.find({ key: 'whale-tap' })).toBeDefined()
 
   await ui.unmount()
 })
 
-test('点一下鲸鱼，泡泡出现；再点一下，收回去', async ($, on) => {
-  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
-
-  const ui = await $.ui.mount({
-    plugin: 'whale-usage',
-    surface: 'desktop',
-    component: 'Pane',
-    requestId: 'whale',
-    props: props(100),
-    viewport: { columns: 120, rows: 40 },
-  })
-
-  const sourceNow = async () => String(findLastSvg(await ui.drawn())?.props?.source ?? '')
-  expect(await sourceNow()).not.toContain('<ellipse')
-
-  await ui.press({ key: 'whale-tap' })
-  expect(await sourceNow()).toContain('<ellipse')
-
-  await ui.press({ key: 'whale-tap' })
-  expect(await sourceNow()).not.toContain('<ellipse')
-
-  await ui.unmount()
-})
-
-test('泡泡点开后过几秒自己消失', async ($, on) => {
+/**
+ * 泡泡内容会轮播：不同时刻画出的文字不同。
+ *
+ * 页号由时钟算（`floor(now / BUBBLE_PAGE_MS) % pages.length`），所以推进
+ * 假时钟就能翻页——不需要任何点击或状态写入。
+ */
+test('泡泡内容按时钟轮播，几页之间会换', async ($, on) => {
   const clock = mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+  // 测试环境没有 session.usage 的实现。给足额度与上下文，轮播才有几页可翻
+  // ——数据全空时只有「本会话花费」一页，翻不动（那是对的，不是 bug）。
+  on(
+    'session.usage',
+    (async () => ({
+      value: {
+        rateLimits: [
+          { kind: 'five_hour', percentUsed: 23, resetsAt: '2026-10-20T14:13:00Z' },
+          { kind: 'seven_day', percentUsed: 61 },
+        ],
+        cost: { usd: 2.5 },
+        context: { tokens: 84_000, window: 200_000, percent: 42 },
+      },
+    })) as never,
+  )
 
   const ui = await $.ui.mount({
     plugin: 'whale-usage',
@@ -156,16 +158,45 @@ test('泡泡点开后过几秒自己消失', async ($, on) => {
     viewport: { columns: 120, rows: 40 },
   })
 
-  const hasBubble = async () =>
-    String(findLastSvg(await ui.drawn())?.props?.source ?? '').includes('<ellipse')
+  /**
+   * 鲸鱼 SVG 里画出来的**第一行**文字——这一页的标题。
+   *
+   * 不能拿整段文字当判据：额度页的第三行是倒计时（`2h13m 后重置`），
+   * 时钟一走它就变，「绕回同一页」永远比对不上。标题才是稳定的页标识。
+   */
+  const bubbleTitle = async (): Promise<string> => {
+    const source = String(findLastSvg(await ui.drawn())?.props?.source ?? '')
+    const hit = source.match(/>([^<>]+)<\/text>/)
+    return hit ? hit[1]! : ''
+  }
 
-  expect(await hasBubble()).toBe(false)
-  await ui.press({ key: 'whale-tap' })
-  expect(await hasBubble()).toBe(true)
+  const first = await bubbleTitle()
+  expect(first.length).toBeGreaterThan(0)
 
-  // 推进到自动收起的时间点之后：泡泡应当自己消失，不必再点一次。
-  await clock.advance(5_000)
-  expect(await hasBubble()).toBe(false)
+  // 推进两个换页间隔再重绘一次。
+  //
+  // **`advance` 只动测试侧的时钟，不会自己触发绘制**——`drawn()` 读的是
+  // 上一次绘制的结果。真实会话里是 `$.clock.every(BUBBLE_PAGE_MS, …)` 去
+  // `$.ui.invalidate` 推动重绘；测试里 `mock.clock` 不跑那条链，所以要显式
+  // `redraw()`。这里断的是「同一个面板在不同时刻画出的内容不同」，不是
+  // 「定时器有没有触发」。
+  await clock.advance(12_000)
+  await ui.redraw()
+  const later = await bubbleTitle()
+  expect(later.length).toBeGreaterThan(0)
+  expect(later).not.toBe(first)
+
+  // 绕回同一页：页数有限（最多四页），转一圈必然回到第一页。
+  let cameBack = false
+  for (let i = 0; i < 6; i++) {
+    await clock.advance(6_000)
+    await ui.redraw()
+    if ((await bubbleTitle()) === first) {
+      cameBack = true
+      break
+    }
+  }
+  expect(cameBack).toBe(true)
 
   await ui.unmount()
 })
@@ -198,300 +229,6 @@ test('没有逐轮数据时上下文页只说明情况，不画翻页按钮', as
   expect(await ui.find({ key: 'whale-right-contextOffset' })).toBeUndefined()
   const tree = JSON.stringify(await ui.drawn())
   expect(tree).toContain('还没有逐轮数据')
-
-  await ui.unmount()
-})
-
-/**
- * 鲸鱼的自动收起定时器，每次点击都要接管上一次的。
- *
- * 回归：以前每次点击都新起一个 4 秒定时器、从不取消前一个，而定时器到点时
- * 只看「此刻 `isBubbleOpen` 是不是真」，不看「这次展开是不是我负责的那一次」。
- * 于是「展开 → 收起 → 再展开」之后，第一次留下的定时器仍会按它自己的节奏
- * 到点，把第二次展开的气泡提前关掉——点得越快越容易撞上。
- *
- * 现在点击时先 `cancel()` 掉上一轮的两个定时器。这条测试用假时钟逐步推进，
- * 验证「第二次展开的存活时间」是完整的 4 秒。
- */
-test('连点鲸鱼时，旧的自动收起定时器不会提前关掉新展开的气泡', async ($, on) => {
-  const clock = mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
-  mock.store(on, {})
-
-  const ui = await $.ui.mount({
-    plugin: 'whale-usage',
-    surface: 'desktop',
-    component: 'Pane',
-    requestId: 'whale',
-    props: props(100),
-    viewport: { columns: 100, rows: 40 },
-  })
-
-  /** 鲸鱼当前画的是展开还是收起的气泡。 */
-  const bubbleOpen = async (): Promise<boolean> => {
-    const svg = findLastSvg(await ui.drawn())
-    // 展开时画三个椭圆（气泡 + 两个小泡），收起时一个都没有。
-    const ellipses = ((svg?.props?.source ?? '').match(/<ellipse/g) || []).length
-    return ellipses >= 3
-  }
-
-  // t=0 展开。
-  await ui.press({ key: 'whale-tap' })
-  await clock.advance(0)
-  expect(await bubbleOpen()).toBe(true)
-
-  // t=1s 收起。
-  await clock.advance(1_000)
-  await ui.press({ key: 'whale-tap' })
-  await clock.advance(0)
-  expect(await bubbleOpen()).toBe(false)
-
-  // t=2s 再展开：这一次的 4 秒应当从此刻算起，到 t=6s 才收起。
-  await clock.advance(1_000)
-  await ui.press({ key: 'whale-tap' })
-  await clock.advance(0)
-  expect(await bubbleOpen()).toBe(true)
-
-  // t=4s：正是第一次点击那个定时器本该到点的时刻。修好之后它已经被取消，
-  // 气泡必须还开着。
-  await clock.advance(2_000)
-  expect(await bubbleOpen()).toBe(true)
-
-  // t=6s：第二次展开满 4 秒，正常收起。
-  await clock.advance(2_000)
-  expect(await bubbleOpen()).toBe(false)
-
-  await ui.unmount()
-})
-
-/**
- * 鲸鱼上不许出现任何文字——点击层不能带 `label`。
- *
- * 回归：这层按钮原本同时给了 `label`（跟着开合状态变「展开 / 收起小鲸鱼
- * 摘要」）和 children（一整块盲文空白，用来撑出点击区）。终端那份渲染器
- * 在按钮有 children 时不画 label；但**桌面端把 Button 画成原生按钮**，
- * 引擎文档的原话是 "A desktop draws its native button either way"——
- * `plain` 也拦不住。于是「展开小鲸鱼摘要」七个字直接压在鲸鱼身上。
- *
- * 这一层的唯一作用是提供点击区，视觉上必须是空的。控件以
- * `key="whale-tap"` 寻址，不靠 label。
- */
-test('鲸鱼点击层不带 label：桌面端会把 label 画成按钮文字', async ($, on) => {
-  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
-  mock.store(on, {})
-
-  const ui = await $.ui.mount({
-    plugin: 'whale-usage',
-    surface: 'desktop',
-    component: 'Pane',
-    requestId: 'whale',
-    props: props(100),
-    viewport: { columns: 100, rows: 40 },
-  })
-
-  /** 顺着树找 `whale-tap` 那个 Button，返回它**画出来的** props。 */
-  const tapProps = async (): Promise<any> => {
-    const find = (node: any): any => {
-      if (!node || typeof node !== 'object') return undefined
-      if (node.type === 'Button' && node.props?.key === 'whale-tap') return node.props
-      for (const kid of node.children ?? []) {
-        const hit = find(kid)
-        if (hit) return hit
-      }
-      return undefined
-    }
-    return find(await ui.drawn())
-  }
-
-  // 关键：`ui.find` / `ui.drawn()` 都会把 children 的文字回填成 `label`
-  // （引擎文档：「absent, it is the children's text」）。所以这里不断言
-  // label 不存在，而是断言它**没有可见文字**：children 全是 U+2800 盲文
-  // 空白，即便桌面端把它当按钮文字画出来，也是一片空白。
-  //
-  // 这正是不传 label 的目测效果，也守得住回归：一旦把「展开小鲸鱼摘要」
-  // 写回 label，这串字就会留在 props 里，断言立刻变红。
-  const onlyBlank = (text: string): boolean =>
-    text.replace(/[\s⠀]/gu, '').length === 0
-
-  const tap = await tapProps()
-  expect(tap).toBeDefined()
-  expect(onlyBlank(String(tap.label ?? ''))).toBe(true)
-
-  // 开合切换不该改变这个控件，它始终只是一层透明的点击区。
-  await ui.press({ key: 'whale-tap' })
-  expect(onlyBlank(String((await tapProps()).label ?? ''))).toBe(true)
-
-  await ui.unmount()
-})
-
-/**
- * 指针点鲸鱼要能开泡泡——而且要点在鲸鱼的**肚子**上，不是顶端那一行。
- *
- * 回归：以前点击区是一个 `Button`。桌面端把 `Button` 画成原生按钮，命中区
- * 在纵向恒为一行文字高（实测），children 写几行都撑不高它——点鲸鱼下半截
- * 没反应。现在盖的是一整片 `Client` 区域，`onPointer` 收到区域内的格坐标。
- */
-test('指针点在鲸鱼中部也能开泡泡', async ($, on) => {
-  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
-  mock.store(on, {})
-
-  const ui = await $.ui.mount({
-    plugin: 'whale-usage',
-    surface: 'desktop',
-    component: 'Pane',
-    requestId: 'whale',
-    props: props(100),
-    viewport: { columns: 120, rows: 40 },
-  })
-
-  const bubbleOpen = async (): Promise<boolean> => {
-    const svg = findLastSvg(await ui.drawn())
-    return String(svg?.props?.source ?? '').includes('<ellipse')
-  }
-
-  expect(await bubbleOpen()).toBe(false)
-
-  // 点击区的尺寸是显式格数（`Box` 不吃百分比——写 `100%` 会塌回一行）。
-  const area = await ui.find({ key: 'whale-tap-area' })
-  expect(area).toBeDefined()
-  const rows = Number((area?.props as any)?.height ?? 0)
-  const cols = Number((area?.props as any)?.width ?? 0)
-  expect(rows).toBeGreaterThan(1)
-  expect(cols).toBeGreaterThan(1)
-
-  // 点正中间——旧实现够不着的地方。
-  await ui.pointer({ type: 'down', x: Math.floor(cols / 2), y: Math.floor(rows / 2), button: 'left' })
-  await ui.pointer({ type: 'up', x: Math.floor(cols / 2), y: Math.floor(rows / 2), button: 'left' })
-  expect(await bubbleOpen()).toBe(true)
-
-  // 再点一下同一处就收回去。
-  await ui.pointer({ type: 'down', x: Math.floor(cols / 2), y: Math.floor(rows / 2), button: 'left' })
-  await ui.pointer({ type: 'up', x: Math.floor(cols / 2), y: Math.floor(rows / 2), button: 'left' })
-  expect(await bubbleOpen()).toBe(false)
-
-  // **最下一行**：这是用户反馈「点鲸鱼底部没反应」的位置。
-  await ui.pointer({ type: 'down', x: Math.floor(cols / 2), y: rows - 1, button: 'left' })
-  await ui.pointer({ type: 'up', x: Math.floor(cols / 2), y: rows - 1, button: 'left' })
-  expect(await bubbleOpen()).toBe(true)
-
-  await ui.unmount()
-})
-
-/**
- * 点击区必须**脱流**盖在立绘上，否则会跑到鲸鱼旁边或上方。
- *
- * 回归：`Client` 曾是 `Svg` 的普通兄弟节点，留在流里就各占一块——实测
- * 看到的是「点击区在鲸鱼上方，而且只有一行」。测试宿主不做布局（文档原话
- * 「never a surface's paint」），所以这里守的是**结构契约**：从点击区往上
- * 找，最近的定位祖先必须是 `position="absolute"`，且它的原点是 (0,0)。
- *
- * 同时守 `Client` 自己那块的高度：`whale-tap.tsx` 里如果漏了
- * `flexDirection: 'column'`，区块内容会排成一行——区域就塌成一条。
- */
-test('点击区绝对定位盖在鲸鱼上，且自己那块是二维的', async ($, on) => {
-  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
-  mock.store(on, {})
-
-  const ui = await $.ui.mount({
-    plugin: 'whale-usage',
-    surface: 'desktop',
-    component: 'Pane',
-    requestId: 'whale',
-    props: props(100),
-    viewport: { columns: 120, rows: 40 },
-  })
-
-  const tree: any = await ui.drawn()
-
-  /** 找到节点并返回它到根的路径（含自身）。 */
-  const pathTo = (node: any, key: string): any[] | undefined => {
-    if (!node || typeof node !== 'object') return undefined
-    if (node.props?.key === key) return [node]
-    for (const kid of node.children ?? []) {
-      const sub = pathTo(kid, key)
-      if (sub) return [node, ...sub]
-    }
-    return undefined
-  }
-
-  const areaPath = pathTo(tree, 'whale-tap-area')
-  expect(areaPath).toBeDefined()
-
-  // `Client` 自己必须是绝对定位、原点对齐——不能留在流里跟 `Svg` 并排。
-  const client = areaPath![areaPath!.length - 1]
-  expect(client.type).toBe('Client')
-
-  // 往上找那个给它定位的 Box：最近的一个带 `position` 的祖先。
-  const ancestors = areaPath!.slice(0, -1).reverse()
-  const positioned = ancestors.find(n => n.props?.position !== undefined)
-  expect(positioned).toBeDefined()
-  expect(positioned!.props.position).toBe('absolute')
-  expect(positioned!.props.top).toBe(0)
-  expect(positioned!.props.left).toBe(0)
-
-  // 尺寸是显式格数，不是百分比：`Box` 不吃 `100%`，写了会塌回一行。
-  expect(typeof client.props.height).toBe('number')
-  expect(typeof client.props.width).toBe('number')
-  const h = Number(client.props.height)
-  const w = Number(client.props.width)
-  expect(h).toBeGreaterThan(1)
-  expect(w).toBeGreaterThan(1)
-
-  // **下沿要盖到图片底部**：区域高度换算回像素后必须 ≥ 立绘高度。
-  // 行高取常见的最小值 14px——比它更小的字号很少见，而这里要的就是
-  // 「连最小行高都盖得住」。曾经按 16px 估，行数少了一截，底部点不中。
-  // 面板里不止一张图，鲸鱼是最后画的那张。
-  const svg = findLastSvg(tree)
-  const svgH = Number(svg?.props?.height ?? 0)
-  expect(svgH).toBeGreaterThan(0)
-  expect(h * 14).toBeGreaterThanOrEqual(svgH)
-
-  // 宽度同理：按最小字宽 7px 算出的列数必须盖住图片宽度。
-  const svgW = Number(svg?.props?.width ?? 0)
-  expect(w * 7).toBeGreaterThanOrEqual(svgW)
-
-  // 区域自己那块按行数×列数铺开，且必须是 column——漏
-  // `flexDirection: 'column'` 时这里会是一行。
-  const inner: any = await (ui as any).drawn({ in: 'whale-tap-area' })
-  expect(inner?.props?.flexDirection).toBe('column')
-  const rows = (inner?.children ?? []) as any[]
-  expect(rows.length).toBe(h)
-  for (const row of rows) {
-    expect([...(row?.children?.[0] ?? '')].length).toBe(w)
-  }
-
-  await ui.unmount()
-})
-
-/**
- * 鲸鱼的键盘/点击按钮在任何表面上都得在。
- *
- * 终端不画 SVG，鲸鱼退化成一个表情，开合在树上没有可读的痕迹；所以这里
- * 守的是**结构契约**：`whale-tap` 这个按钮仍在、仍是 `plain`、仍能按下。
- * 「按下之后做什么」由 `tapWhale` 一份实现负责，桌面端的指针测试覆盖了它。
- */
-test('终端上仍保留鲸鱼的键盘/点击按钮', async ($, on) => {
-  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
-  mock.store(on, {})
-
-  const ui = await $.ui.mount({
-    plugin: 'whale-usage',
-    surface: 'terminal',
-    component: 'Pane',
-    requestId: 'whale',
-    props: props(100),
-    viewport: { columns: 120, rows: 40 },
-  })
-
-  const button = await ui.find({ key: 'whale-tap' })
-  expect(button).toBeDefined()
-  expect((button?.props as any)?.plain).toBe(true)
-  // 按下不抛错，说明 onPress 接上了真正的实现。
-  await expect(ui.press({ key: 'whale-tap' })).resolves.toBeDefined()
 
   await ui.unmount()
 })

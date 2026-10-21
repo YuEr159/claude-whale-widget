@@ -180,21 +180,6 @@ export type Prefs = {
   panelPage: 'overview' | 'models' | 'context' | 'settings'
   /** 轮次热图的色深口径：当天轮次，还是当天消息数。 */
   heatMetric: HeatMetric
-  /**
-   * 小鲸鱼的思维泡泡是否展开。
-   *
-   * 默认收起：鲸鱼只占右下角一小块，数据在上方已经完整。点一下才展开
-   * 那三行摘要。这是会话内的临时开关，不写进 `$.store`——每次打开面板
-   * 都从收起开始，界面更安静，也避免挡住下面的内容。
-   */
-  isBubbleOpen: boolean
-  /**
-   * 小鲸鱼此刻是否正被按下（显示压扁的形变）。
-   *
-   * 只活一瞬：点击时置真、约 140ms 后置回假。沙箱里的 SVG 没有脚本，
-   * 也不能用 CSS `:active`，所以按压反馈只能靠「改状态 → 重绘一次」实现。
-   */
-  isWhalePressed: boolean
 }
 
 /** 一轮对话的消耗（turn.complete 时记下，供提示用）。 */
