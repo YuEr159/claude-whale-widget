@@ -41,6 +41,7 @@ import {
   contextPartKind,
   contextParts,
   contextStack,
+  contextView,
   stackLegendOf,
   rasterizeStacks,
   rasterizeTurnBars,
@@ -53,6 +54,7 @@ import {
   HEAT_ZERO_FILL,
   HEAT_ZERO_OPACITY,
   CONTEXT_MAX_BARS,
+  contextVisibleCount,
   contextChartSvg,
   heatColumnCount,
   heatWindowDays,
@@ -63,7 +65,7 @@ import {
   turnHeatSvg,
 } from '../hooks/chart-art.ts'
 import { UNPRICED, usdEstimate } from '../hooks/provenance.ts'
-import { CHART_PALETTES, FILLS, isLightTheme, panelFillFor } from '../hooks/panel-fill.ts'
+import { CHART_PALETTES, FILLS, isLightTheme, panelFillFor, themeColorsFor } from '../hooks/panel-fill.ts'
 
 test('价格表：官方模型按 1.25x / 0.1x 缓存计，DeepSeek Flash 单独一套', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -527,6 +529,56 @@ test('上下文图不翻页：显示轮数由画布宽度自己算，永远贴�
   assert.equal(barCount(contextChartSvg(turns.slice(0, 5), 900, CONTEXT_MAX_BARS, 0, CHART_PALETTES.dark)), 5)
 })
 
+/**
+ * 「显示几轮」只算一次，且图注、图例、纵轴都用同一份结果。
+ *
+ * 回归：面板侧曾用写死的 `CONTEXT_MAX_BARS`（60）算 `alt`、`yMax` 与图例，
+ * 而 SVG 内部又按宽度裁到 34 根，于是窄画布下图注说「最近 60 轮」、图上只有
+ * 34 根，图例还会列出已被裁掉那几轮才有的分类。若那几轮里有一根 95% 的高柱
+ * 被裁掉，`yMax` 仍会被它拉高，可见柱子就被压扁了。
+ *
+ * 现在 `contextView` 是唯一出口：CUT 一次，剩下的全从它来。
+ */
+test('contextView：图注、图例、纵轴、柱子数全出自同一份裁好的数据', () => {
+  // 最早那 10 轮既有 95% 的高峰、又带分项构成——它们只在宽画布下露得出来。
+  // 80px 画布裁到 34 根时，这 10 轮已经不在窗口里。
+  const turns = Array.from({ length: 60 }, (_, index) => ({
+    seq: index + 1,
+    percent: index < 10 ? 95 : 20,
+    tokens: 1000,
+    at: index,
+    parts: index < 10 ? [{ kind: 'system', tokens: 500 }, { kind: 'tools', tokens: 500 }] : undefined,
+  }))
+
+  for (const width of [80, 200, 640, 900]) {
+    const view = contextView(turns, width, 0, false)
+    const visible = contextVisibleCount(width)
+    // 三处必须说同一个数。
+    assert.equal(view.turns.length, visible, `宽 ${width}px：裁出 ${view.turns.length} 轮，应为 ${visible}`)
+    assert.equal(view.bars.length, visible, `宽 ${width}px：柱子数不符`)
+    assert.ok(view.caption.includes(`最近 ${visible} 轮`), `宽 ${width}px：图注没写 ${visible} 轮，实际「${view.caption}」`)
+
+    // 图例只列真正画出来的那几轮里出现过的分类。
+    const kinds = new Set(view.bars.flatMap(bar => bar.segments.map(s => s.kind)))
+    const legendKinds = new Set(view.legend.map(item => item.kind))
+    for (const kind of legendKinds) {
+      assert.ok(kinds.has(kind), `宽 ${width}px：图例列了「${kind}」，但这一屏的柱子里没有`)
+    }
+
+    // 纵轴只由可见的柱子定：95% 那几轮在窗口内时它是 100，不在时是 25。
+    const seenPeak = Math.max(...view.turns.map(turn => turn.percent))
+    const expectedCeiling = Math.min(100, Math.max(10, Math.ceil((seenPeak * 1.1) / 5) * 5))
+    assert.equal(view.yMax, expectedCeiling, `宽 ${width}px：可见峰值 ${seenPeak}% 却给出纵轴 ${view.yMax}%`)
+  }
+
+  // 宽画布才露得出那 10 轮带构成的老记录。
+  const wide = contextView(turns, 900, 0, false)
+  assert.ok(wide.legend.some(item => item.kind === 'system'), '宽画布应当列出系统提示')
+  // 窄画布裁掉它们之后，图例里也不该再有。
+  const narrow = contextView(turns, 80, 0, false)
+  assert.ok(!narrow.legend.some(item => item.kind === 'system'), '窄画布不该再列出已被裁掉的分类')
+})
+
 test('轮次热图：窗口固定（默认半年），不再分页', () => {
   // 数据跨 30 天：窗口给 7 天时就只画最后 7 天，给 180 天时补齐成 180 格。
   const days = [
@@ -834,6 +886,40 @@ test('两套主题的分段色彼此分得开：已用 > 缓冲 > 空闲', () =>
     // 相邻两段之间也要有可见差别，否则柱子看起来是一整块。
     assert.ok(cUsed - cBuffer > 0.4, `${name}：已用与缓冲差别太小`)
     assert.ok(cBuffer - cFree > 0.2, `${name}：缓冲与空闲差别太小`)
+  }
+})
+
+test('页签文字在两种主题下都过正文口径 4.5', () => {
+  // 回归：选中态的文字色曾经直接拿 `tabActive.borderColor` 顶替——那是给
+  // 边框选的（图形元素只要 3.0），当正文用时深色 3.58、浅色 4.49，都不合格。
+  // 现在有一对专用色，这里锁住它。
+  const cases = [
+    ['深色', themeColorsFor([{ key: 'theme', value: 'dark' }])],
+    ['浅色', themeColorsFor([{ key: 'theme', value: 'light' }])],
+  ]
+  for (const [name, theme] of cases) {
+    const onActive = contrast(theme.tabActiveText, theme.tabActive.backgroundColor)
+    assert.ok(onActive >= 4.5, `${name}：选中页签的文字只有 ${onActive.toFixed(2)}，低于 4.5`)
+    // 未选中态的文字压暗后落在大框底上，也要够读。
+    assert.ok(
+      contrast(theme.tabActiveText, theme.tabActive.backgroundColor) >
+        contrast(theme.borderColor, theme.backgroundColor),
+      `${name}：选中态文字应当比未选中态更显眼`,
+    )
+  }
+})
+
+test('页签激活态的底色差在浅色主题下确实很小——所以选中靠文字说话', () => {
+  // 这条不是「要求达标」，而是把色彩空间的限制记下来：浅色主题往白走最多
+  // 只能到 #ffffff，激活底与普通底的对比度上不去。正因如此，选中态主要
+  // 由文字色 + 加粗表达，底色只是辅助。
+  for (const [name, theme, limit] of [
+    ['深色', themeColorsFor([{ key: 'theme', value: 'dark' }]), 2],
+    ['浅色', themeColorsFor([{ key: 'theme', value: 'light' }]), 2],
+  ]) {
+    const diff = contrast(theme.tabActive.backgroundColor, theme.backgroundColor)
+    assert.ok(diff > 1, `${name}：激活底应当与普通底不同，实际 ${diff.toFixed(2)}`)
+    assert.ok(diff < limit, `${name}：底色差 ${diff.toFixed(2)} 意外地大，注释里的判断该更新了`)
   }
 })
 

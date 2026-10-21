@@ -776,6 +776,73 @@ export type StackLegendItem = {
 }
 
 /**
+ * 上下文柱状图一个槽位的最小宽度（CSS 像素）。
+ *
+ * 槽宽 = 柱宽 + 缝。1.4px 的槽对应 1px 柱子 + 0.4px 缝——1px 是这根柱子
+ * 能被看见的底线，再窄就分不清是柱子还是抗锯齿。
+ */
+export const MIN_CONTEXT_SLOT = 1.4
+
+/** 上下文柱状图最多画多少根（宽度再大也不超过它）。 */
+export const CONTEXT_MAX_BARS = 60
+
+/** 上下文柱状图的左右留白：左侧放纵轴刻度，右侧留一点边。 */
+export const CONTEXT_CHART_PADDING = { left: 26, right: 6 } as const
+
+/**
+ * 这块画布上能放下多少根柱子。
+ *
+ * **这是「显示几轮」的唯一算法**。SVG 图、图注、图例、终端上的字符图都必须
+ * 走它，否则会出现「图注说 60 轮、图上只有 34 根」这种自相矛盾——之前正是
+ * 因为面板侧写死 `CONTEXT_MAX_BARS`、图里又按宽度裁一次，两处各算一遍。
+ *
+ * 规则：槽宽（柱 + 缝）不得低于 `MIN_CONTEXT_SLOT`，在这个下限之上能塞
+ * 几根就塞几根，再受 `CONTEXT_MAX_BARS` 封顶。永远贴住最新一端。
+ *
+ * @param width 画布宽度，CSS 像素
+ * @param cap   最多几根，默认 `CONTEXT_MAX_BARS`
+ */
+export function contextVisibleCount(width: number, cap = CONTEXT_MAX_BARS): number {
+  const plotWidth = Math.max(1, width - CONTEXT_CHART_PADDING.left - CONTEXT_CHART_PADDING.right)
+  return Math.max(1, Math.min(cap, Math.floor(plotWidth / MIN_CONTEXT_SLOT)))
+}
+
+/**
+ * 一屏上下文图要用的全部推导结果：裁到几轮、柱子、图例、图注。
+ *
+ * **这是「显示最近几轮」的唯一出口**。面板与 SVG 都从这里拿数据，谁也不
+ * 自己再算一遍——之前正是因为面板侧写死 60 轮、图里又按宽度裁一次，
+ * 窄画布下才会出现「图注说 60 轮、图上只有 34 根」，图例还会列出已被裁掉
+ * 那几轮才有的分类，`alt` 与纵轴也跟着一起错。
+ */
+export function contextView(
+  turns: ContextTurn[],
+  chartWidth: number,
+  bufferPct: number,
+  isLight: boolean,
+): {
+  /** 真正要画的那几轮，已按宽度裁好，贴住最新一端。 */
+  turns: ContextTurn[]
+  bars: StackBar[]
+  peak: number
+  yMax: number
+  legend: StackLegendItem[]
+  /** 无障碍描述与图注共用的一句话。 */
+  caption: string
+} {
+  const visible = turns.slice(-Math.max(1, contextVisibleCount(chartWidth)))
+  const { bars, peak, yMax } = contextStack(visible, visible.length, bufferPct)
+  return {
+    turns: visible,
+    bars,
+    peak,
+    yMax,
+    legend: stackLegendOf(bars, isLight),
+    caption: stackCaption(bars.length, peak, yMax),
+  }
+}
+
+/**
  * 按这一屏实际出现过的分段生成图例。
  *
  * 不画固定的三色图例：有构成数据时柱子里会出现六七种颜色，固定图例解释不了它们；
