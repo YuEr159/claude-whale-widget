@@ -9,11 +9,12 @@
  * 隐私：本模块不读日志正文，只把「日志根目录」交给本地 node 进程；回传的
  * 也只有数字和官方模型名。详见 PRIVACY.md。
  *
- * 写法约束（`claude plugin validate` 会检查）：`$` 只能以 `$.noun.method(...)`
- * 的形式出现在调用点，不能作为参数传给本文件里声明的函数。所以状态读写与
- * 扫描逻辑都内联在各 hook 里，纯计算放到 `usage-view.ts`。
+ * 写法约束：`$` 在 hook 里以 `$.noun.method(...)` 的形式出现。`$` 可以传给
+ * 本文件里声明的函数（校验器会把这些调用记成 `via <函数名>`，照样检查），
+ * 但只在确实省掉重复时这么做——现在唯一的例子是 `tapWhale`，它给指针与
+ * 键盘两条入口共用。纯计算一律放到 `usage-view.ts`。
  */
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import type {
   ContextTurn,
@@ -170,6 +171,61 @@ let isScanning = false
  */
 let scanCache: unknown[] = []
 
+/**
+ * 点了一下鲸鱼：按压形变、泡泡开合、两个定时器的交接。
+ *
+ * 抽成函数是因为它有**两条**入口：`Client` 的指针事件（`ui.message`）与
+ * 键盘可达的按钮（`Button.onPress`）。两条路必须做完全相同的事——分成
+ * 两份实现，迟早有一条忘了取消旧定时器，或者只在一处记得按压形变。
+ */
+async function tapWhale($: EngineInterface): Promise<void> {
+  const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+  const nowPrefs = latest.value ?? DEFAULT_PREFS
+  // 一次写入同时决定「按压形变」与「泡泡开合」：
+  // 分两次写会让鲸鱼先压下再单独弹回，中间多一帧闪动。
+  // 展开时再点一下＝立刻收起。
+  const isOpen = nowPrefs.isBubbleOpen !== true
+  await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+    ...nowPrefs,
+    isBubbleOpen: isOpen,
+    isWhalePressed: true,
+  })
+  // 这一轮点击接管两个定时器：先把上一轮留下的取消掉。
+  // 不取消的话，上一次展开留下的自动收起仍会按它自己的
+  // 节奏到点，把这一次刚展开的气泡提前关掉。
+  pressReleaseTimer?.cancel()
+  bubbleHideTimer?.cancel()
+  pressReleaseTimer = null
+  bubbleHideTimer = null
+  // 弹回：沙箱里没有脚本，按压形变只能靠「改状态 → 重画一次」。
+  pressReleaseTimer = $.clock.after(PRESS_RELEASE_MS, () => {
+    pressReleaseTimer = null
+    void (async () => {
+      const back = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+      if ((back.value ?? DEFAULT_PREFS).isWhalePressed !== true) return
+      await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+        ...(back.value ?? DEFAULT_PREFS),
+        isWhalePressed: false,
+      })
+    })()
+  })
+  if (!isOpen) return
+  // 几秒后自动收起。到点时重新读一次状态，只在「仍然展开」
+  // 时才动它——期间用户可能已手动收起。
+  bubbleHideTimer = $.clock.after(BUBBLE_AUTO_HIDE_MS, () => {
+    bubbleHideTimer = null
+    void (async () => {
+      const later = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+      const laterPrefs = later.value ?? DEFAULT_PREFS
+      if (laterPrefs.isBubbleOpen !== true) return
+      await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+        ...laterPrefs,
+        isBubbleOpen: false,
+      })
+    })()
+  })
+}
+
 export const register: Register = (on, options) => {
   const defaultHistoryDays = Number(options.historyDays) || DEFAULT_PREFS.historyDays
 
@@ -295,8 +351,19 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(async ($, e, next) => next(e))
 
-  on('turn.complete', async ($, e, next) => {
-    const usage = e.usage
+  // 鲸鱼点击区的指针事件：`Client` 的 surface module 把「按了一下」post 回来。
+  // 开合、按压形变、自动收起都在 `tapWhale` 里，和键盘那条路同一份实现。
+  // 只认自己那个 key，别的 `Client` 的 post 不该被当点击。
+  on('ui.message', async ($, e, next) => {
+    if (e.element !== 'whale-tap-area') return next(e)
+    // `data` 来自代码，是不可信输入；只认形状对上、内容为 `tap` 的那条。
+    const data = e.data as { kind?: unknown } | null
+    if (!data || typeof data !== 'object' || data.kind !== 'tap') return next(e)
+    await tapWhale($)
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {    const usage = e.usage
     if (usage && !e.agentId) {
       const cost = costOf(usage.model, {
         input: usage.input_tokens,
@@ -522,6 +589,7 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button } = table
     const Svg = 'Svg' in table ? table.Svg : undefined
     const Select = 'Select' in table ? table.Select : undefined
+    const Client = 'Client' in table ? table.Client : undefined
 
     const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
     const prefsNow = heldPrefs.value ?? DEFAULT_PREFS
@@ -1274,13 +1342,25 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
           <Box position="relative">
             {whale}
-            <Box
-              position="absolute"
-              top={0}
-              left={0}
-              width={whaleTapCols}
-              height={whaleTapRows}
-            >
+            {/* 指针点击区：整片盖住鲸鱼。
+                `Button` 在桌面端只让出一行文字的高度（实测），多行 children
+                撑不高它——它是个原生按钮，尺寸由绘制端定。`Client` 是引擎为
+                「一整片区域响应指针」给的元素：区域按 `width`/`height` 铺开，
+                `onPointer` 收到区域内的格坐标。
+
+                终端没有 `Client`，那边靠下面的 `Button` 接点击。 */}
+            {Client ? (
+              <Client
+                key="whale-tap-area"
+                module="./whale-tap.tsx"
+                props={{ rows: whaleTapRows, cols: whaleTapCols }}
+                width={whaleTapCols}
+                height={whaleTapRows}
+              />
+            ) : null}
+            {/* 键盘入口：一行高的透明按钮。指针命中由上面的 `Client` 负责，
+                这一层只保证「Tab 能到达、Enter 能按下」。 */}
+            <Box position="absolute" top={0} left={0} width={whaleTapCols} height={1}>
               <Button
                 key="whale-tap"
                 plain
@@ -1289,67 +1369,11 @@ export const register: Register = (on, options) => {
                 // Button 画成原生按钮、把 label 当按钮文字画了出来——于是
                 // 「展开小鲸鱼摘要」七个字直接压在鲸鱼身上。
                 //
-                // 这一层的唯一作用是**提供点击区**（`Svg` 自己没有 onPress），
-                // 内容是一整块盲文空白，视觉上什么都不该出现。控件仍以
-                // `key="whale-tap"` 寻址；读屏与键盘用户走的是引擎在鲸鱼
-                // 旁边画的入口，不依赖这里。
-                onPress={() => {
-                  void (async () => {
-                    const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                    const nowPrefs = latest.value ?? DEFAULT_PREFS
-                    // 一次写入同时决定「按压形变」与「泡泡开合」：
-                    // 分两次写会让鲸鱼先压下再单独弹回，中间多一帧闪动。
-                    // 展开时再点一下＝立刻收起。
-                    const isOpen = nowPrefs.isBubbleOpen !== true
-                    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                      ...nowPrefs,
-                      isBubbleOpen: isOpen,
-                      isWhalePressed: true,
-                    })
-                    // 这一轮点击接管两个定时器：先把上一轮留下的取消掉。
-                    // 不取消的话，上一次展开留下的自动收起仍会按它自己的
-                    // 节奏到点，把这一次刚展开的气泡提前关掉。
-                    pressReleaseTimer?.cancel()
-                    bubbleHideTimer?.cancel()
-                    pressReleaseTimer = null
-                    bubbleHideTimer = null
-                    // 弹回：沙箱里没有脚本，按压形变只能靠「改状态 → 重画一次」。
-                    pressReleaseTimer = $.clock.after(PRESS_RELEASE_MS, () => {
-                      pressReleaseTimer = null
-                      void (async () => {
-                        const back = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                        if ((back.value ?? DEFAULT_PREFS).isWhalePressed !== true) return
-                        await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                          ...(back.value ?? DEFAULT_PREFS),
-                          isWhalePressed: false,
-                        })
-                      })()
-                    })
-                    if (!isOpen) return
-                    // 几秒后自动收起。到点时重新读一次状态，只在「仍然展开」
-                    // 时才动它——期间用户可能已手动收起。
-                    bubbleHideTimer = $.clock.after(BUBBLE_AUTO_HIDE_MS, () => {
-                      bubbleHideTimer = null
-                      void (async () => {
-                        const later = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                        const laterPrefs = later.value ?? DEFAULT_PREFS
-                        if (laterPrefs.isBubbleOpen !== true) return
-                        await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                          ...laterPrefs,
-                          isBubbleOpen: false,
-                        })
-                      })()
-                    })
-                  })()
-                }}
+                // children 是盲文空白：有实际宽度但看起来是空的，不会在
+                // 鲸鱼上盖出一片可见的方块。
+                onPress={() => void tapWhale($)}
               >
-                {/* **一个 `Text` 装一整块二维空白**，不是每行一个 `Text`。
-                    `Button` 的 children 是「标签文本的片段」，多个 `Text`
-                    会按行内排（文档：a chip, a dim part），20 行会挤成一条
-                    很长的一行——纵向只盖住鲸鱼顶端一格。换行符在 `Text`
-                    里是合法的（`Code` 与 `Markdown` 的文档都写明 newline
-                    是它们唯一的控制字符），所以一整块字符串才会真的铺开。 */}
-                <Text>{Array.from({ length: whaleTapRows }, () => '⠀'.repeat(whaleTapCols)).join('\n')}</Text>
+                <Text>{'⠀'.repeat(whaleTapCols)}</Text>
               </Button>
             </Box>
           </Box>
