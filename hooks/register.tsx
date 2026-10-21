@@ -14,7 +14,7 @@
  * 但只在确实省掉重复时这么做——现在唯一的例子是 `tapWhale`，它给指针与
  * 键盘两条入口共用。纯计算一律放到 `usage-view.ts`。
  */
-import type { EngineInterface, Register } from 'claude-code'
+import type { Register } from 'claude-code'
 
 import type {
   ContextTurn,
@@ -28,7 +28,7 @@ import type {
 import { costOf, isEnginePriced } from './pricing.ts'
 import { clip, displayWidth, padCell, pct, tokens, countdown, usd } from './format.ts'
 import { UNPRICED, usdEstimate } from './provenance.ts'
-import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandSummary, bubblePages, freshnessOf, toUsageView } from './usage-view.ts'
 import {
   contextChartSvg,
   contextVisibleCount,
@@ -89,10 +89,6 @@ const DEFAULT_PREFS: Prefs = {
   panelPage: 'overview',
   // 热图默认看轮次（用户真正发起请求的次数），可切到消息数。
   heatMetric: 'turns',
-  // 泡泡默认收起：鲸鱼只留右下角一小块，点一下才展开摘要。
-  isBubbleOpen: false,
-  // 按压变形只在点击后的一瞬为真。
-  isWhalePressed: false,
 }
 
 const EMPTY_SCAN: ScanRecord = {
@@ -108,6 +104,14 @@ const SCAN_TICK_MS = 15_000
 /** 面板打开时，多久请求一次重绘，让倒计时与额度跟着走。 */
 const PANEL_REFRESH_MS = 30_000
 
+/**
+ * 鲸鱼泡泡轮播的换页间隔。
+ *
+ * 泡泡只是「扫一眼」的地方：换得太慢，读者永远只看得到第一页；换得太快，
+ * 还没读完就翻走了。6 秒够读完三行短句，又不至于让一页霸占整个会话。
+ */
+const BUBBLE_PAGE_MS = 6_000
+
 /** 用户点了「刷新」时置真，下一次定时检查会忽略间隔立即扫。 */
 let isScanForced = false
 
@@ -122,23 +126,6 @@ const CONTEXT_TURNS_KEPT = 60
  * 实测 400 天约 300 个日志文件、4 秒，5 分钟一次可以接受。
  */
 const TURN_WINDOW_DAYS = 400
-
-/** 点开鲸鱼摘要后，多少毫秒自动收起。 */
-const BUBBLE_AUTO_HIDE_MS = 4_000
-
-/**
- * 正在计时的那两个鲸鱼定时器；`null` 表示没有在跑。
- *
- * **每次点击都要先 `cancel()` 掉上一轮的**，否则会互相打架：定时器到点时
- * 只看「此刻 isBubbleOpen 是不是真」，不看「这次展开是不是我负责的那一次」。
- * 于是在「展开 → 收起 → 再展开」之后，第一次留下的那个定时器仍会在它自己的
- * 4 秒到点，把第二次展开的气泡提前关掉——点得越快越容易撞上。
- *
- * 存模块级而不是 `$.state`：它们是执行期的一次性句柄，不是要持久化的偏好，
- * 写进状态只会让界面为一次内部计时多重绘一遍。
- */
-let bubbleHideTimer: { cancel: () => void } | null = null
-let pressReleaseTimer: { cancel: () => void } | null = null
 
 /**
  * 是否刚发生过一次压缩、还没落到某一轮的记录上。
@@ -157,9 +144,6 @@ let isCompactPending = false
  */
 let themeCache: ThemeColors | null = null
 
-/** 按下鲸鱼后，形变保持多久才弹回。太短看不见，太长会像卡住。 */
-const PRESS_RELEASE_MS = 140
-
 /** 扫描进行中的互斥标记：避免定时检查与手动刷新同时启动两个 node 进程。 */
 let isScanning = false
 
@@ -170,61 +154,6 @@ let isScanning = false
  * 代价只是下一次扫描退回全量——正确性不受影响。
  */
 let scanCache: unknown[] = []
-
-/**
- * 点了一下鲸鱼：按压形变、泡泡开合、两个定时器的交接。
- *
- * 抽成函数是因为它有**两条**入口：`Client` 的指针事件（`ui.message`）与
- * 键盘可达的按钮（`Button.onPress`）。两条路必须做完全相同的事——分成
- * 两份实现，迟早有一条忘了取消旧定时器，或者只在一处记得按压形变。
- */
-async function tapWhale($: EngineInterface): Promise<void> {
-  const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-  const nowPrefs = latest.value ?? DEFAULT_PREFS
-  // 一次写入同时决定「按压形变」与「泡泡开合」：
-  // 分两次写会让鲸鱼先压下再单独弹回，中间多一帧闪动。
-  // 展开时再点一下＝立刻收起。
-  const isOpen = nowPrefs.isBubbleOpen !== true
-  await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-    ...nowPrefs,
-    isBubbleOpen: isOpen,
-    isWhalePressed: true,
-  })
-  // 这一轮点击接管两个定时器：先把上一轮留下的取消掉。
-  // 不取消的话，上一次展开留下的自动收起仍会按它自己的
-  // 节奏到点，把这一次刚展开的气泡提前关掉。
-  pressReleaseTimer?.cancel()
-  bubbleHideTimer?.cancel()
-  pressReleaseTimer = null
-  bubbleHideTimer = null
-  // 弹回：沙箱里没有脚本，按压形变只能靠「改状态 → 重画一次」。
-  pressReleaseTimer = $.clock.after(PRESS_RELEASE_MS, () => {
-    pressReleaseTimer = null
-    void (async () => {
-      const back = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-      if ((back.value ?? DEFAULT_PREFS).isWhalePressed !== true) return
-      await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-        ...(back.value ?? DEFAULT_PREFS),
-        isWhalePressed: false,
-      })
-    })()
-  })
-  if (!isOpen) return
-  // 几秒后自动收起。到点时重新读一次状态，只在「仍然展开」
-  // 时才动它——期间用户可能已手动收起。
-  bubbleHideTimer = $.clock.after(BUBBLE_AUTO_HIDE_MS, () => {
-    bubbleHideTimer = null
-    void (async () => {
-      const later = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-      const laterPrefs = later.value ?? DEFAULT_PREFS
-      if (laterPrefs.isBubbleOpen !== true) return
-      await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-        ...laterPrefs,
-        isBubbleOpen: false,
-      })
-    })()
-  })
-}
 
 export const register: Register = (on, options) => {
   const defaultHistoryDays = Number(options.historyDays) || DEFAULT_PREFS.historyDays
@@ -317,6 +246,15 @@ export const register: Register = (on, options) => {
       $.ui.invalidate('ui.render')
     })
 
+    // 泡泡轮播的换页节奏。`PANEL_REFRESH_MS` 是 30 秒，靠它翻页太慢——
+    // 读者整个会话都停在第一页。这里单独走一条更快的时钟，只为翻页。
+    //
+    // 面板关着时重绘是空转（引擎会缓存），但 `every` 无法知道面板开没开；
+    // 6 秒一次的空转代价远小于「打开面板半天不翻页」的观感损失。
+    $.clock.every(BUBBLE_PAGE_MS, () => {
+      $.ui.invalidate('ui.render')
+    })
+
     return next(e)
   })
 
@@ -351,19 +289,8 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(async ($, e, next) => next(e))
 
-  // 鲸鱼点击区的指针事件：`Client` 的 surface module 把「按了一下」post 回来。
-  // 开合、按压形变、自动收起都在 `tapWhale` 里，和键盘那条路同一份实现。
-  // 只认自己那个 key，别的 `Client` 的 post 不该被当点击。
-  on('ui.message', async ($, e, next) => {
-    if (e.element !== 'whale-tap-area') return next(e)
-    // `data` 来自代码，是不可信输入；只认形状对上、内容为 `tap` 的那条。
-    const data = e.data as { kind?: unknown } | null
-    if (!data || typeof data !== 'object' || data.kind !== 'tap') return next(e)
-    await tapWhale($)
-    return next(e)
-  })
-
-  on('turn.complete', async ($, e, next) => {    const usage = e.usage
+  on('turn.complete', async ($, e, next) => {
+    const usage = e.usage
     if (usage && !e.agentId) {
       const cost = costOf(usage.model, {
         input: usage.input_tokens,
@@ -589,13 +516,9 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button } = table
     const Svg = 'Svg' in table ? table.Svg : undefined
     const Select = 'Select' in table ? table.Select : undefined
-    const Client = 'Client' in table ? table.Client : undefined
 
     const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
     const prefsNow = heldPrefs.value ?? DEFAULT_PREFS
-    // 默认收起：读不到该字段的老状态按「收起」处理。
-    const isBubbleOpen = prefsNow.isBubbleOpen === true
-    const isWhalePressed = prefsNow.isWhalePressed === true
 
     // 请求上下文分项：`full` 会给每个工具、记忆文件发一次 token 计数
     // 请求（与 /context 同口径），`summary` 全本地估算、不发请求。面板用 summary
@@ -635,9 +558,22 @@ export const register: Register = (on, options) => {
     const chart = theme.chart
 
     const mood = moodOf(view.fiveHour?.percentUsed ?? view.sevenDay?.percentUsed, false)
-    const lines = bubbleLines(view, now)
     const data = record.data
     const today = data?.today
+
+    // 泡泡轮播：每页三行说一件事，几秒换一页。页号由**时钟**算出，不存状态
+    // ——写状态会额外触发一次重绘，而这里只需要「现在是第几页」。
+    //
+    // 换页靠 `PANEL_REFRESH_MS` 那次重绘推进太慢（30 秒），所以在面板打开时
+    // 另挂一个专用的 `clock.every`（见 `ui.render` 之外的重绘定时器）。
+    const bubblePagesNow = bubblePages(view, now, {
+      totals,
+      today: data?.today,
+      total: data?.total,
+      windowDays: data?.windowDays,
+    })
+    const bubblePage = bubblePagesNow[Math.floor(now / BUBBLE_PAGE_MS) % bubblePagesNow.length]!
+    const lines = bubblePage.lines
 
     // 面板尺寸：鲸鱼固定在右下角。
     // Svg 的 width/height 是 CSS 像素，bodyColumns 是字符列；等宽字体一列约 8px。
@@ -652,31 +588,11 @@ export const register: Register = (on, options) => {
     const whaleSize = whaleSizeFor(width)
     const whaleWidth = whaleSize.width
     const whaleHeight = whaleSize.height
-    // 点击区的格子数：引擎不告诉插件「一格多少像素」，只能按经验值反算。
-    //
-    //   - **列按 7px**：常见字宽 7.2~8.4px，按 8 算会在鲸鱼右缘留下十几像素
-    //     点不中的竖边。宁可多出几格溢进左边的空白（看不见），也不能少。
-    //   - **行按 8px**：这是**下沿能不能点中**的关键。`Svg` 的高度是 CSS
-    //     像素，引擎按行高折算成行数；行高常见 14~22px。除数取得比最小的
-    //     常见行高还小，行数就一定够——按 16 估会少算一半，点击区只到图片
-    //     中途，底部那一带点不中（实测就是这个问题）。多出来的行向下溢出，
-    //     鲸鱼在面板最底部，溢出的部分被站点裁掉。
-    //
-    // 两个值都是「宁多勿少」：绝对定位不占流，多出来的部分不会挤动任何东西。
-    const whaleTapCols = Math.max(1, Math.ceil(whaleWidth / 7))
-    const whaleTapRows = Math.max(1, Math.ceil(whaleHeight / 8))
 
     const whale = Svg ? (
       <Svg
-        source={whaleSvg(mood, lines, {
-          isBubbleOpen: isBubbleOpen,
-          isPressed: isWhalePressed,
-        })}
-        alt={
-          isBubbleOpen
-            ? `小鲸鱼：${lines.join('，')}`
-            : '小鲸鱼（点一下展开摘要）'
-        }
+        source={whaleSvg(mood, lines, { isBubbleOpen: true })}
+        alt={`小鲸鱼：${lines.join('，')}`}
         width={whaleWidth}
         height={whaleHeight}
       />
@@ -1322,74 +1238,13 @@ export const register: Register = (on, options) => {
         {/* 数据新鲜度贴在最底下：它是「上面那些数字有多可信」的脚注，
             放在开场反而挡在真正要看的数字前面。 */}
         {historyHead}
-        {/* 鲸鱼独占最后一行、靠右。整只鲸鱼可点：`Svg` 自己没有 onPress，
-            所以盖一层 Button。
-
-            三件事必须同时成立，少一件就点不中：
-            1. **有内容撑出尺寸**。绝对定位的 Box 只按内容撑开，空 Box 是 0×0。
-               用 U+2800（盲文空白）而不是普通空格：它有实际宽度，但看起来
-               是空的，不会在鲸鱼上盖出一片可见的方块。
-            2. **尺寸显式给死**。不同表面对「一格多宽」的估算不一致，光靠内容
-               撑可能撑不满；Box 上再写一遍 width/height 兜底。
-            3. **label 不参与绘制**。有 children 时 label 只作控件名（无障碍
-               读出来用），不会被画到鲸鱼上——之前写的是「展开小鲸鱼摘要」，
-               终端会把这七个字直接印在鲸鱼身上。 */}
+        {/* 鲸鱼独占最后一行、靠右。泡泡**常驻**，内容每 `BUBBLE_PAGE_MS`
+            换一页：常驻是因为点击区没法精确对齐立绘——`Svg` 按 CSS 像素
+            布局、`Box` 按字符格布局，两者之间引擎不给换算，只能猜行高；
+            猜小了「点鲸鱼底部没反应」，猜大了又会盖住别的内容。不如直接
+            把要看的数字画出来，读者连点都不用点。 */}
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
-          {/* 立绘**留在流里**，由它决定这块的尺寸与位置（和以前一样，鲸鱼
-              贴右）。点击层绝对定位盖在它上面，两层不再互相挤占空间。 */}
-          <Box position="relative">
-            {whale}
-            {/* 指针点击区：整片盖住鲸鱼。
-                `Button` 在桌面端只让出一行文字的高度（实测），多行 children
-                撑不高它——它是个原生按钮，尺寸由绘制端定。`Client` 是引擎为
-                「一整片区域响应指针」给的元素，区域按 `width`/`height` 铺开。
-
-                **尺寸给显式格数，绝不写 `100%`。** 引擎文档里只有 `Client`
-                的 `width`/`height` 提到「a percentage of the parent」，`Box`
-                的尺寸属性只字未提百分比——实测写 `100%` 时点击区塌回内容
-                高度（一行），点了没反应。所以这里两面都用格数。
-
-                **行高按 10px 估（宁多勿少）。** `Svg` 的高度是 CSS 像素，
-                引擎按行高折算成行数；行高因字体而异，常见 12~20px。按 16px
-                估会少算 1/3，下沿就点不中——这正是「点鲸鱼底部没反应」的
-                原因。按 10px 估能覆盖到最小的常见字号；多出来的行向下溢出，
-                而鲸鱼在面板最底部，溢出的部分被站点裁掉，不占流、不影响布局。 */}
-            {Client ? (
-              <Box
-                position="absolute"
-                top={0}
-                left={0}
-                width={whaleTapCols}
-                height={whaleTapRows}
-              >
-                <Client
-                  key="whale-tap-area"
-                  module="./whale-tap.tsx"
-                  props={{ rows: whaleTapRows, cols: whaleTapCols }}
-                  width={whaleTapCols}
-                  height={whaleTapRows}
-                />
-              </Box>
-            ) : null}
-            {/* 键盘入口：一行高的透明按钮。指针命中由上面的 `Client` 负责，
-                这一层只保证「Tab 能到达、Enter 能按下」。 */}
-            <Box position="absolute" top={0} left={0} width={whaleTapCols} height={1}>
-              <Button
-                key="whale-tap"
-                plain
-                // **不要传 `label`。** 引擎文档说「有 children 时 label 只作
-                // 控件名、不参与绘制」，终端那份实现确实如此；但桌面端把
-                // Button 画成原生按钮、把 label 当按钮文字画了出来——于是
-                // 「展开小鲸鱼摘要」七个字直接压在鲸鱼身上。
-                //
-                // children 是盲文空白：有实际宽度但看起来是空的，不会在
-                // 鲸鱼上盖出一片可见的方块。
-                onPress={() => void tapWhale($)}
-              >
-                <Text>{'⠀'.repeat(whaleTapCols)}</Text>
-              </Button>
-            </Box>
-          </Box>
+          {whale}
         </Box>
       </Box>
     )

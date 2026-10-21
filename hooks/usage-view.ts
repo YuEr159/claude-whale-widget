@@ -5,7 +5,7 @@
  * （插件校验器要求 `$` 只出现在 `$.noun.method(...)` 的调用点）。
  */
 import type { BandMetric } from '../types'
-import { pct, countdown, diffLines } from './format.ts'
+import { pct, countdown, diffLines, tokens } from './format.ts'
 import { usdEstimate } from './provenance.ts'
 
 export type RateLimitView = {
@@ -161,6 +161,108 @@ export function bubbleLines(view: UsageView, now: number): string[] {
     usdEstimate(view.costUsd),
     view.fiveHour?.resetsAt ? `${countdown(view.fiveHour.resetsAt, now)} 后重置` : '',
   ].filter(line => line.length > 0)
+}
+
+/**
+ * 泡泡轮播的一页：三行，说同一件事。
+ *
+ * 三行不是随便凑的——`bubbleSvg` 给第二行更大的字号（46 vs 25/21），那是
+ * 「这一页的主角」。所以每页第二行必须是那个最想让人看见的数字，其余两行
+ * 是它的上下文。
+ */
+export type BubblePage = {
+  /** 这一页的稳定标识，用来做 key、也方便测试断言顺序。 */
+  id: 'limit' | 'context' | 'session' | 'local'
+  lines: readonly string[]
+}
+
+/** 轮播用到的额外事实；不传就只剩额度与花费两页。 */
+export type BubbleFacts = {
+  /** 本会话累计（墙钟时长、轮次、代码增删）。 */
+  totals?: { wallMs: number; turns: number; linesAdded: number; linesRemoved: number }
+  /** 本地历史里的一天：花费与消息数。没有 `turns`——日志里只有消息数。 */
+  today?: { cost: number; messages: number }
+  /** 跨 `windowDays` 天的本地总量，字段同上。 */
+  total?: { cost: number; messages: number }
+  windowDays?: number
+}
+
+/**
+ * 气泡轮播的全部页面，次序固定。
+ *
+ * 只输出**有内容**的页：没有本地扫描结果时，「今日」那页整页不出现，
+ * 而不是画一行「—」占位——轮播里出现一页空话，读者会以为界面坏了。
+ *
+ * 每页恰好三行（或两行，当夹在中间的那行没有数据时）。多于三行的部分
+ * 由 `bubbleSvg` 截掉，所以在源头就保持精简。
+ */
+export function bubblePages(
+  view: UsageView,
+  now: number,
+  facts: BubbleFacts = {},
+): BubblePage[] {
+  const pages: BubblePage[] = []
+
+  // 1. 额度窗口：主角是 5 小时窗口的占用，跟着是重置倒计时与 7 天窗口。
+  if (view.fiveHour || view.sevenDay) {
+    const head = view.fiveHour ? `5 小时窗口 ${pct(view.fiveHour.percentUsed)}` : '5 小时窗口 —'
+    const lines = [
+      view.sevenDay ? `7 天窗口 ${pct(view.sevenDay.percentUsed)}` : '',
+      head,
+      view.fiveHour?.resetsAt ? `${countdown(view.fiveHour.resetsAt, now)} 后重置` : '',
+    ].filter(line => line.length > 0)
+    pages.push({ id: 'limit', lines })
+  }
+
+  // 2. 上下文：主角是占用百分比，另两行给出绝对量与窗口大小。
+  if (view.contextPercent !== undefined) {
+    const lines = [
+      '本会话上下文',
+      pct(view.contextPercent),
+      view.contextTokens !== undefined
+        ? `${tokens(view.contextTokens)} / ${tokens(view.contextWindow)}`
+        : '',
+    ].filter(line => line.length > 0)
+    pages.push({ id: 'context', lines })
+  }
+
+  // 3. 本会话：主角是花费，另两行是轮次与代码增删。
+  const totals = facts.totals
+  const hasSession = view.costUsd !== undefined || totals !== undefined
+  if (hasSession) {
+    pages.push({
+      id: 'session',
+      lines: [
+        totals && totals.turns > 0 ? `本会话 ${totals.turns} 轮` : '本会话花费',
+        usdEstimate(view.costUsd),
+        totals && (totals.linesAdded > 0 || totals.linesRemoved > 0)
+          ? `代码 +${totals.linesAdded} / -${totals.linesRemoved}`
+          : '',
+      ].filter(line => line.length > 0),
+    })
+  }
+
+  // 4. 本地历史：主角是今日花费，另两行是今日消息数与跨期总量。
+  const today = facts.today
+  const total = facts.total
+  if (today && (today.messages > 0 || today.cost > 0)) {
+    pages.push({
+      id: 'local',
+      lines: [
+        `今日 ${today.messages} 条消息`,
+        usdEstimate(today.cost),
+        total && facts.windowDays
+          ? `${facts.windowDays} 天共 ${usdEstimate(total.cost)}`
+          : '',
+      ].filter(line => line.length > 0),
+    })
+  }
+
+  // 一页都没有（首次打开、还没扫到任何数据）：留一页说明，别让泡泡空着。
+  if (pages.length === 0) {
+    return [{ id: 'session', lines: ['小鲸鱼', usdEstimate(view.costUsd), ''].filter(l => l.length > 0) }]
+  }
+  return pages
 }
 
 /**

@@ -14,7 +14,7 @@ import { test } from 'node:test'
 
 import { costOf, isEnginePriced, priceOf } from '../hooks/pricing.ts'
 import { clip, countdown, displayWidth, padCell, pct, tokens, usd } from '../hooks/format.ts'
-import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
   countPatchLines,
@@ -1268,4 +1268,50 @@ test('面板底色是三档同一份：深浅交给绘制端，图表才分档',
   // 没有 config 行（老引擎、被管理员锁掉）同样是「不知道」，不该赌深色。
   assert.equal(panelFillFor(undefined).backgroundColor, 'userMessageBackground')
   assert.equal(panelFillFor([]).backgroundColor, 'userMessageBackground')
+})
+
+test('泡泡轮播：每页三行，主角在第二行；没有数据的页整页不出现', () => {
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  const view = toUsageView({
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 23, resetsAt: '2026-10-20T14:13:00Z' },
+      { kind: 'seven_day', percentUsed: 61 },
+    ],
+    cost: { usd: 2.5 },
+    context: { tokens: 84_000, window: 200_000, percent: 42 },
+  })
+
+  const pages = bubblePages(view, now, {
+    totals: { wallMs: 60_000, turns: 7, linesAdded: 12, linesRemoved: 3 },
+    today: { cost: 0.42, messages: 31 },
+    total: { cost: 9.9, messages: 800 },
+    windowDays: 30,
+  })
+
+  // 四页都在：额度、上下文、本会话、本地历史，次序固定。
+  assert.deepEqual(pages.map(p => p.id), ['limit', 'context', 'session', 'local'])
+
+  // 每页至少两行（第一行标题 + 第二行主角），且不超过三行——`bubbleSvg`
+  // 只画前三行，多出来的会被静默截掉。
+  for (const page of pages) {
+    assert.ok(page.lines.length >= 2, `${page.id} 至少两行`)
+    assert.ok(page.lines.length <= 3, `${page.id} 至多三行`)
+  }
+
+  // 第二行是这一页的主角：额度页的第二行是 5 小时窗口，上下文页是百分比，
+  // 本会话页是金额，本地页是今日金额。
+  assert.equal(pages[0].lines[1], '5 小时窗口 23%')
+  assert.equal(pages[1].lines[1], '42%')
+  assert.equal(pages[2].lines[1], '≈$2.50')
+  assert.equal(pages[3].lines[1], '≈$0.42')
+
+  // 没有本地扫描结果时，那一页整页不出现——不画一行「—」占位。
+  const noLocal = bubblePages(view, now, { totals: { wallMs: 0, turns: 0, linesAdded: 0, linesRemoved: 0 } })
+  assert.deepEqual(noLocal.map(p => p.id), ['limit', 'context', 'session'])
+
+  // 什么数据都没有时留一页说明，泡泡不空着。
+  const empty = bubblePages(toUsageView(undefined), now)
+  assert.equal(empty.length, 1)
+  assert.equal(empty[0].id, 'session')
+  assert.ok(empty[0].lines.length >= 1)
 })
