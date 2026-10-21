@@ -126,13 +126,32 @@ const MODEL_SCALE_LIGHT = [
 ] as const
 
 /**
+ * 深浅未知（`/config` 是 `auto`）时的色阶：中等明度，深底浅底都过 3.0。
+ *
+ * 每一支都在 `#262626` 与 `#ebebeb` 两种内嵌底色上实测过（最低 3.16、
+ * 最高 4.02）。色相顺序与前两套一致，所以换主题时各模型的相对位置
+ * 不会变。
+ */
+const MODEL_SCALE_AUTO = [
+  '#4A6CD4', // 核心蓝
+  '#4A78CC', // 浅靛 → 中等靛
+  '#17879A', // 青绿
+  '#8A63D2', // 紫
+  '#2A7E9C', // 深青
+  '#A855F7', // 品紫
+  '#5470D6', // 介于核心与浅靛之间
+  '#7C8394', // 中性灰
+] as const
+
+/**
  * 第 `index` 段（按用量降序）的配色。
  *
- * `palette` 决定用深色还是浅色那一套色阶——两套的**色相顺序一致**，
- * 所以读者换主题后各模型之间的相对位置仍然读得出来。
+ * `isLight` 三态：`true` 浅色、`false` 深色、`null` 深浅未知（`auto`）。
+ * 三套的**色相顺序一致**，所以读者换主题后各模型之间的相对位置仍然读得出来。
  */
-export function modelFill(index: number, isLight = false): string {
-  const scale = isLight ? MODEL_SCALE_LIGHT : MODEL_SCALE_DARK
+export function modelFill(index: number, isLight: boolean | null = false): string {
+  const scale =
+    isLight === null ? MODEL_SCALE_AUTO : isLight ? MODEL_SCALE_LIGHT : MODEL_SCALE_DARK
   return scale[Math.abs(index) % scale.length] ?? scale[0]
 }
 

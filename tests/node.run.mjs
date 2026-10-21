@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { costOf, priceOf } from '../hooks/pricing.ts'
+import { costOf, isEnginePriced, priceOf } from '../hooks/pricing.ts'
 import { clip, countdown, displayWidth, padCell, pct, tokens, usd } from '../hooks/format.ts'
 import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view.ts'
 import {
@@ -39,9 +39,11 @@ import {
   modelStackBars,
   modelStackCaption,
   contextPartKind,
+  contextPartColor,
   contextParts,
   contextStack,
   contextView,
+  stackColor,
   stackLegendOf,
   rasterizeStacks,
   rasterizeTurnBars,
@@ -83,6 +85,32 @@ test('价格表：官方模型按 1.25x / 0.1x 缓存计，DeepSeek Flash 单独
   assert.equal(flash.output, 0.6)
   assert.equal(flash.cacheRead, 0.003)
   assert.equal(flash.cacheWrite, 0)
+})
+
+test('引擎价目表只认第一方模型：DeepSeek 有价，但引擎不认识它', () => {
+  // 这是两个不同的问题：`priceOf` 答「我们能不能算钱」，`isEnginePriced`
+  // 答「引擎算的钱可不可信」。DeepSeek 在前者里有价，在后者里没有——
+  // 面板上「本会话花费」取自引擎，所以要看后者。
+  assert.equal(isEnginePriced('claude-opus-5-5'), true)
+  assert.equal(isEnginePriced('claude-sonnet-5-5'), true)
+  assert.equal(isEnginePriced('Claude-Haiku-4-5'), true, '大小写不敏感')
+
+  assert.equal(isEnginePriced('deepseek-v4-flash'), false)
+  assert.equal(isEnginePriced('qwen3.8-27b'), false)
+  assert.equal(isEnginePriced('kimi-k3'), false)
+  assert.equal(isEnginePriced('auto'), false)
+  assert.equal(isEnginePriced('<synthetic>'), false)
+
+  // 关键：插件给 DeepSeek 收了价，引擎那边依然不认识。
+  assert.ok(priceOf('deepseek-v4-flash'), '插件价目表里有 DeepSeek')
+  assert.equal(isEnginePriced('deepseek-v4-flash'), false, '引擎不认识 DeepSeek')
+
+  // 两支价差得有多远——这就是「本会话花费比 30 天总额还高」的来源。
+  const tokens = { input: 3_962_965, output: 1_396_968, cacheRead: 537_973_248, cacheWrite: 0 }
+  const byDs = costOf('deepseek-v4-flash', tokens)
+  const byDefault = costOf('claude-opus-5-5', tokens)
+  assert.ok(byDs !== undefined && byDefault !== undefined)
+  assert.ok(byDefault > byDs * 50, `默认模型估出的金额（${byDefault}）应当远高于官方价（${byDs}）`)
 })
 
 test('DeepSeek Flash 的型号写法大小写与前后缀都模糊识别', () => {
@@ -889,37 +917,106 @@ test('两套主题的分段色彼此分得开：已用 > 缓冲 > 空闲', () =>
   }
 })
 
-test('页签文字在两种主题下都过正文口径 4.5', () => {
-  // 回归：选中态的文字色曾经直接拿 `tabActive.borderColor` 顶替——那是给
-  // 边框选的（图形元素只要 3.0），当正文用时深色 3.58、浅色 4.49，都不合格。
-  // 现在有一对专用色，这里锁住它。
-  const cases = [
+test('页签的底、边、文字都是主题键，深浅交给绘制端解析', () => {
+  // 回归：这些颜色曾是写死的十六进制对（深色一套、浅色一套），由插件按
+  // `/config` 的 `theme` 值二选一。但 `theme` 的默认值是 `auto`——插件
+  // 只知道「跟随」，不知道跟到的是深还是浅，于是永远选中深色那套，浅色
+  // 界面里就浮出一块深蓝黑的圆角块。
+  //
+  // 现在它们**全是主题键**：引擎在绘制时按实际主题解析，`auto` 也跟得对。
+  // 这条测试锁住的就是「别再有人把它们改回十六进制」。
+  const HEX = /^#|^rgb\(/i
+  for (const [name, theme] of [
     ['深色', themeColorsFor([{ key: 'theme', value: 'dark' }])],
     ['浅色', themeColorsFor([{ key: 'theme', value: 'light' }])],
-  ]
-  for (const [name, theme] of cases) {
-    const onActive = contrast(theme.tabActiveText, theme.tabActive.backgroundColor)
-    assert.ok(onActive >= 4.5, `${name}：选中页签的文字只有 ${onActive.toFixed(2)}，低于 4.5`)
-    // 未选中态的文字压暗后落在大框底上，也要够读。
-    assert.ok(
-      contrast(theme.tabActiveText, theme.tabActive.backgroundColor) >
-        contrast(theme.borderColor, theme.backgroundColor),
-      `${name}：选中态文字应当比未选中态更显眼`,
-    )
+    ['auto', themeColorsFor([{ key: 'theme', value: 'auto' }])],
+    ['读不到', themeColorsFor(undefined)],
+  ]) {
+    for (const [where, value] of [
+      ['大框底', theme.backgroundColor],
+      ['大框边', theme.borderColor],
+      ['激活底', theme.tabActive.backgroundColor],
+      ['激活边', theme.tabActive.borderColor],
+      ['激活文字', theme.tabActiveText],
+      ['内嵌底', theme.inset.backgroundColor],
+      ['内嵌边', theme.inset.borderColor],
+    ]) {
+      assert.ok(!HEX.test(value), `${name} 的${where}写成了实色 ${value}，应当用主题键`)
+    }
+  }
+  // 三档拿到的界面色是同一份：它们本来就与深浅无关。
+  const dark = themeColorsFor([{ key: 'theme', value: 'dark' }])
+  const auto = themeColorsFor([{ key: 'theme', value: 'auto' }])
+  assert.equal(auto.backgroundColor, dark.backgroundColor)
+  assert.equal(auto.tabActiveText, dark.tabActiveText)
+})
+
+test('auto 不再被当成深色：图表取深浅未知那一套', () => {
+  // 回归：`auto` 以前落到 `isLightTheme()` 的 false 分支，和 `dark` 完全
+  // 一样。它其实是「不知道」，图表色得两边都立得住。
+  const auto = themeColorsFor([{ key: 'theme', value: 'auto' }])
+  const dark = themeColorsFor([{ key: 'theme', value: 'dark' }])
+  const light = themeColorsFor([{ key: 'theme', value: 'light' }])
+  assert.equal(auto.isLight, null, 'auto 的 isLight 应当是 null（未知）')
+  assert.equal(dark.isLight, false)
+  assert.equal(light.isLight, true)
+  assert.notEqual(auto.chart, dark.chart, 'auto 不该沿用深色图表色')
+  assert.notEqual(auto.chart, light.chart, 'auto 也不该沿用浅色图表色')
+  // 读不到主题行同样是「不知道」。
+  assert.equal(themeColorsFor(undefined).isLight, null)
+})
+
+test('auto 图表色在深、浅两种内嵌底上都过图形元素口径 3.0', () => {
+  // 深浅未知时没法预判画在哪边，只能让每一支在两边都看得见。余量比
+  // 专用色板小是必然的；这条守的是「别哪一边跌破 3.0」。
+  const p = CHART_PALETTES.auto
+  // 内嵌块的底色：深色 38,38,38 / 浅色 235,235,235。
+  const DARK_INSET_BG = '#262626'
+  const LIGHT_INSET_BG = '#ebebeb'
+  for (const [kind, color] of Object.entries(p.parts)) {
+    for (const [where, bg] of [
+      ['深色底', DARK_INSET_BG],
+      ['浅色底', LIGHT_INSET_BG],
+    ]) {
+      const ratio = contrast(color, bg)
+      assert.ok(ratio >= 3, `auto 分类 ${kind} 在${where}上只有 ${ratio.toFixed(2)}，低于 3.0`)
+    }
+  }
+  for (const [what, color] of [
+    ['轴线', p.axis],
+    ['刻度', p.label],
+    ['压缩标记', p.compact],
+    ['主色', p.used],
+  ]) {
+    for (const [where, bg] of [
+      ['深色底', DARK_INSET_BG],
+      ['浅色底', LIGHT_INSET_BG],
+    ]) {
+      const ratio = contrast(color, bg)
+      assert.ok(ratio >= 3, `auto ${what}在${where}上只有 ${ratio.toFixed(2)}，低于 3.0`)
+    }
   }
 })
 
-test('页签激活态的底色差在浅色主题下确实很小——所以选中靠文字说话', () => {
-  // 这条不是「要求达标」，而是把色彩空间的限制记下来：浅色主题往白走最多
-  // 只能到 #ffffff，激活底与普通底的对比度上不去。正因如此，选中态主要
-  // 由文字色 + 加粗表达，底色只是辅助。
-  for (const [name, theme, limit] of [
-    ['深色', themeColorsFor([{ key: 'theme', value: 'dark' }]), 2],
-    ['浅色', themeColorsFor([{ key: 'theme', value: 'light' }]), 2],
+test('终端字符图的 auto 配色与 SVG 侧逐项相同', () => {
+  // 两处各写一套就会让同一张图在桌面端与终端里是不同的颜色。
+  const p = CHART_PALETTES.auto
+  for (const [kind, color] of Object.entries(p.parts)) {
+    assert.equal(contextPartColor(kind, null), color, `分类 ${kind} 两处配色不一致`)
+  }
+  assert.equal(stackColor('used', null), p.used)
+})
+
+test('auto 的模型色阶在深浅两种底上都分得开', () => {
+  for (const [where, bg] of [
+    ['深色底', '#262626'],
+    ['浅色底', '#ebebeb'],
   ]) {
-    const diff = contrast(theme.tabActive.backgroundColor, theme.backgroundColor)
-    assert.ok(diff > 1, `${name}：激活底应当与普通底不同，实际 ${diff.toFixed(2)}`)
-    assert.ok(diff < limit, `${name}：底色差 ${diff.toFixed(2)} 意外地大，注释里的判断该更新了`)
+    const colors = [0, 1, 2, 3, 4, 5, 6, 7].map(i => modelFill(i, null))
+    for (const [i, color] of colors.entries()) {
+      assert.ok(contrast(color, bg) >= 3, `auto 第 ${i} 支在${where}上对比度不足`)
+    }
+    assert.equal(new Set(colors).size, colors.length, `${where}：auto 模型色阶有重复`)
   }
 })
 
@@ -1151,16 +1248,24 @@ test('横轴标出轮次序号，密集时抽稀但首尾保留', () => {
   assert.ok(labels.length >= 4, `标签数 ${labels.length} 太少，横轴读不出位置`)
 })
 
-test('面板底色跟着主题走，读不到时退回深色', () => {
+test('面板底色是三档同一份：深浅交给绘制端，图表才分档', () => {
   assert.equal(isLightTheme('light'), true)
   assert.equal(isLightTheme('light-daltonized'), true)
   assert.equal(isLightTheme('dark'), false)
   assert.equal(isLightTheme(undefined), false)
 
-  const rows = [{ key: 'theme', value: 'light' }]
-  assert.equal(panelFillFor(rows).backgroundColor, FILLS.light.backgroundColor)
-  assert.equal(panelFillFor([{ key: 'theme', value: 'dark' }]).backgroundColor, FILLS.dark.backgroundColor)
-  // 没有 config 行（老引擎、被管理员锁掉）时按深色处理。
-  assert.equal(panelFillFor(undefined).backgroundColor, FILLS.dark.backgroundColor)
-  assert.equal(panelFillFor([]).backgroundColor, FILLS.dark.backgroundColor)
+  // 界面色（框的底、边）是主题键，三档拿到的是同一份——它们与深浅无关。
+  // 以前这里是「浅色取 FILLS.light、其余取 FILLS.dark」，`auto` 因此被
+  // 当成深色，浅色界面里整块深蓝黑。
+  for (const value of ['light', 'dark', 'auto', undefined]) {
+    const rows = value === undefined ? undefined : [{ key: 'theme', value }]
+    assert.equal(
+      panelFillFor(rows).backgroundColor,
+      'userMessageBackground',
+      `${value ?? '读不到'} 的大框底应当是主题键`,
+    )
+  }
+  // 没有 config 行（老引擎、被管理员锁掉）同样是「不知道」，不该赌深色。
+  assert.equal(panelFillFor(undefined).backgroundColor, 'userMessageBackground')
+  assert.equal(panelFillFor([]).backgroundColor, 'userMessageBackground')
 })
