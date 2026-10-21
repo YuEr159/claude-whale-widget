@@ -652,15 +652,19 @@ export const register: Register = (on, options) => {
     const whaleSize = whaleSizeFor(width)
     const whaleWidth = whaleSize.width
     const whaleHeight = whaleSize.height
-    // 点击区的尺寸**不再在这里算**。原来按「一行多少像素」把立绘的 CSS 像素
-    // 反算成字符格，而行高因字体而异——估小了点击区就只到图片中途，下沿
-    // 点不中。现在点击层用 `100% × 100%` 盖住父容器（父容器的高度就是立绘
-    // 布局出来的高度），`Client` 的模块从 `surface.columns` / `surface.rows`
-    // 读区域实际大小。全交给布局引擎，没有像素换算这层误差。
+    // 点击区的格子数：引擎不告诉插件「一格多少像素」，只能按经验值反算。
     //
-    // 唯一还用到格数的地方是键盘按钮的 children（一串盲文空白）：它只是给
-    // 按钮一个能撑开的内容，宽度由父容器的 `100%` 定。
+    //   - **列按 7px**：常见字宽 7.2~8.4px，按 8 算会在鲸鱼右缘留下十几像素
+    //     点不中的竖边。宁可多出几格溢进左边的空白（看不见），也不能少。
+    //   - **行按 8px**：这是**下沿能不能点中**的关键。`Svg` 的高度是 CSS
+    //     像素，引擎按行高折算成行数；行高常见 14~22px。除数取得比最小的
+    //     常见行高还小，行数就一定够——按 16 估会少算一半，点击区只到图片
+    //     中途，底部那一带点不中（实测就是这个问题）。多出来的行向下溢出，
+    //     鲸鱼在面板最底部，溢出的部分被站点裁掉。
+    //
+    // 两个值都是「宁多勿少」：绝对定位不占流，多出来的部分不会挤动任何东西。
     const whaleTapCols = Math.max(1, Math.ceil(whaleWidth / 7))
+    const whaleTapRows = Math.max(1, Math.ceil(whaleHeight / 8))
 
     const whale = Svg ? (
       <Svg
@@ -1338,34 +1342,38 @@ export const register: Register = (on, options) => {
             {/* 指针点击区：整片盖住鲸鱼。
                 `Button` 在桌面端只让出一行文字的高度（实测），多行 children
                 撑不高它——它是个原生按钮，尺寸由绘制端定。`Client` 是引擎为
-                「一整片区域响应指针」给的元素。
+                「一整片区域响应指针」给的元素，区域按 `width`/`height` 铺开。
 
-                **尺寸一律用 `100%`，不换算像素。** 立绘是流里的兄弟节点，
-                父 Box 的高度就是它布局出来的高度；点击区用 `top/left 0` +
-                `100%×100%` 正好盖住。以前按「一行多少像素」反算格数，而行高
-                因字体而异——估小了点击区就只到图片中途，下沿点不中。百分比
-                由布局引擎算，没有这层误差。 */}
+                **尺寸给显式格数，绝不写 `100%`。** 引擎文档里只有 `Client`
+                的 `width`/`height` 提到「a percentage of the parent」，`Box`
+                的尺寸属性只字未提百分比——实测写 `100%` 时点击区塌回内容
+                高度（一行），点了没反应。所以这里两面都用格数。
+
+                **行高按 10px 估（宁多勿少）。** `Svg` 的高度是 CSS 像素，
+                引擎按行高折算成行数；行高因字体而异，常见 12~20px。按 16px
+                估会少算 1/3，下沿就点不中——这正是「点鲸鱼底部没反应」的
+                原因。按 10px 估能覆盖到最小的常见字号；多出来的行向下溢出，
+                而鲸鱼在面板最底部，溢出的部分被站点裁掉，不占流、不影响布局。 */}
             {Client ? (
               <Box
                 position="absolute"
                 top={0}
                 left={0}
-                width="100%"
-                height="100%"
+                width={whaleTapCols}
+                height={whaleTapRows}
               >
                 <Client
                   key="whale-tap-area"
                   module="./whale-tap.tsx"
-                  props={{}}
-                  width="100%"
-                  height="100%"
+                  props={{ rows: whaleTapRows, cols: whaleTapCols }}
+                  width={whaleTapCols}
+                  height={whaleTapRows}
                 />
               </Box>
             ) : null}
             {/* 键盘入口：一行高的透明按钮。指针命中由上面的 `Client` 负责，
-                这一层只保证「Tab 能到达、Enter 能按下」。宽度同样跟父容器，
-                不按像素反算。 */}
-            <Box position="absolute" top={0} left={0} width="100%" height={1}>
+                这一层只保证「Tab 能到达、Enter 能按下」。 */}
+            <Box position="absolute" top={0} left={0} width={whaleTapCols} height={1}>
               <Button
                 key="whale-tap"
                 plain
