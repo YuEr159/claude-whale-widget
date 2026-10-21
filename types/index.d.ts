@@ -180,6 +180,14 @@ export type Prefs = {
   panelPage: 'overview' | 'models' | 'context' | 'settings'
   /** 轮次热图的色深口径：当天轮次，还是当天消息数。 */
   heatMetric: HeatMetric
+  /**
+   * 鲸鱼立绘的缩放档位，1 = 默认尺寸。
+   *
+   * 引擎没有滑块控件（只有 Button / Client / Code / Image / Input /
+   * Markdown / Raster / Select / Svg 九种），所以「拖动条」用一排档位按钮
+   * 实现：点哪一档，立绘立刻变到那个比例。存进 `$.store` 跨会话保留。
+   */
+  whaleScale: number
 }
 
 /** 一轮对话的消耗（turn.complete 时记下，供提示用）。 */

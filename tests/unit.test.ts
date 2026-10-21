@@ -950,26 +950,23 @@ test('压缩标记只落在压缩后的第一轮', () => {
 })
 
 /**
- * 根元素必须是「像素尺寸 + CSS 100%」，不能只写 `width="100%"`。
+ * 根元素必须是像素尺寸，`width`/`height` 不能写百分比。
  *
- * 回归：传 `isInteractive` 后引擎把 SVG 放进 sandbox iframe，而
- * `height="100%"` 在 iframe 文档里相对 `body` 解析——`body` 高度是 auto，
- * 百分比失去基准、塌成 0，整幅图不画。面板里看到的就是一块纯白。
+ * 回归：曾改成 `width="100%" height="100%"`，面板里整幅图变成一块纯白。
+ * `height="100%"` 相对父级解析，而在没有确定高度的容器里（sandbox iframe
+ * 的 `body`、SVG 直接打开时的 `<body>`）百分比失去基准、塌成 0。
  *
- * 四种写法在 sandbox iframe 里实测，只有全百分比那种是白的；像素尺寸 +
- * CSS 百分比正常显示、且铺满窗口。
+ * 另有一条同样重要：**不要传 `isInteractive`**。那条沙箱路径画不出内嵌的
+ * `<image>` 位图，鲸鱼会整个消失、只剩矢量气泡——这不是尺寸问题，改
+ * `width`/`height` 救不了。
  */
-test('鲸鱼 SVG 的根元素用像素尺寸 + CSS 百分比，铺满沙箱窗口而不塌成 0', () => {
+test('鲸鱼 SVG 的根元素用像素尺寸，不用百分比', () => {
   const svg = whaleSvg('idle', ['a', 'b', 'c'])
-  // 必须带像素宽高：这是根元素的固有尺寸，iframe 靠它决定文档尺寸。
   expect(svg).toContain('width="620"')
   expect(svg).toContain('height="320"')
-  // 且不能把百分比写进 width/height 属性——那会让高度塌成 0。
+  // 百分比高度在无基准的容器里会塌成 0，整幅图不画。
   expect(svg).not.toContain('width="100%"')
   expect(svg).not.toContain('height="100%"')
-  // 铺满窗口交给内联样式。
-  expect(svg).toContain('style="display:block;width:100%;height:100%"')
-  // viewBox 仍在，负责把 620×320 缩放到窗口大小。
   expect(svg).toContain('viewBox="0 0 620 320"')
 })
 

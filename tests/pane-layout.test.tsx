@@ -70,8 +70,54 @@ test('面板里鲸鱼固定在右下角，且在控制行之后', async ($, on) 
   await ui.unmount()
 })
 
-test('窄面板同样是鲸鱼在最后一行靠右', async ($, on) => {
+/**
+ * 设置页的「立绘大小」档位真的改变鲸鱼尺寸。
+ *
+ * 引擎没有滑块控件，档位按钮就是这里的「拖动条」。这条测试守的是
+ * 「点了档位，画出来的 Svg 宽度确实跟着变」——只改状态、不改渲染，
+ * 读者点上去会觉得按钮坏了。
+ */
+test('设置页的立绘档位会改变鲸鱼尺寸', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const whaleWidth = async (): Promise<number> => {
+    const svg = findLastSvg(await ui.drawn())
+    return Number(svg?.props?.width ?? 0)
+  }
+
+  const base = await whaleWidth()
+  expect(base).toBeGreaterThan(0)
+
+  // 切到设置页，把比例调到最小档，鲸鱼必须变小。
+  await ui.press({ key: 'whale-tab-settings' })
+  await ui.press({ key: 'whale-scale-0.6' })
+  await ui.redraw()
+  const small = await whaleWidth()
+  expect(small).toBeLessThan(base)
+  expect(Math.abs(small - base * 0.6)).toBeLessThan(1)
+
+  // 调到最大档，必须比默认大。
+  await ui.press({ key: 'whale-scale-1.4' })
+  await ui.redraw()
+  const large = await whaleWidth()
+  expect(large).toBeGreaterThan(base)
+  expect(Math.abs(large - base * 1.4)).toBeLessThan(1)
+
+  await ui.unmount()
+})
+
+test('窄面板同样是鲸鱼在最后一行靠右', async ($, on) => {  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
   const ui = await $.ui.mount({

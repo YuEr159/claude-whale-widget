@@ -1368,14 +1368,13 @@ test('泡泡轮播：每页三行，主角在第二行；没有数据的页整�
   assert.equal(empty[0].lines.length, 3)
 })
 
-test('鲸鱼 SVG 的根元素用像素尺寸 + CSS 百分比，铺满沙箱窗口而不塌成 0', () => {
+test('鲸鱼 SVG 的根元素用像素尺寸，不用百分比', () => {
   const svg = whaleSvg('idle', ['a', 'b', 'c'])
   assert.ok(svg.includes('width="620"'), '根元素要有像素宽度')
   assert.ok(svg.includes('height="320"'), '根元素要有像素高度')
-  // 回归：`height="100%"` 在 iframe 里相对 body（auto）解析，塌成 0，整幅图消失。
+  // 回归：`height="100%"` 在没有确定高度的容器里塌成 0，整幅图消失。
   assert.ok(!svg.includes('width="100%"'), 'width 属性不能写百分比')
   assert.ok(!svg.includes('height="100%"'), 'height 属性不能写百分比')
-  assert.ok(svg.includes('style="display:block;width:100%;height:100%"'))
   assert.ok(svg.includes('viewBox="0 0 620 320"'))
 })
 

@@ -89,6 +89,23 @@ const DEFAULT_PREFS: Prefs = {
   panelPage: 'overview',
   // 热图默认看轮次（用户真正发起请求的次数），可切到消息数。
   heatMetric: 'turns',
+  // 立绘默认 1 倍；设置页里可调。
+  whaleScale: 1,
+}
+
+/**
+ * 立绘缩放档位。
+ *
+ * 引擎没有滑块，所以「拖动条」是一排档位：点哪一档就跳到哪个比例，
+ * 选中那档高亮。档位取「最小 ~ 最大」区间上的等距点，1.0 是默认。
+ */
+const WHALE_SCALES = [0.6, 0.8, 1, 1.2, 1.4] as const
+
+/** 缩放档位落在区间外时的夹取。 */
+function clampScale(value: number): number {
+  const lowest = WHALE_SCALES[0]!
+  const highest = WHALE_SCALES[WHALE_SCALES.length - 1]!
+  return Math.max(lowest, Math.min(highest, value))
 }
 
 const EMPTY_SCAN: ScanRecord = {
@@ -613,29 +630,29 @@ export const register: Register = (on, options) => {
     //      `preserveAspectRatio` 会留白并上下居中，且留白量随宽度抖动。
     //   3. 右下角对齐用显式列宽，不用 `100%`——后者依赖父容器的解析宽度。
     const width = e.props.bodyColumns
+    // 设置页里选的缩放档位乘在基准尺寸上。夹取一次：老状态里可能没有这个
+    // 字段（`undefined`），也可能存了一个不在档位表里的值。
+    const scale = clampScale(prefsNow.whaleScale ?? DEFAULT_PREFS.whaleScale)
     const whaleSize = whaleSizeFor(width)
-    const whaleWidth = whaleSize.width
-    const whaleHeight = whaleSize.height
+    const whaleWidth = whaleSize.width * scale
+    const whaleHeight = whaleSize.height * scale
 
     const whale = Svg ? (
       <Svg
         source={whaleSvg(mood, lines, { isBubbleOpen: true, now, epoch: WHALE_FLOAT_EPOCH })}
         alt={`小鲸鱼：${lines.join('，')}`}
         width={whaleWidth}
-        // 高度：显示尺寸 = 宽度 × 画布比例。动画只在 `Svg` 内部缩放，
-        // 不改变占位高度——盒子由这两个数决定。
+        // 高度：显示尺寸 = 宽度 × 画布比例。盒子由这两个数决定。
         height={whaleHeight}
-        // **必须为 true，否则浮动动画不跑。** 引擎文档：`true` 时把 SVG 画进
-        // 一个无脚本的 sandbox frame，SMIL 才执行；不传则当作一张静态图片
-        // （"absent, an image"），里面只画出 `begin` 所指的那一帧。
+        // **不要传 `isInteractive`。** 它会让引擎把 SVG 放进 sandbox iframe
+        // 渲染（SMIL 才跑），而那条路径**画不出内嵌的 `<image>` 位图**：
+        // 面板里只剩下矢量画的气泡，鲸鱼整个消失，看起来像一块纯白。
+        // 引擎的禁止标签清单里就有 `<image>` 与 `animate*`。
         //
-        // 实测（canvas 逐帧读像素）：`<img>` 里的 SMIL 完全不推进，永远停在
-        // 起始帧。所以不传这个开关时，面板里看到的「浮动」其实是每次重绘
-        // 换了一张静态图——翻页那一刻就跳回去，这才是卡帧的来源。
-        //
-        // 连带要求：根 SVG 必须用 `100%×100%` 填满 iframe。frame 只给窗口、
-        // 不缩放文档，写死 620×320 会只露出左上角（白框）。
-        isInteractive
+        // 代价是浮动动画不跑（不传时引擎按静态图片画，只渲染 `begin` 所指的
+        // 那一帧）。画面完整比动画重要——鲸鱼看不见，动画也就无从谈起。
+        // `whaleSvg` 里的负 `begin` 保留着：将来若引擎支持了内嵌位图，
+        // 去掉这一行注释即可恢复连续动画。
       />
     ) : (
       <Text>{emblemOf(mood)}</Text>
@@ -1237,6 +1254,31 @@ export const register: Register = (on, options) => {
               // 收起后整个入口都没了，得告诉人怎么再叫出来，否则只能重开会话。
               if (!isNextVisible) $.ui.toast('/whale 可以呼出当前面板哦！')
             })()
+          })}
+        </Box>
+        {/* 立绘大小：引擎没有滑块控件，所以这里是一排档位按钮。
+            点哪一档，鲸鱼立刻变到那个比例——「拖动条」要的是「随手可调」，
+            而不是字面意义上的拖拽。选中的那档与其它开关同一套明暗规则。
+            这一排放进「面板」组：它改的是面板里立绘的显示，不是用量条口径。 */}
+        <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+          <Text dimColor>立绘大小</Text>
+          {WHALE_SCALES.map(scaleValue => {
+            const isOn = Math.abs(scale - scaleValue) < 1e-6
+            return chip(
+              `whale-scale-${scaleValue}`,
+              `${Math.round(scaleValue * 100)}%`,
+              isOn,
+              () => {
+                void (async () => {
+                  const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                  await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                    ...(latest.value ?? DEFAULT_PREFS),
+                    whaleScale: scaleValue,
+                  })
+                  $.ui.toast(`立绘大小：${Math.round(scaleValue * 100)}%`)
+                })()
+              },
+            )
           })}
         </Box>
       </Box>
