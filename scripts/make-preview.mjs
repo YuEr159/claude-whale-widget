@@ -9,7 +9,7 @@
 import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { WHALE_CANVAS, whaleSvg } from '../hooks/whale-art.ts'
+import { whaleSvg } from '../hooks/whale-art.ts'
 import { whaleTraitOf } from '../hooks/usage-view.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -26,16 +26,8 @@ const STATES = [
 /** 静态快照：没有动画，否则每张图各跑一条 SMIL 时间线。 */
 const svgFor = (state, lines) => whaleSvg(state.mood, lines, { isAnimating: false })
 
-/**
- * 插件交付给 `Svg` 的根元素是 `width="100%" height="100%"`（让引擎的沙箱
- * iframe 自己缩放）。但**独立文件**没有宿主框，100% 高度会塌成 0——所以
- * 写进 `assets/` 之前换成画布像素尺寸。这是唯一该写死尺寸的地方。
- */
-const asStandalone = svg =>
-  svg.replace(/(<svg[^>]*?)width="100%" height="100%"/, `$1width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}"`)
-
 // 1. preview.svg：单独一张「正常」状态，README 里直接嵌入。
-writeFileSync(join(root, 'assets/preview.svg'), asStandalone(svgFor(STATES[0], STATES[0].lines)) + '\n')
+writeFileSync(join(root, 'assets/preview.svg'), svgFor(STATES[0], STATES[0].lines) + '\n')
 
 // 2. preview.html：五种状态并排 + 一条用量条 + 一行人设台词示例。
 const cards = STATES.map(state => {
@@ -44,7 +36,7 @@ const cards = STATES.map(state => {
     `<div style="text-align:center">` +
     `<div style="font:600 13px system-ui;margin-bottom:6px;color:#333">${state.label}</div>` +
     `<div style="border:1px solid #e3e8f2;border-radius:10px;padding:6px;background:#fff">` +
-    asStandalone(svgFor(state, lines)) +
+    svgFor(state, lines) +
     `</div></div>`
   )
 }).join('')
