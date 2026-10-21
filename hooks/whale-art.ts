@@ -122,8 +122,8 @@ function escapeXml(text: string): string {
  * **左侧**（鲸鱼占 x 378~620），否则会压到它脸上。
  *
  * 几何以椭圆中心 (228,112)、rx 146、ry 90 为准。三行文字的基线是
- * 96 / 142 / 180：第三行原本在 188，贴着椭圆底端，可用宽度只剩 123px，
- * 上移 8px 后放宽到 167px，也不再压着描边。
+ * 88 / 134 / 172：整体比椭圆中线略高，第三行离下缘留出余量，不再贴着
+ * 收窄的口子。
  */
 function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
   const tone = TONE[mood]
@@ -135,11 +135,13 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
       const size = isAmount ? 46 : index === 0 ? 25 : 21
       const weight = isAmount ? 800 : 600
       const color = isAmount ? tone.amount : index === 2 ? tone.hint : tone.ink
-      // 三行时 96 / 142 / 180；两行时整体下移居中；一行时只居中一行。
-      // 第三行从 188 上提到 180：原来的位置贴着椭圆底端，左右只剩 61px，
-      // 小字既要挤在窄口里、看起来又像要掉出气泡。上移 8px 后可用宽度从
-      // 约 122px 放宽到约 167px，视觉上也不再压着描边。
-      const y = shown.length === 1 ? 118 : shown.length === 2 ? 108 + index * 44 : [96, 142, 180][index]!
+      // 三行时 88 / 134 / 172；两行时整体下移居中；一行时只居中一行。
+      //
+      // 2026-10 整体上移 8px（约 1/4 行）：原来的三行贴椭圆中线偏下，视觉上
+      // 沉在气泡底部。第三行原本在 188、贴着椭圆下缘，可用宽度只剩 123px；
+      // 上移后这一行位置到 172，可用宽度反而放宽到约 198px，小字不再挤在
+      // 收窄的口子里。三行都上移，行距不变，读起来仍是一个整体。
+      const y = shown.length === 1 ? 110 : shown.length === 2 ? 100 + index * 44 : [88, 134, 172][index]!
       return `<text x="228" y="${y}" text-anchor="middle" font-family="'Segoe UI','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}">${escapeXml(line)}</text>`
     })
     .join('')
