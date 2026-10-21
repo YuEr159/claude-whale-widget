@@ -451,6 +451,9 @@ hooks/register.tsx           全部 hook：命令、渲染、轮次、定时扫�
 hooks/usage-view.ts          纯计算：用量 → 界面文字
 hooks/usage-detail.ts        纯计算：/usage 与 /context 明细 → 面板行
 hooks/usage-overview.ts      纯计算：概览卡片、日历热力图、模型排行
+hooks/chart-art.ts           矢量图表：上下文堆叠柱与轮次柱（SVG）
+hooks/panel-fill.ts          面板跟随主题的一组界面色
+hooks/provenance.ts          数据来源分级：读数 / 估算 / 未收录
 hooks/whale-art.ts           小鲸鱼画面（内嵌原图 + 代码绘制的气泡）
 hooks/whale-asset.ts         原图的两档 base64 资产
 hooks/pricing.ts             官方模型价格表
