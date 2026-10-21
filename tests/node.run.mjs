@@ -24,7 +24,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, WHALE_MIN_WIDTH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
+import { WHALE_MAX_WIDTH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   canonicalModelName,
@@ -408,28 +408,37 @@ test('代码改动：摘要里不拼它（分色由渲染层做），文字本�
   assert.equal(bandDiffText({ added: 0, removed: 0 }), '')
 })
 
-test('鲸鱼尺寸连续，高度严格按画布比例且不低于最小高度', () => {
-  let maxJump = 0
-  for (let columns = 16; columns <= 140; columns += 1) {
-    const jump = Math.abs(whaleSizeFor(columns + 1).width - whaleSizeFor(columns).width)
-    if (jump > maxJump) maxJump = jump
+test('鲸鱼尺寸默认固定，只在面板放不下时才缩', () => {
+  // 回归：尺寸曾按面板宽度的 55% 算，窗口一横向压缩鲸鱼就跟着缩水。
+  // 现在只要放得下就用固定尺寸——49 列以上全都一样大。
+  const fixed = whaleSizeFor(60).width
+  assert.equal(fixed, WHALE_MAX_WIDTH)
+  for (const columns of [49, 60, 80, 100, 140, 200]) {
+    assert.equal(whaleSizeFor(columns).width, fixed, `${columns} 列的立绘不该变大小`)
   }
-  assert.ok(maxJump <= 5, `最大跳变 ${maxJump}px`)
-
-  // 上限跟着 `WHALE_MAX_WIDTH` 走，别在这里另写一个数——以前这条断言把
-  // 300 写死了，改上限时它先红，而真正该守的是「不超过上限」。
-  assert.equal(whaleSizeFor(200).width, WHALE_MAX_WIDTH)
   assert.equal(WHALE_MAX_WIDTH, 380)
 
-  // 下限同理：断言「不低于最小高度」与「窄面板确实落到下限」，不写死数值。
-  assert.equal(whaleSizeFor(1).width, WHALE_MIN_WIDTH)
-  assert.equal(WHALE_MIN_HEIGHT, 180)
+  // 窄到放不下时才缩：可用宽度 = (列数 − 1) × 8px。
+  // 380px 需要 (380/8)+1 ≈ 48.5 → 49 列，48 列只有 376px。
+  assert.equal(whaleSizeFor(48).width, 47 * 8)
+  assert.equal(whaleSizeFor(30).width, 29 * 8)
+  // 且任何宽度下都不超过面板。
+  for (const columns of [10, 20, 30, 40, 48, 100]) {
+    assert.ok(whaleSizeFor(columns).width <= Math.max(0, columns - 1) * 8 + 1e-9)
+  }
 
-  for (const columns of [1, 10, 40, 100, 200]) {
+  // 高宽比严格保持：引擎的 preserveAspectRatio 不会留白抖动。
+  for (const columns of [10, 40, 100, 200]) {
     const { width, height } = whaleSizeFor(columns)
     assert.ok(Math.abs(height / width - 320 / 620) < 1e-12, `${columns} 列比例失守`)
-    assert.ok(height >= WHALE_MIN_HEIGHT - 1e-9, `${columns} 列高度 ${height} 低于下限`)
-    assert.ok(width <= WHALE_MAX_WIDTH + 1e-9, `${columns} 列宽度 ${width} 超过上限`)
+  }
+
+  // 尺寸随列数单调不减，且没有突变（相邻一列的跳变不超过 8px）。
+  for (let columns = 16; columns <= 140; columns += 1) {
+    const a = whaleSizeFor(columns).width
+    const b = whaleSizeFor(columns + 1).width
+    assert.ok(b >= a, `${columns} 列变宽后立绘反而变小`)
+    assert.ok(b - a <= 8 + 1e-9, `${columns} 列处跳变 ${b - a}px`)
   }
 })
 

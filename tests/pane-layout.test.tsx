@@ -101,18 +101,18 @@ test('设置页的立绘档位会改变鲸鱼尺寸', async ($, on) => {
 
   // 切到设置页，把比例调到最小档，鲸鱼必须变小。
   await ui.press({ key: 'whale-tab-settings' })
-  await ui.press({ key: 'whale-scale-0.6' })
+  await ui.press({ key: 'whale-scale-0.25' })
   await ui.redraw()
   const small = await whaleWidth()
   expect(small).toBeLessThan(base)
-  expect(Math.abs(small - base * 0.6)).toBeLessThan(1)
+  expect(Math.abs(small - base * 0.25)).toBeLessThan(1)
 
   // 调到最大档，必须比默认大。
-  await ui.press({ key: 'whale-scale-1.4' })
+  await ui.press({ key: 'whale-scale-2' })
   await ui.redraw()
   const large = await whaleWidth()
   expect(large).toBeGreaterThan(base)
-  expect(Math.abs(large - base * 1.4)).toBeLessThan(1)
+  expect(Math.abs(large - base * 2)).toBeLessThan(1)
 
   await ui.unmount()
 })
