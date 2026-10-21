@@ -353,27 +353,27 @@ test('指针点在鲸鱼中部也能开泡泡', async ($, on) => {
 
   expect(await bubbleOpen()).toBe(false)
 
-  // 点击区的尺寸交给父容器：`100% × 100%`，不再按像素反算格数。
+  // 点击区的尺寸是显式格数（`Box` 不吃百分比——写 `100%` 会塌回一行）。
   const area = await ui.find({ key: 'whale-tap-area' })
   expect(area).toBeDefined()
-  expect((area?.props as any)?.height).toBe('100%')
-  expect((area?.props as any)?.width).toBe('100%')
+  const rows = Number((area?.props as any)?.height ?? 0)
+  const cols = Number((area?.props as any)?.width ?? 0)
+  expect(rows).toBeGreaterThan(1)
+  expect(cols).toBeGreaterThan(1)
 
-  // 布局好之后点正中间——正是旧实现够不着的地方。
-  await (ui as any).resize({ columns: 43, rows: 10, in: 'whale-tap-area' })
-  await ui.pointer({ type: 'down', x: 21, y: 5, button: 'left' })
-  await ui.pointer({ type: 'up', x: 21, y: 5, button: 'left' })
+  // 点正中间——旧实现够不着的地方。
+  await ui.pointer({ type: 'down', x: Math.floor(cols / 2), y: Math.floor(rows / 2), button: 'left' })
+  await ui.pointer({ type: 'up', x: Math.floor(cols / 2), y: Math.floor(rows / 2), button: 'left' })
   expect(await bubbleOpen()).toBe(true)
 
   // 再点一下同一处就收回去。
-  await ui.pointer({ type: 'down', x: 21, y: 5, button: 'left' })
-  await ui.pointer({ type: 'up', x: 21, y: 5, button: 'left' })
+  await ui.pointer({ type: 'down', x: Math.floor(cols / 2), y: Math.floor(rows / 2), button: 'left' })
+  await ui.pointer({ type: 'up', x: Math.floor(cols / 2), y: Math.floor(rows / 2), button: 'left' })
   expect(await bubbleOpen()).toBe(false)
 
-  // **下沿**：最后一行同样要点得中。这是这次修的 bug——以前点击区的
-  // 行数按像素估，估少了下沿就落空。
-  await ui.pointer({ type: 'down', x: 21, y: 9, button: 'left' })
-  await ui.pointer({ type: 'up', x: 21, y: 9, button: 'left' })
+  // **最下一行**：这是用户反馈「点鲸鱼底部没反应」的位置。
+  await ui.pointer({ type: 'down', x: Math.floor(cols / 2), y: rows - 1, button: 'left' })
+  await ui.pointer({ type: 'up', x: Math.floor(cols / 2), y: rows - 1, button: 'left' })
   expect(await bubbleOpen()).toBe(true)
 
   await ui.unmount()
@@ -432,20 +432,35 @@ test('点击区绝对定位盖在鲸鱼上，且自己那块是二维的', async
   expect(positioned!.props.top).toBe(0)
   expect(positioned!.props.left).toBe(0)
 
-  // 尺寸交给父容器：`100%`，不是按像素估出来的格数。这是这次修的 bug——
-  // 估出来的行数常常短于图片实际高度，下沿点不中。
-  expect(client.props.height).toBe('100%')
-  expect(client.props.width).toBe('100%')
+  // 尺寸是显式格数，不是百分比：`Box` 不吃 `100%`，写了会塌回一行。
+  expect(typeof client.props.height).toBe('number')
+  expect(typeof client.props.width).toBe('number')
+  const h = Number(client.props.height)
+  const w = Number(client.props.width)
+  expect(h).toBeGreaterThan(1)
+  expect(w).toBeGreaterThan(1)
 
-  // 区域自己那块要按**布局后的**行列铺开（`surface.columns` / `rows`），
-  // 且必须是 column——漏 `flexDirection: 'column'` 时这里会是一行。
-  await (ui as any).resize({ columns: 43, rows: 10, in: 'whale-tap-area' })
+  // **下沿要盖到图片底部**：区域高度换算回像素后必须 ≥ 立绘高度。
+  // 行高取常见的最小值 14px——比它更小的字号很少见，而这里要的就是
+  // 「连最小行高都盖得住」。曾经按 16px 估，行数少了一截，底部点不中。
+  // 面板里不止一张图，鲸鱼是最后画的那张。
+  const svg = findLastSvg(tree)
+  const svgH = Number(svg?.props?.height ?? 0)
+  expect(svgH).toBeGreaterThan(0)
+  expect(h * 14).toBeGreaterThanOrEqual(svgH)
+
+  // 宽度同理：按最小字宽 7px 算出的列数必须盖住图片宽度。
+  const svgW = Number(svg?.props?.width ?? 0)
+  expect(w * 7).toBeGreaterThanOrEqual(svgW)
+
+  // 区域自己那块按行数×列数铺开，且必须是 column——漏
+  // `flexDirection: 'column'` 时这里会是一行。
   const inner: any = await (ui as any).drawn({ in: 'whale-tap-area' })
   expect(inner?.props?.flexDirection).toBe('column')
   const rows = (inner?.children ?? []) as any[]
-  expect(rows.length).toBe(10)
+  expect(rows.length).toBe(h)
   for (const row of rows) {
-    expect([...(row?.children?.[0] ?? '')].length).toBe(43)
+    expect([...(row?.children?.[0] ?? '')].length).toBe(w)
   }
 
   await ui.unmount()
