@@ -324,3 +324,92 @@ test('鲸鱼点击层不带 label：桌面端会把 label 画成按钮文字', a
 
   await ui.unmount()
 })
+
+/**
+ * 点击区要真的盖住整只鲸鱼，两个方向各守一条。
+ *
+ * 回归：children 曾是「每行一个 `<Text>`」，而 `Button` 的 children 是
+ * **标签文本的片段**——多个 `Text` 按行内排，20 行挤成一条很长的一行，
+ * 纵向只盖住鲸鱼顶端一格，点鲸鱼肚子没反应。现在是一整块带换行的字符串。
+ */
+test('鲸鱼点击区是二维的一块：行数与列数都跟着鲸鱼尺寸走', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const mount = async (cols: number) =>
+    $.ui.mount({
+      plugin: 'whale-usage',
+      surface: 'desktop',
+      component: 'Pane',
+      requestId: 'whale',
+      props: props(cols),
+      viewport: { columns: cols + 20, rows: 40 },
+    })
+
+  /** 点击区那层 Box（`Button` 的父节点），以及树里那串盲文空白。 */
+  const tapBox = async (ui: any) => {
+    const tree = await ui.drawn()
+    const find = (node: any): any => {
+      if (!node || typeof node !== 'object') return undefined
+      if (node.type === 'Button' && node.props?.key === 'whale-tap') return node
+      for (const kid of node.children ?? []) {
+        const hit = find(kid)
+        if (hit) return hit
+      }
+      return undefined
+    }
+    const button = find(tree)
+    if (!button) return { box: undefined, tree }
+    const findParent = (root: any, target: any): any => {
+      if (!root || typeof root !== 'object') return undefined
+      for (const kid of root.children ?? []) {
+        if (kid === target) return root
+        const hit = findParent(kid, target)
+        if (hit) return hit
+      }
+      return undefined
+    }
+    return { box: findParent(tree, button), tree }
+  }
+
+  for (const cols of [40, 100]) {
+    const ui = await mount(cols)
+    const { box, tree } = await tapBox(ui)
+    expect(box).toBeDefined()
+
+    // 二维：宽与高都是正的格数，且高度不止一行——一行只够盖住顶端。
+    const boxW = Number(box.props.width)
+    const boxH = Number(box.props.height)
+    expect(boxW).toBeGreaterThan(1)
+    expect(boxH).toBeGreaterThan(1)
+
+    // 空白字符串确实铺满了 boxW × boxH 格。
+    const blank = String(findBlank(tree) ?? '')
+    const rows = blank.split('\n')
+    expect(rows.length).toBe(boxH)
+    for (const row of rows) expect([...row].length).toBe(boxW)
+
+    // 宽高比例贴近鲸鱼本身（320/620），不是被压扁的一条。
+    const ratio = boxH / boxW
+    expect(ratio).toBeGreaterThan(0.2)
+    expect(ratio).toBeLessThan(0.6)
+
+    await ui.unmount()
+  }
+})
+
+/** 顺着树找那串盲文空白（`Text` 的字符串子节点）。 */
+function findBlank(node: any): string | undefined {
+  if (!node || typeof node !== 'object') return undefined
+  if (node.type === 'Text') {
+    for (const kid of node.children ?? []) {
+      if (typeof kid === 'string' && kid.includes('⠀')) return kid
+    }
+  }
+  for (const kid of node.children ?? []) {
+    const hit = findBlank(kid)
+    if (hit) return hit
+  }
+  return undefined
+}

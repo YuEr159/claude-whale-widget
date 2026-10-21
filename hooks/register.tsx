@@ -585,12 +585,23 @@ export const register: Register = (on, options) => {
     const whaleWidth = whaleSize.width
     const whaleHeight = whaleSize.height
     // 点击区：把整只鲸鱼（含气泡，气泡画在同一张 SVG 里、占画布上方大半）
-    // 铺满。引擎不告诉插件「一格等于多少像素」，这里只能按等宽字体的经验值
-    // 8px/格反算——所以刻意往下取整、并把点击区铺到整个画布宽度（也就是
-    // `whaleWidth`，不是鲸鱼本身那 300px），宁可大一圈也不能小一块：
-    // 点偏一点没反应，比点到别处触发别的东西更让人困惑。
-    const whaleTapRows = Math.max(1, Math.ceil(whaleHeight / 8))
-    const whaleTapCols = Math.max(1, Math.ceil(whaleWidth / 8))
+    // 铺满。
+    //
+    // 单位对不上：`Box` 的 `width`/`height` 是字符格，`Svg` 的是 CSS 像素，
+    // 引擎不告诉插件一格是多少像素。只能按等宽字体的经验值反算，两轴取的
+    // 值刻意不同：
+    //
+    //   - **横向按最窄的常见字宽（7px）**。字宽 7.2~8.4px 都常见，按 8 算
+    //     会在 300px 宽的鲸鱼右缘留下十几像素点不中的竖边；宁可多出几格
+    //     溢进左边的空白（看不见），也不能少。
+    //   - **纵向按 16px**。行高常见 17~19px，这个数只会多出几十像素；而鲸鱼
+    //     就在面板最底部，向下溢出的部分是面板底边，压不到别的内容。
+    //
+    // 绝对定位不占流，多出来的部分被站点裁掉，不会撑高面板。
+    const TAP_CELL_PX = 7
+    const TAP_ROW_PX = 16
+    const whaleTapRows = Math.max(1, Math.ceil(whaleHeight / TAP_ROW_PX))
+    const whaleTapCols = Math.max(1, Math.ceil(whaleWidth / TAP_CELL_PX))
 
     const whale = Svg ? (
       <Svg
@@ -650,8 +661,13 @@ export const register: Register = (on, options) => {
     // null`：DeepSeek 在**插件**的价目表里有价（那是概览用的），引擎那边
     // 仍然不认识，两件事不一样。
     const hasNonEngineModel = byModel.some(entry => !isEnginePriced(entry.model))
+    // 用显式的 `<Box flexDirection="column">` 而不是 `<>…</>`：`Fragment`
+    // 的类型声明是 `children?: RenderNode[]`，容不下条件里的 `null` / `false`
+    // 与单个元素，引擎自己的 `ElementConstructor` 才收宽类型 `RenderChildren`。
+    // 两者在引擎里是同一件事——`Fragment` 文档原话是「a column Box around
+    // the children」——所以换成显式 Box 运行时等价，只是类型能过。
     const session = (
-      <>
+      <Box flexDirection="column">
         <Text>
           花费 {usdEstimate(view.costUsd)}
           {hasNonEngineModel ? '（含引擎未收录的模型，按默认模型价估）' : ''} · 上下文{' '}
@@ -671,7 +687,7 @@ export const register: Register = (on, options) => {
           <Text color="diffAdded">+{totals.linesAdded}</Text>{' '}
           <Text color="diffRemoved">-{totals.linesRemoved}</Text> 行
         </Text>
-      </>
+      </Box>
     )
 
     // 上下文占比的堆叠柱状图：每根柱子是一轮，柱内按「已用 / 压缩缓冲 / 空闲」
@@ -689,7 +705,7 @@ export const register: Register = (on, options) => {
     const contextScreen = contextView(contextTurns, chartWidth, Math.max(0, bufferPct), theme.isLight)
 
     const contextPage = (
-      <>
+      <Box flexDirection="column">
         {contextTurns.length === 0 ? (
           <Text dimColor>还没有逐轮数据</Text>
         ) : (
@@ -744,7 +760,7 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
         )}
-      </>
+      </Box>
     )
 
     // 上下文的窗口上限、压缩阈值、记忆文件 / MCP / agent 数量都不再上屏：
@@ -757,7 +773,7 @@ export const register: Register = (on, options) => {
     const freshness = freshnessOf(record.lastRunAt, now, prefsNow.scanIntervalMs)
     // 本地数据的状态与新鲜度：数字本身在概览页，这里只留「数据可不可信」的提示。
     const historyHead = (
-      <>
+      <Box flexDirection="column">
         <Text dimColor={!freshness.isStale}>
           {record.isRunning ? '正在统计…' : `本地 ${freshness.text}`}
           {freshness.isStale ? '（可能过期，下一轮自动重扫）' : ''}
@@ -766,7 +782,7 @@ export const register: Register = (on, options) => {
         {!record.isRunning && !record.lastError && !today && (
           <Text dimColor>还没有统计结果</Text>
         )}
-      </>
+      </Box>
     )
 
     // 页签：用量概览 / 模型分布 / 本会话上下文占比 / 设置。
@@ -909,7 +925,7 @@ export const register: Register = (on, options) => {
                   height={heatHeight}
                 />
               ) : (
-                <>
+                <Box flexDirection="column">
                   {turnGrid.map((line, rowIndex) => (
                     <Box key={`whale-turn-${rowIndex}`} flexDirection="row">
                       {line.map((cell, index) => (
@@ -926,7 +942,7 @@ export const register: Register = (on, options) => {
                   <Box flexDirection="row" justifyContent="flex-end">
                     <Text dimColor>{turnBarsCaption(turnHistory)}</Text>
                   </Box>
-                </>
+                </Box>
               )}
             </Box>
           )}
@@ -1020,7 +1036,7 @@ export const register: Register = (on, options) => {
     ) : null
 
     const modelsPage = (
-      <>
+      <Box flexDirection="column">
         {stack.bars.length === 0 ? (
           <Text dimColor>还没有统计数据</Text>
         ) : (
@@ -1107,7 +1123,7 @@ export const register: Register = (on, options) => {
             <Text dimColor>{overviewFooter(overview, data?.total.cost ?? 0)}</Text>
           </Box>
         )}
-      </>
+      </Box>
     )
     // 小框按钮：与页签同一套做法——按钮自己就是那块可见的方块，外面不套
     // 带边框的 Box。Box 的边框落在按钮命中区之外，点上去只有文字有反应。
@@ -1327,11 +1343,13 @@ export const register: Register = (on, options) => {
                   })()
                 }}
               >
-                {Array.from({ length: whaleTapRows }, (_, row) => (
-                  <Text key={`whale-tap-row-${row}`}>
-                    {'⠀'.repeat(whaleTapCols)}
-                  </Text>
-                ))}
+                {/* **一个 `Text` 装一整块二维空白**，不是每行一个 `Text`。
+                    `Button` 的 children 是「标签文本的片段」，多个 `Text`
+                    会按行内排（文档：a chip, a dim part），20 行会挤成一条
+                    很长的一行——纵向只盖住鲸鱼顶端一格。换行符在 `Text`
+                    里是合法的（`Code` 与 `Markdown` 的文档都写明 newline
+                    是它们唯一的控制字符），所以一整块字符串才会真的铺开。 */}
+                <Text>{Array.from({ length: whaleTapRows }, () => '⠀'.repeat(whaleTapCols)).join('\n')}</Text>
               </Button>
             </Box>
           </Box>
