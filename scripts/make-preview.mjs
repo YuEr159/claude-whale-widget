@@ -25,16 +25,9 @@ const STATES = [
 
 /**
  * 静态快照：没有动画，否则每张图各跑一条 SMIL 时间线。
- *
- * 根元素现在是「像素尺寸 + CSS 100%」——像素是给沙箱 iframe 的固有尺寸，
- * CSS 百分比负责铺满窗口。**独立文件没有窗口可铺**，`height:100%` 在
- * `<body>` 里同样没有基准，所以要把那段内联样式去掉，只留像素尺寸。
+ * 根元素本身就是像素尺寸，独立文件打开也有确定的固有尺寸，不必改写。
  */
-const svgFor = (state, lines) =>
-  whaleSvg(state.mood, lines, { isAnimating: false }).replace(
-    /style="display:block;width:100%;height:100%"/,
-    'style="display:block"',
-  )
+const svgFor = (state, lines) => whaleSvg(state.mood, lines, { isAnimating: false })
 
 // 1. preview.svg：单独一张「正常」状态，README 里直接嵌入。
 writeFileSync(join(root, 'assets/preview.svg'), svgFor(STATES[0], STATES[0].lines) + '\n')
