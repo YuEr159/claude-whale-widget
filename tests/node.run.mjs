@@ -219,13 +219,26 @@ test('截断', () => {
   assert.equal(clip('abcdef', 4), 'abc…')
 })
 
-test('情绪随用量', () => {
-  assert.equal(moodOf(10, false), 'idle')
-  assert.equal(moodOf(10, true), 'working')
-  assert.equal(moodOf(60, false), 'busy')
-  assert.equal(moodOf(85, false), 'tired')
-  assert.equal(moodOf(98, false), 'sleep')
-  assert.equal(moodOf(undefined, true), 'working')
+test('情绪随一天里的时间变化，与额度无关', () => {
+  // 本地时区构造，断言在任何时区都成立。边界是整点、左闭右开。
+  const at = (hour, minute = 0) => new Date(2026, 9, 22, hour, minute, 0).getTime()
+  assert.equal(moodOf(at(0)), 'sleep')
+  assert.equal(moodOf(at(5, 59)), 'sleep')
+  assert.equal(moodOf(at(6)), 'idle')
+  assert.equal(moodOf(at(8, 59)), 'idle')
+  assert.equal(moodOf(at(9)), 'working')
+  assert.equal(moodOf(at(11, 59)), 'working')
+  assert.equal(moodOf(at(12)), 'busy')
+  assert.equal(moodOf(at(13, 59)), 'busy')
+  assert.equal(moodOf(at(14)), 'working')
+  assert.equal(moodOf(at(17, 59)), 'working')
+  assert.equal(moodOf(at(18)), 'busy')
+  assert.equal(moodOf(at(20, 59)), 'busy')
+  assert.equal(moodOf(at(21)), 'tired')
+  assert.equal(moodOf(at(23, 59)), 'tired')
+  // 一天转一圈，五个情绪都出现。
+  const moods = new Set([...Array(24).keys()].map(hour => moodOf(at(hour))))
+  assert.equal(moods.size, 5)
 })
 
 test('usage 视图挑窗口', () => {

@@ -50,13 +50,43 @@ export function whaleSizeFor(columns: number): { width: number; height: number }
 /** 鲸鱼的状态：决定气泡配色与提示语。 */
 export type WhaleMood = 'idle' | 'working' | 'busy' | 'tired' | 'sleep'
 
-/** 用量百分比 → 情绪：越满越累。 */
-export function moodOf(percent: number | undefined, isWorking: boolean): WhaleMood {
-  if (percent === undefined) return isWorking ? 'working' : 'idle'
-  if (percent >= 95) return 'sleep'
-  if (percent >= 80) return 'tired'
-  if (percent >= 50) return 'busy'
-  return isWorking ? 'working' : 'idle'
+/**
+ * 一天里的作息表：本地钟点 → 情绪。
+ *
+ * **情绪不再跟额度走。** 额度回答的是「这一窗口用掉了多少」，与角色此刻在
+ * 做什么是两回事：深夜该睡就得睡，不能因为额度还空着就让她一直精神抖擞；
+ * 反过来，上午刚开工时额度可能已经过半，她也不该因此立刻变成吃撑的样子。
+ *
+ * 改按钟点之后，挂件在一天里的样子跟着人一起变：深夜睡着 → 早晨还没开工、
+ * 摸摸鱼 → 上午干活 → 午饭吃白饭 → 下午继续 → 晚饭再吃 → 夜里累了。
+ * 两顿饭各给一段 `busy`，正对「吃白饭」这个梗。
+ *
+ * 各段的边界都取整点，且左闭右开（`[from, to)`），这样 `hour` 只需一次比较。
+ * 用**本地时间**（`Date#getHours`）而不是 UTC：人看的是自己的钟。
+ */
+const DAY_SCHEDULE: ReadonlyArray<{ before: number; mood: WhaleMood }> = [
+  { before: 6, mood: 'sleep' }, // 00:00–05:59 深夜
+  { before: 9, mood: 'idle' }, // 06:00–08:59 早晨，还没开工
+  { before: 12, mood: 'working' }, // 09:00–11:59 上午
+  { before: 14, mood: 'busy' }, // 12:00–13:59 午饭
+  { before: 18, mood: 'working' }, // 14:00–17:59 下午
+  { before: 21, mood: 'busy' }, // 18:00–20:59 晚饭
+  { before: 24, mood: 'tired' }, // 21:00–23:59 夜里，累了
+]
+
+/**
+ * 当前时刻 → 情绪。
+ *
+ * @param now 毫秒级 Unix 时间戳（`$.clock.now()` 或 `Date.now()`）。
+ *   按**本地时区**取钟点，所以同一份代码在不同时区会各自按当地作息走。
+ */
+export function moodOf(now: number): WhaleMood {
+  const hour = new Date(now).getHours()
+  for (const slot of DAY_SCHEDULE) {
+    if (hour < slot.before) return slot.mood
+  }
+  // `getHours()` 只返回 0–23，`before: 24` 一定兜住；这里只是让类型收窄。
+  return 'tired'
 }
 
 /** 没有图形元素时（终端 surface）用的文字鲸鱼。 */
@@ -73,7 +103,11 @@ export function emblemOf(mood: WhaleMood): string {
 
 /**
  * 气泡与文字的颜色：沿用原图的配色（#203170 描边、#4858A8 主体蓝）。
- * 额度吃紧时气泡底色转暖，是唯一的数据表达，不改变鲸鱼本身。
+ *
+ * 现在的情绪按**一天里的钟点**走（见 `moodOf`），配色跟着时段变：白天是
+ * 清爽的白底蓝字，两顿饭的时段（`busy`）底色转暖，夜里（`tired`）再暖一点，
+ * 深夜（`sleep`）回到灰蓝。这是氛围而不是数据——额度已经在面板里用柱状图
+ * 与百分比说清楚了，气泡不必再说一遍。
  */
 const TONE: Record<WhaleMood, { bubble: string; stroke: string; ink: string; amount: string; hint: string }> = {
   idle: { bubble: '#FFFFFF', stroke: '#203170', ink: '#203170', amount: '#2F4F8F', hint: '#7C8CB0' },

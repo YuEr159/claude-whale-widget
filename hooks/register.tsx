@@ -617,7 +617,9 @@ export const register: Register = (on, options) => {
     const fill = theme
     const chart = theme.chart
 
-    const mood = moodOf(view.fiveHour?.percentUsed ?? view.sevenDay?.percentUsed, false)
+    // 情绪按一天里的钟点走，与额度无关——深夜该睡就睡，不因为额度还空着
+    // 就让她精神抖擞。`now` 是毫秒时间戳，`moodOf` 内部按本地时区取钟点。
+    const mood = moodOf(now)
     const data = record.data
     const today = data?.today
 
