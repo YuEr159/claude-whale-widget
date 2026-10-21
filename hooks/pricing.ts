@@ -98,6 +98,28 @@ export function priceOf(model: string): ModelPrice | undefined {
   return undefined
 }
 
+/**
+ * 引擎（`/cost`）认识这款模型吗。
+ *
+ * 只认 Anthropic 第一方的 id（`claude-` 开头）。引擎的价目表里没有第三方
+ * 模型；遇到不认识的名字时它不会留空，而是**按默认模型的价格**估——
+ * 引擎源码里这个字段的原话是 "costUSD is a guess at the default model's
+ * rate"，原生 `/cost` 因此会打一行
+ * "costs may be inaccurate due to usage of unknown models"。
+ *
+ * 后果可以差到几十倍：同一批 token（本机实测 396 万输入 / 140 万输出 /
+ * 5.38 亿缓存读），DeepSeek Flash 按官方价是 $3.05，引擎按默认模型估成
+ * $258.98。面板上的「本会话花费」因此可能高于「用量概览」里跨 30 天的
+ * 总额——两个数字口径不同，并排放着却不说明就成了自相矛盾。
+ *
+ * 注意它与 `priceOf` 是**两个不同的问题**：插件自己给 DeepSeek 收录了价格
+ * （`priceOf` 有值），但引擎不认它。判「引擎金额可不可信」要看这个，
+ * 不是看 `priceOf`。
+ */
+export function isEnginePriced(model: string): boolean {
+  return model.toLowerCase().startsWith('claude-')
+}
+
 export type TokenCounts = {
   input: number
   output: number

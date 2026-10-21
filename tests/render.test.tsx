@@ -199,6 +199,113 @@ test('选中的页签与未选中的都有底色，只是明暗不同', async ($
 })
 
 /**
+ * 圆角块的底、边、页签文字都必须以**主题键**出现在渲染树上。
+ *
+ * 回归：这些颜色曾是写死的十六进制对（深色一套、浅色一套），由插件按
+ * `/config` 的 `theme` 值挑一套。但 `theme` 的默认值是 `auto`——插件只
+ * 知道「跟随」，不知道跟到的是深还是浅，于是永远挑深色那套：浅色界面里
+ * 整块深蓝黑，和用户反馈的一字不差。
+ *
+ * 改成主题键后，解析发生在绘制端（引擎按实际主题解析），`auto` 也跟得对。
+ * 这条测试守的是「树里交出去的确实是键，不是实色」——只要有人改回十六进制，
+ * 它立刻就会红。
+ *
+ * 主题行这里故意给 `auto`：那是最常见的设置，也是过去唯一出错的取值。
+ */
+test('圆角块与页签文字交给绘制端的都是主题键，不是写死的实色', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+  // 注册一个位于引擎之上的 `config.list`：`next(e)` 才是引擎自己的读取。
+  // 返回类型写成 `any`，因为这里刻意替换成**一份只有 theme 行的列表**——
+  // 测试只关心插件读到 `auto` 时会怎么做。
+  on('config.list', (async (_: unknown, e: any, next: any) => {
+    const outer = await next(e)
+    const rows = [{ key: 'theme', value: 'auto' }, ...(outer ?? [])]
+    return rows
+  }) as any)
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  const HEX = /^#|^rgb\(/i
+  /** 顺着树收集所有带底色或边框的节点。 */
+  const painted: Array<{ where: string; value: string; prop: string }> = []
+  const walk = (node: any, path = '') => {
+    if (!node || typeof node !== 'object') return
+    const here = `${path}/${node.type ?? '?'}`
+    const props = node.props ?? {}
+    for (const prop of ['backgroundColor', 'borderColor', 'color']) {
+      const value = props[prop]
+      // `diffAdded` / `diffRemoved` 这类也是主题键，一并纳入检查。
+      if (typeof value === 'string' && HEX.test(value)) {
+        painted.push({ where: `${here}${props.key ? `[${props.key}]` : ''}`, value, prop })
+      }
+    }
+    for (const kid of node.children ?? []) walk(kid, here)
+  }
+  walk(await ui.drawn())
+
+  // 面板侧不该有任何写死的实色。鲸鱼的 SVG 里有十六进制，但那是 `Svg` 的
+  // `source` 字符串，不是元素的颜色属性，不会被这条遍历看到。
+  expect(painted).toEqual([])
+
+  // 页签那层 Text 上确实带了主题键（`auto` 与浅色、深色拿到的都是这些键）。
+  const tab = (await ui.find({ key: 'whale-tab-overview' })) as any
+  const tabText = (tab?.children ?? []).find((kid: any) => kid && typeof kid === 'object')
+  expect(tabText?.props?.backgroundColor).toBe('userMessageBackgroundHover')
+  expect(tabText?.props?.color).toBe('text')
+
+  await ui.unmount()
+})
+
+/**
+ * 面板的根 Box 要撑满正文高度，鲸鱼才落得到底边。
+ *
+ * 回归：根 Box 只按内容排，窗口一高，鲸鱼就贴着最后一行内容悬在半空，
+ * 底下留一大片空白——「固定在右下角」不成立。修法是给根 Box 一个
+ * `minHeight`（正文可用行数）再加一个 `flexGrow` 的占位，把鲸鱼与脚注
+ * 压到底边。
+ *
+ * 只在停靠（dock）时撑：内联面板的高度本来就由内容决定。
+ */
+test('停靠面板的根 Box 撑满正文高度，内联面板不撑', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/C/test' })
+  mock.store(on, {})
+
+  const mountWith = async (placement: 'dock' | 'inline', bodyRows: number) =>
+    $.ui.mount({
+      plugin: PLUGIN,
+      surface: 'desktop',
+      component: 'Pane',
+      requestId: 'whale',
+      props: { ...PANE_PROPS, placement, scroll: { offset: 0, bodyRows } },
+      viewport: { columns: 100, rows: 40 },
+    })
+
+  const docked = await mountWith('dock', 30)
+  const dockTree = await docked.drawn() as any
+  expect(dockTree.props.minHeight).toBe(30)
+  // 占位要在，否则 minHeight 只会让底边空出一截，内容仍挤在上方。
+  const spacer = (dockTree.children ?? []).find((kid: any) => kid?.props?.key === 'whale-spacer')
+  expect(spacer).toBeDefined()
+  expect(spacer?.props?.flexGrow).toBe(1)
+  await docked.unmount()
+
+  // 内联面板：高度由内容决定，不许凭空拉长。
+  const inline = await mountWith('inline', 30)
+  expect((await inline.drawn() as any).props.minHeight).toBeUndefined()
+  await inline.unmount()
+})
+
+/**
  * 设置页里的每一项都是**开关**：亮＝这一项开着。
  *
  * 回归：`whale-band-toggle` 曾经写死 `isActive=false`，于是它永远不亮，
@@ -540,4 +647,107 @@ test('切到「代码改动」口径后，用量条改说没有改动', async ($
   expect(tree).not.toContain('diffAdded')
 
   await band.unmount()
+})
+
+/**
+ * 「本会话花费」在用到未收录价格的模型时要说明它是怎么来的。
+ *
+ * 回归：面板上这一格取的是引擎 `/cost` 的会话累计，而引擎只认自己的价目表；
+ * 遇到第三方网关的模型名（`deepseek-v4-flash` 之类）就按**默认模型的价格**
+ * 估——引擎源码对这个字段的原话是 "costUSD is a guess at the default
+ * model's rate"，原生 `/cost` 也因此会打一行 "costs may be inaccurate due
+ * to usage of unknown models"。
+ *
+ * 后果是同一个会话在面板上显示上百美元，而「用量概览」里跨 30 天的总额
+ * 才十几美元——两个数字口径不同，并排摆着却不说明，就成了自相矛盾。
+ *
+ * 这条测试走一遍真实的 `turn.complete`：让本轮记下一个没有公开价格的模型，
+ * 再看面板有没有把那句说明画出来。
+ */
+test('用到未收录价格的模型时，本会话花费标明「按默认模型价估」', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+  // 引擎侧：一个 DeepSeek 会话，`/cost` 报了两百多美元。
+  on('turn.complete', async () => ({ text: '' }) as never)
+  on('session.usage', async () => ({
+    value: {
+      rateLimits: [],
+      cost: { usd: 231.5 },
+      context: { window: 200_000, percent: 30 },
+    },
+  } as never))
+
+  await $.turn.complete({
+    answer: '',
+    durationMs: 1_000,
+    isAborted: false,
+    turnId: 'turn-1',
+    usage: {
+      model: 'deepseek-v4-flash',
+      input_tokens: 1_000,
+      output_tokens: 10,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    },
+    reason: 'answer',
+  } as never)
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree).toContain('含引擎未收录的模型')
+
+  await ui.unmount()
+})
+
+/**
+ * 反过来：本会话用的模型全都有价时，不该挂那句免责说明。
+ *
+ * 那就成了「每块表下面都有一行废话」，真正需要看的人反而不看了。
+ */
+test('模型全都有价时，本会话花费不挂免责说明', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+  on('turn.complete', async () => ({ text: '' }) as never)
+  on('session.usage', async () => ({
+    value: { rateLimits: [], cost: { usd: 1.25 }, context: { window: 200_000, percent: 30 } },
+  } as never))
+
+  await $.turn.complete({
+    answer: '',
+    durationMs: 1_000,
+    isAborted: false,
+    turnId: 'turn-1',
+    usage: {
+      model: 'claude-sonnet-5-5',
+      input_tokens: 1_000,
+      output_tokens: 10,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    },
+    reason: 'answer',
+  } as never)
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree).not.toContain('含引擎未收录的模型')
+
+  await ui.unmount()
 })

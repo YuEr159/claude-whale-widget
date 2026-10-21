@@ -24,7 +24,7 @@ import type {
   SessionTotals,
   TurnSpend,
 } from '../types'
-import { costOf } from './pricing.ts'
+import { costOf, isEnginePriced } from './pricing.ts'
 import { clip, displayWidth, padCell, pct, tokens, countdown, usd } from './format.ts'
 import { UNPRICED, usdEstimate } from './provenance.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
@@ -635,10 +635,26 @@ export const register: Register = (on, options) => {
 
     // 本会话：花费与上下文压成一行，上一轮单独一行，再补上原生 /usage 的会话总量：
     // 时长、代码增删、轮次数。
+    //
+    // **「花费」这一格要能说明它可不可信。** 它取的是引擎 `/cost` 的会话
+    // 累计；引擎只认 Anthropic 第一方的价目表，遇到不认识的名字（第三方
+    // 网关的那些）就按**默认模型的价格**估——见 `isEnginePriced` 的注释。
+    //
+    // 后果很具体（本机实测）：同一个会话、同一批 token，DeepSeek Flash 按
+    // 官方价是 $3.05，引擎按默认模型估成 $258.98——于是面板上的「本会话
+    // 花费」反而高于「用量概览」里跨 30 天的总额。两个数字都对，只是口径
+    // 不同；并排放着却不说明，就成了自相矛盾。
+    //
+    // 判据是「本会话用过引擎不认识的模型」。**不能**用 `byModel[].cost ===
+    // null`：DeepSeek 在**插件**的价目表里有价（那是概览用的），引擎那边
+    // 仍然不认识，两件事不一样。
+    const hasNonEngineModel = byModel.some(entry => !isEnginePriced(entry.model))
     const session = (
       <>
         <Text>
-          花费 {usdEstimate(view.costUsd)} · 上下文 {pct(view.contextPercent)}
+          花费 {usdEstimate(view.costUsd)}
+          {hasNonEngineModel ? '（含引擎未收录的模型，按默认模型价估）' : ''} · 上下文{' '}
+          {pct(view.contextPercent)}
           {view.contextTokens !== undefined
             ? ` ${tokens(view.contextTokens)}/${tokens(view.contextWindow)}`
             : ''}
@@ -959,20 +975,37 @@ export const register: Register = (on, options) => {
     // 明细表按列对齐：模型名、输入、输出、金额各占固定宽度，数字右对齐。
     // 用 `displayWidth` 而不是 `length` 补空格——中文与英文混排时码点数不等于
     // 显示列数，按 length 补会让后面几列整体歪掉。
-    const nameWidth = Math.min(
-      16,
-      Math.max(6, ...modelDetails.map(row => displayWidth(row.model))),
-    )
+    //
+    // **列宽自适应**：先按每一列的实际内容算「理想宽度」，再按面板宽度收缩。
+    // 只按内容算的话，长模型名 + 大数字会把整行撑出面板，右边两列被切掉；
+    // 只按固定宽度算的话，短内容又会浪费列。收缩优先削模型名列——它是唯一
+    // 可以靠 `clip` 截断而不丢信息的列，数字列截断会变成错误读数。
     const inputTexts = modelDetails.map(row => tokens(row.input))
     const outputTexts = modelDetails.map(row => tokens(row.output))
     const costTexts = modelDetails.map(row =>
       row.cost === null ? '—' : usd(row.cost),
     )
-    const inputWidth = Math.max(4, ...inputTexts.map(displayWidth))
-    const outputWidth = Math.max(4, ...outputTexts.map(displayWidth))
-    const costWidth = Math.max(4, ...costTexts.map(displayWidth))
-    // 金额列只放数字：`未收录价格` 这种长文案会把整列撑开，把数字挤到一边。
-    // 没有价格的模型记一个短横线，再在图注里说明它是什么意思。
+    /** 一列的理想宽度：够放下这一列所有内容，再留一格呼吸。 */
+    const fitWidth = (texts: string[], floor: number, ceiling: number): number =>
+      Math.max(floor, Math.min(ceiling, ...texts.map(displayWidth)))
+    // 结构开销：左右 paddingX 各 1 + 边框 2 列 + 色块 1 格 + 四个 gap。
+    const tableChrome = 2 + 2 + 1 + 4
+    const nameFloor = 6
+    const nameCeiling = 16
+    // 数字列的宽度**由内容定，不参与收缩**。原因：`padCell` 只补空格、不截断，
+    // 列宽给窄了内容会直接溢出，把后面几列整体推歪——比不收缩更糟。
+    // 封顶 9 格：再宽只会是极端值（`1.20万亿`），而那类读数本来就该靠单位
+    // 压缩，不该把表撑开；超出 9 格的少数几个用 `clip` 截断。
+    const inputWidth = fitWidth(inputTexts, 4, 9)
+    const outputWidth = fitWidth(outputTexts, 4, 9)
+    const costWidth = fitWidth(costTexts, 4, 9)
+    // 模型名列拿剩下的全部：面板宽就多给，窄就少给，下限 6 格（够放
+    // `Deep…` 这种缩写）。它是唯一靠 `clip` 截断而不丢信息的列，所以
+    // 收缩的代价全由它承担。
+    const nameWidth = Math.max(
+      nameFloor,
+      Math.min(nameCeiling, width - (tableChrome + inputWidth + outputWidth + costWidth)),
+    )
 
     // 「范围」放在模型页：它改变的是逐日统计的窗口，与概览卡片无关——
     // 概览的六张卡一直看扫描到的全部数据，柱子与明细才跟着这个范围走。
@@ -1064,20 +1097,35 @@ export const register: Register = (on, options) => {
               paddingX={1}
               marginTop={1}
             >
-              {/* 表头与数据行共用同一组列宽，所以各列能对齐。 */}
+              {/* 表头与数据行共用同一组列宽，所以各列能对齐。
+                  表头第一列要补出数据行那个色块的**位置与缝隙**：
+                  数据行是 `■` + gap + 模型名，共 nameWidth + 2 格加两个 gap；
+                  表头若只写一个 nameWidth + 2 的格子，就少了一个 gap，
+                  右边三列会整体左移一格。所以这里用两段：一个空格替色块，
+                  再来 gap，最后是 nameWidth 宽的表头字。 */}
               <Box flexDirection="row" gap={1}>
-                <Text dimColor>{padCell('模型', nameWidth + 2)}</Text>
-                <Text dimColor>{padCell('输入', inputWidth, 'right')}</Text>
-                <Text dimColor>{padCell('输出', outputWidth, 'right')}</Text>
-                <Text dimColor>{padCell('费用', costWidth, 'right')}</Text>
+                <Text dimColor>{padCell('', 1)}</Text>
+                <Text dimColor>{padCell(clip('模型', nameWidth), nameWidth)}</Text>
+                <Text dimColor>{padCell(clip('输入', inputWidth), inputWidth, 'right')}</Text>
+                <Text dimColor>{padCell(clip('输出', outputWidth), outputWidth, 'right')}</Text>
+                <Text dimColor>{padCell(clip('费用', costWidth), costWidth, 'right')}</Text>
               </Box>
               {modelDetails.map((row, index) => (
                 <Box key={`whale-mrow-${row.model}-${index}`} flexDirection="row" gap={1}>
                   <Text color={modelColorOf(row.model)}>■</Text>
                   <Text>{padCell(clip(row.model, nameWidth), nameWidth)}</Text>
-                  <Text dimColor>{padCell(inputTexts[index] ?? '—', inputWidth, 'right')}</Text>
-                  <Text dimColor>{padCell(outputTexts[index] ?? '—', outputWidth, 'right')}</Text>
-                  <Text dimColor>{padCell(costTexts[index] ?? '—', costWidth, 'right')}</Text>
+                  {/* 数字也用 clip：列宽封顶 9 格，`1.20万亿` 这种极端值
+                      仍可能占满 8 格，留一格缓冲；再长的就截断，不让它
+                      把后面的列推歪。 */}
+                  <Text dimColor>
+                    {padCell(clip(inputTexts[index] ?? '—', inputWidth), inputWidth, 'right')}
+                  </Text>
+                  <Text dimColor>
+                    {padCell(clip(outputTexts[index] ?? '—', outputWidth), outputWidth, 'right')}
+                  </Text>
+                  <Text dimColor>
+                    {padCell(clip(costTexts[index] ?? '—', costWidth), costWidth, 'right')}
+                  </Text>
                 </Box>
               ))}
             </Box>
@@ -1175,8 +1223,21 @@ export const register: Register = (on, options) => {
     // 鲸鱼固定在面板右下角：数据在上，鲸鱼独占最后一行并靠右。
     // 对齐用显式列宽（bodyColumns）而不是 `100%`：后者要等父容器先解析出宽度，
     // 面板被压缩时会跟着内容浮动。
+    //
+    // **根 Box 要撑满整屏高度**（`minHeight` = 正文可用行数）。不撑的话，
+    // 整棵树只有内容那么高，鲸鱼就贴着最后一行内容、悬在面板半空——窗口
+    // 拉得越高，底下那片空白越大，而「右下角」这个说法也就不成立了。
+    // 内容超过一屏时 `minHeight` 不起作用，面板自己滚动，鲸鱼仍在最后一行。
+    //
+    // 只对停靠（dock）的面板这么做：内联面板的高度本来就由内容决定
+    // （文档原文 "Inline the frame fits the tree"），撑满会凭空拉出一长条空白。
+    const bodyRows = e.props.scroll?.bodyRows
+    const minHeight =
+      e.props.placement === 'dock' && typeof bodyRows === 'number' && bodyRows > 0
+        ? bodyRows
+        : undefined
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" minHeight={minHeight}>
         <Text bold>Claude 用量</Text>
         {windows}
         {session}
@@ -1200,6 +1261,10 @@ export const register: Register = (on, options) => {
                 ? modelsPage
                 : overviewPage}
         </Box>
+        {/* 撑开剩下的高度，把下面两行压到面板底边。
+            `flexGrow` 只在父 Box 有确定高度时才有可分配的余量，所以根 Box
+            的 `minHeight` 是它的前提——两者缺一，鲸鱼都会跟着内容往上跑。 */}
+        {minHeight !== undefined && <Box key="whale-spacer" flexGrow={1} />}
         {/* 数据新鲜度贴在最底下：它是「上面那些数字有多可信」的脚注，
             放在开场反而挡在真正要看的数字前面。 */}
         {historyHead}

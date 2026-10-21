@@ -1,25 +1,26 @@
 /**
- * 面板的「现在是深色还是浅色」，以及跟着主题走的一组界面色。
+ * 面板跟着主题走的一组界面色。
  *
- * 引擎不直接告诉插件当前主题，但 `/config` 的 `theme` 行就是这份信息
- * （`$.config.list()` 里 `key === "theme"`）。读不到时按深色处理——桌面端与
- * 终端默认都是深色。
+ * 引擎不直接告诉插件「现在是深色还是浅色」，但 `/config` 的 `theme` 行
+ * （`$.config.list()` 里 `key === "theme"`）给出了用户选的那一档。它有
+ * 三种形态，界面必须分别对待：
  *
- * 为什么需要它：SVG 图表里的颜色是**写死的十六进制**，不像 `Box` 的
- * `backgroundColor` 那样能写主题键让引擎去解析。而两套主题需要的是两组
- * 不同的色值，不是同一支色的两个透明度：
+ *   - `light` / `light-daltonized` / `light-ansi`：确定是浅色；
+ *   - `dark` / `dark-daltonized` / `dark-ansi`：确定是深色；
+ *   - **`auto`**：只说明「跟随系统或宿主外观」，究竟是深是浅，插件无从得知
+ *     ——引擎在不同入口各自解析（终端看 OSC 11 或宿主上报的 `systemTheme`，
+ *     桌面端看 `nativeTheme`），这份解析结果没有暴露给 `$`。
  *
- *   - 亮蓝 `#4D6BFE` 在深色底上对比度 4.02，在白底上也是 4.33 —— 它自己
- *     两边都立得住，可以做主色；
- *   - 但 `#22C3D6`（青，工具定义）在深底上是 8.16，在白底上只剩 2.13；
- *     `#A78BFA`（紫）深底 6.40、白底 2.72。这类「为深色挑的亮色」在白底上
- *     会糊成一片。
- *   - 反过来，靠 `fill-opacity` 压透明也救不了：透明只会让它更靠近背景，
- *     对比度更低。
+ * `auto` 是默认值，也是绝大多数人的设置，所以不能当作「深色」硬编码——那正是
+ * 「浅色模式下圆角块仍是深蓝黑」的根因。于是分两层处理：
  *
- * 所以分类色、轴线、刻度、压缩标记各备两套，按主题取。每一对都实测过
- * 对比度：图形元素 ≥ 3.0，文字 ≥ 4.5（见 `tests/unit.test.ts` 的断言，
- * 改了色值就会立刻测出来）。
+ *   1. **界面色（框的底、边、文字）一律写主题键**。引擎在绘制时才解析，
+ *      跟哪种主题、是 auto 还是显式，都归它管，插件不必知道答案。
+ *   2. **图表色是 SVG 里的十六进制**，引擎解析不了。`auto` 下只能用一套
+ *      在深、浅两种底上都过 WCAG 图形元素口径（3.0）的中等明度色——
+ *      见 `AUTO_CHART`。宁可两边都只到刚过线，也不赌一边、在另一边糊成一片。
+ *
+ * 显式给了深浅时仍各用一套（对比度余量更大）；`auto` 用中间那套。
  */
 
 /** 一处圆角框的两种颜色。 */
@@ -31,39 +32,50 @@ export type PanelFill = {
 }
 
 /**
- * 深色主题：底色比面板底明显亮一档，边框再亮一点——要的是「托起来一层」，
- * 而不是和背景糊成一片。三处圆角框共用这一组，读者扫视时不会觉得
- * 「概览」和「模型」是两种不同的东西。
+ * 大框的底色与边框：**主题键**，不是十六进制。
+ *
+ * 引擎按当前主题解析。选上的键在深色里是 55,55,55、浅色里是 240,240,240，
+ * 边框 `promptBorder` 是 136 / 138——对比度在两边都过 3.0。
  */
-const DARK_FILL: PanelFill = { backgroundColor: '#262b3d', borderColor: '#4a5378' }
-
-/** 浅色主题：同一种蓝调，反向取明度。 */
-const LIGHT_FILL: PanelFill = { backgroundColor: '#e3e7f7', borderColor: '#b4bcd8' }
+const SURFACE_FILL: PanelFill = {
+  backgroundColor: 'userMessageBackground',
+  borderColor: 'promptBorder',
+}
 
 /**
  * 页签「激活」时的底色：比所在大框再亮一档。
  *
- * 深色主题的方向是**往亮走**、浅色主题是**往白走**——两者都是「更靠近前景」，
- * 也就是读者直觉里的「被选中、浮起来」。
- *
- * 底色差本身很有限：浅色主题下 #e3e7f7 往白走最多只能到 #ffffff，两者对比度
- * 只有 1.23，几乎看不出来——这是色彩空间的限制，换哪个值都突破不了。所以
- * 「被选中」这件事主要靠**文字**来说：`tabActiveText` 在激活底上是高对比的
- * 正文色，再配加粗，两个通道加起来才在两套主题下都读得出来。
+ * 深色往亮走、浅色往白走——两者都是「更靠近前景」，也就是读者直觉里的
+ * 「被选中、浮起来」。`userMessageBackgroundHover` 正好是这两个方向上的
+ * 下一档（70 / 252），语义也贴切：悬停时的强调。
  */
-const DARK_TAB_ACTIVE = { backgroundColor: '#3a4260', borderColor: '#8e9ac9' }
-const LIGHT_TAB_ACTIVE = { backgroundColor: '#ffffff', borderColor: '#6675a8' }
+const TAB_ACTIVE_FILL: PanelFill = {
+  backgroundColor: 'userMessageBackgroundHover',
+  borderColor: 'promptBorder',
+}
 
 /**
  * 页签被选中时**文字**的颜色。
  *
- * 不能直接拿 `tabActive.borderColor` 当文字色——那是为边框选的，WCAG 对
- * 图形元素只要求 3.0；实测当正文用时深色只有 3.58、浅色 4.49，都够不上
- * 正文的 4.5。这里单独选一对：深色 `#dee4ff` 对激活底 7.82，浅色 `#2b3657`
- * 对白底 11.88，留了足够余量。
+ * 直接取 `text`：它在激活底上是正文级的对比（深色 9.44、浅色 20.47），
+ * 而且跟着主题走——这正是浅色界面里最要紧的一条，写死的浅色文字到了
+ * 浅底上就看不见了。之前那对 `#dee4ff` / `#2b3657` 只在**已知**深浅时才是
+ * 对的；`auto` 下它和框一样，会赌错一边。
  */
-const DARK_TAB_ACTIVE_TEXT = '#dee4ff'
-const LIGHT_TAB_ACTIVE_TEXT = '#2b3657'
+const TAB_ACTIVE_TEXT = 'text'
+
+/**
+ * 页内小块的底色：比所在大框**深**一档。
+ *
+ * 方向与页签的激活态相反，原因也相反：页签是「被选中所以往前浮」，而
+ * 图表块是「嵌在页面里的一块内容」，往后退一格才读得出层次。两块都往亮走
+ * 的话，页面会像一堆同样亮度的方块铺在一起，反而看不出分组。
+ * 同样用主题键：深色 38,38,38 / 浅色 235,235,235。
+ */
+const INSET_FILL: PanelFill = {
+  backgroundColor: 'composerSidebarBackground',
+  borderColor: 'promptBorder',
+}
 
 /** 主题值是浅色的吗。`light`、`light-daltonized`、`light-ansi` 都算。 */
 export function isLightTheme(themeValue: string | undefined): boolean {
@@ -71,16 +83,29 @@ export function isLightTheme(themeValue: string | undefined): boolean {
 }
 
 /**
- * 图表的主题色对：`dark` 与 `light` 各一套。
+ * 主题值是深色的吗。注意 `auto` **不是**深色——它是「不知道」，
+ * 两者在图表配色上走不同的分支（见文件头）。
+ */
+export function isDarkTheme(themeValue: string | undefined): boolean {
+  return (themeValue ?? '').toLowerCase().includes('dark')
+}
+
+/**
+ * 图表的配色：`dark`、`light`，以及 `auto`（深浅未知）时用的中性一套。
  *
  * 键与 `chart-art.ts` 的 `COLORS` 一一对应。分类色沿用同一套色相
- * （青还是青、紫还是紫），只压明度——读者在两种主题下看到的是同一张图的
- * 同一种读法，不会因为换主题就要重新认颜色。
+ * （青还是青、紫还是紫），只压明度——读者换主题后看到的是同一张图的
+ * 同一种读法，不必重新认颜色。
  */
 export type ChartPalette = {
-  /** 这套调色板是给浅色主题的吗——模型色阶要据此选另一份色值表。 */
-  isLight: boolean
-  /** 主色：核心蓝，两种主题共用。 */
+  /**
+   * 这套调色板对应哪种主题。
+   *
+   * `null` 表示深浅未知（`auto` 且读不到系统外观时）：此时色值取
+   * 中等明度，深底浅底都过 3.0。
+   */
+  isLight: boolean | null
+  /** 主色：核心蓝。 */
   used: string
   /** 压缩缓冲、空闲段：同一支蓝，靠透明度压下去。 */
   usedOpacity: number
@@ -135,7 +160,7 @@ const DARK_CHART: ChartPalette = {
  * agents 5.66、other 4.66。
  *
  * 透明度这边反而要**调高**：浅底上「已用」是深蓝、缓冲是同色更浅的一档，
- * 靠的是让底色透上来把它冲淡，所以 45% 比深色主题那份更实一点才对。
+ * 靠的是让底色透上来把它冲淡，所以 60% 比深色主题那份更实一点才对。
  */
 const LIGHT_CHART: ChartPalette = {
   isLight: true,
@@ -159,65 +184,100 @@ const LIGHT_CHART: ChartPalette = {
   },
 }
 
-/** 两套图表色，测试与文档里引用。 */
-export const CHART_PALETTES = { dark: DARK_CHART, light: LIGHT_CHART } as const
-
 /**
- * 页内小块的底色：比所在大框**深**一档。
+ * `auto`（深浅未知）时的图表色。
  *
- * 方向与页签的激活态相反，原因也相反：页签是「被选中所以往前浮」，而
- * 图表块是「嵌在页面里的一块内容」，往后退一格才读得出层次。两块都往亮走
- * 的话，页面会像一堆同样亮度的方块铺在一起，反而看不出分组。
+ * 取舍：每一支都取**中等明度**，在深色内嵌底（38,38,38）与浅色内嵌底
+ * （235,235,235）上同时过 3.0——实测最低 3.16（messages 在深底）、
+ * 最高 4.02。没有一支能像专用色板那样拿到 5 以上的余量，这是「不知道
+ * 画在哪边」的必然代价；但也不会像原来那样在浅底上跌到 2.13。
+ *
+ * 透明度取两套的中间值：太淡在深底上看不见，太浓在浅底上糊成一团。
  */
-const DARK_INSET = { backgroundColor: '#1f2434', borderColor: '#3d4566' }
-const LIGHT_INSET = { backgroundColor: '#eef1fb', borderColor: '#c5cbe2' }
+const AUTO_CHART: ChartPalette = {
+  isLight: null,
+  used: '#4A6CD4',
+  usedOpacity: 1,
+  bufferOpacity: 0.52,
+  freeOpacity: 0.15,
+  axis: '#7C8394',
+  label: '#7C8394',
+  compact: '#C2650F',
+  barEmpty: '#7C8394',
+  barEmptyOpacity: 0.23,
+  parts: {
+    messages: '#4A6CD4',
+    system: '#8A63D2',
+    tools: '#17879A',
+    memory: '#4A78CC',
+    mcp: '#A855F7',
+    agents: '#2A7E9C',
+    other: '#7C8394',
+  },
+}
+
+/** 三套图表色，测试与文档里引用。 */
+export const CHART_PALETTES = { dark: DARK_CHART, light: LIGHT_CHART, auto: AUTO_CHART } as const
 
 /** 一组界面色：底、边、深浅标记、图表色。 */
 export type ThemeColors = PanelFill & {
-  /** 当前是不是浅色主题。图表以外的地方也用得上。 */
-  isLight: boolean
+  /**
+   * 图表按哪一档取色：`true` 浅色、`false` 深色、`null` 未知。
+   *
+   * 注意界面色不看它——那些是主题键，由引擎解析。它只影响 SVG 与终端
+   * 字符图里那批十六进制色。
+   */
+  isLight: boolean | null
   /** 图表要用的那套颜色。 */
   chart: ChartPalette
   /** 页签被选中时的底色与边框：比所在大框再亮一档。 */
   tabActive: PanelFill
-  /** 页签被选中时的**文字**色：正文口径（≥4.5），不能拿边框色顶替。 */
+  /** 页签被选中时的**文字**色：正文口径（≥4.5），走主题键。 */
   tabActiveText: string
   /** 页内小块（图表、表格）的底色与边框：比所在大框深一档。 */
   inset: PanelFill
 }
 
-/** 深色一组。 */
-const DARK: ThemeColors = {
-  ...DARK_FILL,
-  isLight: false,
-  chart: DARK_CHART,
-  tabActive: DARK_TAB_ACTIVE,
-  tabActiveText: DARK_TAB_ACTIVE_TEXT,
-  inset: DARK_INSET,
+/**
+ * 三档界面色。
+ *
+ * 界面色**本身不分深浅**——框的底、边、文字全是主题键，由引擎在绘制时
+ * 解析，所以三档里它们是同一份引用。分档只为了图表：SVG 里的十六进制
+ * 引擎解析不了，只能由插件先选一套。
+ */
+function themeOf(chart: ChartPalette): ThemeColors {
+  return {
+    ...SURFACE_FILL,
+    isLight: chart.isLight,
+    chart,
+    tabActive: TAB_ACTIVE_FILL,
+    tabActiveText: TAB_ACTIVE_TEXT,
+    inset: INSET_FILL,
+  }
 }
-/** 浅色一组。 */
-const LIGHT: ThemeColors = {
-  ...LIGHT_FILL,
-  isLight: true,
-  chart: LIGHT_CHART,
-  tabActive: LIGHT_TAB_ACTIVE,
-  tabActiveText: LIGHT_TAB_ACTIVE_TEXT,
-  inset: LIGHT_INSET,
-}
+
+const DARK: ThemeColors = themeOf(DARK_CHART)
+const LIGHT: ThemeColors = themeOf(LIGHT_CHART)
+/** 深浅未知（`auto`）：界面色照旧走主题键，图表用中性那一套。 */
+const AUTO: ThemeColors = themeOf(AUTO_CHART)
 
 /**
  * 从 `/config` 的行里挑出主题，给出这一屏要用的整套颜色。
  *
  * 只读 `key` 与 `value`：调用方传什么都行，测试里也不必造一整行配置。
- * 找不到 `theme` 行（老版本引擎、被管理员锁掉的配置）时退回深色：
- * 那是更常见的环境，且错了也只是「淡一点」而不是「看不见字」。
+ *
+ * `auto` 与「读不到」都归到 `AUTO`——两者都是「不知道」。这里以前归到
+ * 深色，等于赌一边；而 `auto` 恰恰是最常见的设置，赌错就是浅色界面里
+ * 整块深色，或者浅底上的亮紫亮青糊成一片。
  */
 export function themeColorsFor(
   rows: readonly { key: string; value: unknown }[] | undefined,
 ): ThemeColors {
   const theme = rows?.find(row => row.key === 'theme')
   const value = typeof theme?.value === 'string' ? theme.value : undefined
-  return isLightTheme(value) ? LIGHT : DARK
+  if (isLightTheme(value)) return LIGHT
+  if (isDarkTheme(value)) return DARK
+  return AUTO
 }
 
 /**
@@ -233,8 +293,12 @@ export function panelFillFor(
   return { backgroundColor, borderColor }
 }
 
-/** 这些底色在测试与文档里被引用，导出便于比对。 */
-export const FILLS = { dark: DARK_FILL, light: LIGHT_FILL } as const
+/** 三档的大框底色与边框，测试里引用。 */
+export const FILLS = { dark: SURFACE_FILL, light: SURFACE_FILL, auto: SURFACE_FILL } as const
 
-/** 页签激活态的两种底色，测试里引用。 */
-export const TAB_ACTIVE_FILLS = { dark: DARK_TAB_ACTIVE, light: LIGHT_TAB_ACTIVE } as const
+/** 页签激活态的底色，测试里引用。 */
+export const TAB_ACTIVE_FILLS = {
+  dark: TAB_ACTIVE_FILL,
+  light: TAB_ACTIVE_FILL,
+  auto: TAB_ACTIVE_FILL,
+} as const

@@ -670,6 +670,56 @@ test('表格对齐：按显示宽度补空格，中文与英文混排也不歪',
   expect(displayWidth(clip('DeepSeek Flash', 6))).toBeLessThanOrEqual(6)
 })
 
+/**
+ * 模型明细表的表头与数据行必须逐列对齐。
+ *
+ * 回归：表头曾是 4 个格子（`padCell('模型', nameWidth + 2)` + 三列数字），
+ * 而数据行是 5 个格子（`■` 色块 + 模型名 + 三列）。`Box` 的 `gap={1}` 是
+ * 每两格之间加一格，格数不同就少了一道缝隙，于是右边三列整体左移，
+ * 「输入 / 输出 / 费用」全部错位。
+ *
+ * 修法是把表头也补成 5 格：一个空格替色块，再加 gap。这条测试按**逐列的
+ * 起始列号**断言，而不是只看总宽度——总宽相同但内部错位的情况也能抓到。
+ */
+test('模型明细表：表头与数据行逐列对齐', () => {
+  const nameWidth = 12
+  const inputWidth = 6
+  const outputWidth = 6
+  const costWidth = 8
+  const gap = 1
+
+  // 与 `modelsPage` 里的写法一一对应。
+  const head = [
+    padCell('', 1),
+    padCell('模型', nameWidth),
+    padCell('输入', inputWidth, 'right'),
+    padCell('输出', outputWidth, 'right'),
+    padCell('费用', costWidth, 'right'),
+  ]
+  const row = [
+    '■',
+    padCell(clip('DeepSeek Flash', nameWidth), nameWidth),
+    padCell('1.2万', inputWidth, 'right'),
+    padCell('3.4千', outputWidth, 'right'),
+    padCell('$1.23', costWidth, 'right'),
+  ]
+
+  // 每列的起始列号必须一致。
+  const starts = (cells: string[]): number[] => {
+    const out: number[] = []
+    let x = 0
+    for (const cell of cells) {
+      out.push(x)
+      x += displayWidth(cell) + gap
+    }
+    return out
+  }
+  expect(starts(head)).toEqual(starts(row))
+  // 两行总宽也要一致，否则右边会多出或少掉一截底色。
+  const total = (cells: string[]) => starts(cells)[cells.length - 1]! + displayWidth(cells[cells.length - 1]!)
+  expect(total(head)).toBe(total(row))
+})
+
 test('图表翻页已取消：上下文柱状图按宽度自适应，没有翻页状态', () => {
   // 翻页的 `pageOf` 与 `contextOffset` 一并删掉了。这里守的是「不再有
   // 翻页入口」：显示轮数只由宽度决定，图注里的轮数跟着变化。
@@ -787,13 +837,17 @@ test('压缩标记只落在压缩后的第一轮', () => {
   expect(bars.map(bar => bar.isAfterCompact)).toEqual([false, true, false])
 })
 
-test('面板底色跟着主题走，读不到时退回深色', () => {
+test('面板底色是三档同一份：深浅交给绘制端，图表才分档', () => {
   expect(isLightTheme('light')).toBe(true)
   expect(isLightTheme('light-daltonized')).toBe(true)
   expect(isLightTheme('dark')).toBe(false)
   expect(isLightTheme(undefined)).toBe(false)
+  // 界面色是主题键，三档同一份；`auto` 与「读不到」都不再赌深色。
   expect(panelFillFor([{ key: 'theme', value: 'light' }]).backgroundColor).toBe(
-    FILLS.light.backgroundColor,
+    'userMessageBackground',
   )
-  expect(panelFillFor(undefined).backgroundColor).toBe(FILLS.dark.backgroundColor)
+  expect(panelFillFor([{ key: 'theme', value: 'auto' }]).backgroundColor).toBe(
+    'userMessageBackground',
+  )
+  expect(panelFillFor(undefined).backgroundColor).toBe('userMessageBackground')
 })
