@@ -495,6 +495,15 @@ export function overviewFooter(overview: LocalOverview | undefined, totalCost: n
  *
  * 曾经踩过的坑：`fitWidth` 写成取最小值，于是输入列按最短的那项（`8.0万`）
  * 定宽，而 `21.50亿` 比它长，被截成 `21.5…`。看着像「挤」，其实是算窄了。
+ *
+ * **`panelWidth` 是面板正文的列数（`bodyColumns`），函数自己扣掉页框的
+ * 4 格。** 明细表套在「页签 + 内容」那个大圆角框里，那 4 格（边框 2 +
+ * 左右 padding 各 1）不属于这张表。忘了扣的话，整张表比可用宽度宽 4 格，
+ * 超出的部分被压缩，每一行按各自的折行点断开，表头与数据行就全对不上了。
+ *
+ * 极窄的边界：可用宽度低于约 43 列时，五列内容本身放不下（模型名最短
+ * 6 格 + 三个数字列各最短 4 格 + 色块 1 格 + 缝隙），整表会溢出。那种
+ * 宽度下的面板也读不了这张表，不再为它加分支。
  */
 
 /** 明细表每一列的宽度。 */
@@ -519,8 +528,28 @@ export type DetailTableLayout = {
 /** 列间距。1 格会把相邻两列的数字粘在一起。 */
 export const DETAIL_TABLE_GAP = 2
 
-/** 结构开销：左右 paddingX 各 1 + 边框 2 列 + 色块 1 格 + 四个间隙。 */
-const TABLE_CHROME = 2 + 2 + 1 + DETAIL_TABLE_GAP * 4
+/**
+ * 页框吃掉的外围列数：外框的圆角边框 2 列 + 左右 `paddingX` 各 1 列。
+ *
+ * 明细表并不是直接铺在面板正文上，它套在「页签 + 内容」那个大圆角框里，
+ * 那个框自己占 4 格。**这 4 格必须从面板宽度里扣掉**，否则整张表会比
+ * 实际可用宽度宽 4 格：超出的部分被 flex 压缩，每一行按各自的折行点断开，
+ * 表头与数据行的列起点就全对不上了。
+ */
+export const PAGE_FRAME_CHROME = 2 + 2
+
+/**
+ * 色块列的宽度。
+ *
+ * `■`（U+25A0）的东亚宽度属性是 Ambiguous：多数终端按 1 格算，CJK 环境下
+ * 按 2 格算。**不猜它到底几格**——表头用同样的 2 格盒子占位，数据行把 `■`
+ * 放进 2 格盒子。这样无论引擎怎么量，两行第一列的宽度都完全相同。
+ * 取 2 而不是 1 是为了留出余量：真按 2 格算时塞进 1 格盒子会折行。
+ */
+export const CHIP_COLUMN = 2
+
+/** 表自身结构开销：左右 paddingX 各 1 + 边框 2 列 + 色块列 + 四个间隙。 */
+const TABLE_CHROME = 2 + 2 + CHIP_COLUMN + DETAIL_TABLE_GAP * 4
 
 /** 列宽的下限与上限。 */
 const NAME_FLOOR = 6
@@ -560,8 +589,7 @@ export function tablePartitions(
   panelWidth: number,
   contentWidths: readonly [number, number, number, number],
 ): { widths: [number, number, number, number]; gap: number } {
-  // 结构开销：边框 2 + 左右 padding 各 1 + 色块 1 + 四道缝隙。
-  const chrome = 2 + 2 + 1 + DETAIL_TABLE_GAP * 4
+  const chrome = TABLE_CHROME
   const contentSum = contentWidths[0] + contentWidths[1] + contentWidths[2] + contentWidths[3]
   const spare = Math.max(0, panelWidth - chrome - contentSum)
 
@@ -611,13 +639,16 @@ export function detailTableLayout(
   const outputWidth = fit(output, NUMBER_FLOOR, NUMBER_CEILING)
   const costWidth = fit(cost, NUMBER_FLOOR, NUMBER_CEILING)
 
+  // 明细表套在页框里，那 4 格不属于这张表。
+  const tableWidth = panelWidth - PAGE_FRAME_CHROME
+
   // 模型名列拿剩下的全部；窄了就截断它，不动数字列。
-  const rest = panelWidth - (TABLE_CHROME + inputWidth + outputWidth + costWidth)
+  const rest = tableWidth - (TABLE_CHROME + inputWidth + outputWidth + costWidth)
   const nameWidth = Math.max(NAME_FLOOR, Math.min(NAME_CEILING, rest))
 
   // 四列分区：每列连同其后的缝隙占一格。渲染时不要把分区宽度当成列宽
   // ——列宽仍是上面按内容算出的数，差额在分区内以空白补上（见 `padCell`）。
-  const partitions = tablePartitions(panelWidth, [nameWidth, inputWidth, outputWidth, costWidth])
+  const partitions = tablePartitions(tableWidth, [nameWidth, inputWidth, outputWidth, costWidth])
 
   return {
     nameWidth,

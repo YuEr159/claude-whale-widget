@@ -26,6 +26,8 @@ import {
   maskModel,
   modelDetailRows,
   detailTableLayout,
+  CHIP_COLUMN,
+  PAGE_FRAME_CHROME,
   modelRows,
   overviewCards,
   heatLevel,
@@ -768,66 +770,60 @@ test('模型明细表：列宽放得下最长的读数，且表头与数据行�
     // 2. 列间缝隙至少 2 格：1 格时 `21.50亿` 与 `677.9万` 会贴成一片。
     expect(layout.gap).toBeGreaterThanOrEqual(2)
 
-    // 3. 表头与数据行逐列对齐（格子数相同、宽度相同）。
+    // 3. 表头与数据行逐列对齐。
     //
-    // 这里两侧都用**左对齐**构造，与渲染层一致。曾经是右对齐：位数不同的
-    // 读数（`8.0万` 与 `21.50亿`）左边参差不齐，扫读时每一格都要重新找起点。
-    const head = [
-      padCell('', 1),
-      padCell(clip('模型', layout.nameWidth), layout.nameWidth),
-      padCell(clip('输入', layout.inputWidth), layout.inputWidth),
-      padCell(clip('输出', layout.outputWidth), layout.outputWidth),
-      padCell(clip('费用', layout.costWidth), layout.costWidth),
-    ]
-    const cellsOf = (index: number) => [
-      '■',
-      padCell(clip(rows[index]!.model, layout.nameWidth), layout.nameWidth),
-      padCell(clip(layout.input[index]!, layout.inputWidth), layout.inputWidth),
-      padCell(clip(layout.output[index]!, layout.outputWidth), layout.outputWidth),
-      padCell(clip(layout.cost[index]!, layout.costWidth), layout.costWidth),
-    ]
-    const starts = (cells: string[]): number[] => {
-      const out: number[] = []
-      let x = 0
-      for (const cell of cells) {
-        out.push(x)
-        x += displayWidth(cell) + layout.gap
-      }
-      return out
+    // 渲染层现在用定宽 `Box` 当单元格，各列的起点只由**分区宽度**决定，
+    // 与每格文字多长无关——所以这里断的是「每列都放得进自己的分区」，
+    // 不再是「把每格补齐到同一宽度」。旧写法靠 `padCell` 补行尾空格，
+    // 那个空格一旦被绘制端裁掉，列宽就塌回内容宽度，四列全歪。
+    const p = layout.partitions.widths
+    for (const [index, width] of [layout.nameWidth, layout.inputWidth, layout.outputWidth, layout.costWidth].entries()) {
+      expect(width).toBeLessThanOrEqual(p[index]!)
     }
+    // 每行最长的读数也必须放得进它那个分区。
     for (const index of rows.keys()) {
-      expect(starts(cellsOf(index))).toEqual(starts(head))
+      expect(displayWidth(layout.input[index]!)).toBeLessThanOrEqual(p[1]!)
+      expect(displayWidth(layout.output[index]!)).toBeLessThanOrEqual(p[2]!)
+      expect(displayWidth(layout.cost[index]!)).toBeLessThanOrEqual(p[3]!)
     }
 
-    // 4. 整表不能超出面板宽度。
-    const totalWidth = starts(head).at(-1)! + layout.costWidth
+    // 4. 整表不能超出**页框内**的可用宽度。
+    //    页框（边框 2 + 左右 padding 各 1）占 4 格，明细表在它里面。
+    const chrome = PAGE_FRAME_CHROME + 2 + 2 + CHIP_COLUMN + layout.gap * 4
+    const totalWidth = chrome + p[0] + p[1] + p[2] + p[3]
     expect(totalWidth).toBeLessThanOrEqual(panelWidth)
   }
 })
 
 /**
- * 四列各占一个**分区**，四个分区加起来正好铺满面板。
+ * 四列各占一个**分区**，四个分区加起来正好铺满页框内的可用宽度。
  *
- * 回归：以前只有内容列宽、没有分区，宽面板下整张表挤在左边——
- * 模型名被夹在 24 格，右边空出几十格，四列看起来像没排好。
+ * 回归两件事：
+ *   1. 以前只有内容列宽、没有分区，宽面板下整张表挤在左边——模型名被夹在
+ *      24 格，右边空出几十格，四列看起来像没排好。
+ *   2. 后来有了分区，但宽度是按 `bodyColumns` 全宽算的，忘了表格套在页框里
+ *      ——页框的边框与 padding 占 4 格，整张表比可用宽度宽 4 格，溢出被
+ *      压缩，每行按各自的折行点断开，四列又歪了。
  */
-test('模型明细表：四列分区正好铺满面板宽度', () => {
+test('模型明细表：四列分区正好铺满页框内的可用宽度', () => {
   const rows = modelDetailRows([
     { model: 'DeepSeek Flash', isPriced: true, input: 2_150_000_000, output: 6_779_000, cacheRead: 0, cacheWrite: 0, cost: 18.39, messages: 9 },
     { model: 'qwen3.8-27b', isPriced: true, input: 80_000, output: 9_000, cacheRead: 0, cacheWrite: 0, cost: 0.31, messages: 1 },
   ])
 
-  for (const panelWidth of [60, 80, 100, 140]) {
+  for (const panelWidth of [50, 60, 80, 100, 140]) {
     const layout = detailTableLayout(rows, panelWidth)
     const p = layout.partitions.widths
-    // 结构开销与渲染层一致：边框 2 + 左右 padding 各 1 + 色块 1 + 四道缝隙。
-    const chrome = 2 + 2 + 1 + layout.gap * 4
+    // 页框吃掉的外围 4 格不属于这张表。
+    const available = panelWidth - PAGE_FRAME_CHROME
+    // 表自身：边框 2 + 左右 padding 各 1 + 色块列 + 四道缝隙。
+    const chrome = 2 + 2 + CHIP_COLUMN + layout.gap * 4
     const total = chrome + p[0] + p[1] + p[2] + p[3]
-    // 不超出面板（溢出会被裁掉），也不留下大片空白。
-    expect(total).toBeLessThanOrEqual(panelWidth)
-    expect(panelWidth - total).toBeLessThanOrEqual(4)
+    // 不超出可用宽度（溢出会被压缩、折行，四列错位），也不留下大片空白。
+    expect(total).toBeLessThanOrEqual(available)
+    expect(available - total).toBeLessThanOrEqual(4)
 
-    // 分区一定不小于内容：否则 `padCell` 会截断读数。
+    // 分区一定不小于内容：否则 `clip` 会截断读数。
     expect(p[0]).toBeGreaterThanOrEqual(layout.nameWidth)
     expect(p[1]).toBeGreaterThanOrEqual(layout.inputWidth)
     expect(p[2]).toBeGreaterThanOrEqual(layout.outputWidth)
