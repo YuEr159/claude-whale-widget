@@ -326,90 +326,82 @@ test('鲸鱼点击层不带 label：桌面端会把 label 画成按钮文字', a
 })
 
 /**
- * 点击区要真的盖住整只鲸鱼，两个方向各守一条。
+ * 指针点鲸鱼要能开泡泡——而且要点在鲸鱼的**肚子**上，不是顶端那一行。
  *
- * 回归：children 曾是「每行一个 `<Text>`」，而 `Button` 的 children 是
- * **标签文本的片段**——多个 `Text` 按行内排，20 行挤成一条很长的一行，
- * 纵向只盖住鲸鱼顶端一格，点鲸鱼肚子没反应。现在是一整块带换行的字符串。
+ * 回归：以前点击区是一个 `Button`。桌面端把 `Button` 画成原生按钮，命中区
+ * 在纵向恒为一行文字高（实测），children 写几行都撑不高它——点鲸鱼下半截
+ * 没反应。现在盖的是一整片 `Client` 区域，`onPointer` 收到区域内的格坐标。
  */
-test('鲸鱼点击区是二维的一块：行数与列数都跟着鲸鱼尺寸走', async ($, on) => {
+test('指针点在鲸鱼中部也能开泡泡', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
 
-  const mount = async (cols: number) =>
-    $.ui.mount({
-      plugin: 'whale-usage',
-      surface: 'desktop',
-      component: 'Pane',
-      requestId: 'whale',
-      props: props(cols),
-      viewport: { columns: cols + 20, rows: 40 },
-    })
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
 
-  /** 点击区那层 Box（`Button` 的父节点），以及树里那串盲文空白。 */
-  const tapBox = async (ui: any) => {
-    const tree = await ui.drawn()
-    const find = (node: any): any => {
-      if (!node || typeof node !== 'object') return undefined
-      if (node.type === 'Button' && node.props?.key === 'whale-tap') return node
-      for (const kid of node.children ?? []) {
-        const hit = find(kid)
-        if (hit) return hit
-      }
-      return undefined
-    }
-    const button = find(tree)
-    if (!button) return { box: undefined, tree }
-    const findParent = (root: any, target: any): any => {
-      if (!root || typeof root !== 'object') return undefined
-      for (const kid of root.children ?? []) {
-        if (kid === target) return root
-        const hit = findParent(kid, target)
-        if (hit) return hit
-      }
-      return undefined
-    }
-    return { box: findParent(tree, button), tree }
+  const bubbleOpen = async (): Promise<boolean> => {
+    const svg = findLastSvg(await ui.drawn())
+    return String(svg?.props?.source ?? '').includes('<ellipse')
   }
 
-  for (const cols of [40, 100]) {
-    const ui = await mount(cols)
-    const { box, tree } = await tapBox(ui)
-    expect(box).toBeDefined()
+  expect(await bubbleOpen()).toBe(false)
 
-    // 二维：宽与高都是正的格数，且高度不止一行——一行只够盖住顶端。
-    const boxW = Number(box.props.width)
-    const boxH = Number(box.props.height)
-    expect(boxW).toBeGreaterThan(1)
-    expect(boxH).toBeGreaterThan(1)
+  // 点击区给测试的尺寸：`Client` 的 props 里带着行数与列数。
+  const area = await ui.find({ key: 'whale-tap-area' })
+  expect(area).toBeDefined()
+  const rows = Number((area?.props as any)?.height ?? 0)
+  const cols = Number((area?.props as any)?.width ?? 0)
+  expect(rows).toBeGreaterThan(1)
+  expect(cols).toBeGreaterThan(1)
 
-    // 空白字符串确实铺满了 boxW × boxH 格。
-    const blank = String(findBlank(tree) ?? '')
-    const rows = blank.split('\n')
-    expect(rows.length).toBe(boxH)
-    for (const row of rows) expect([...row].length).toBe(boxW)
+  // 点在正中间——正是旧实现够不着的地方。
+  const x = Math.floor(cols / 2)
+  const y = Math.floor(rows / 2)
+  await ui.pointer({ type: 'down', x, y, button: 'left' })
+  await ui.pointer({ type: 'up', x, y, button: 'left' })
+  expect(await bubbleOpen()).toBe(true)
 
-    // 宽高比例贴近鲸鱼本身（320/620），不是被压扁的一条。
-    const ratio = boxH / boxW
-    expect(ratio).toBeGreaterThan(0.2)
-    expect(ratio).toBeLessThan(0.6)
+  // 再点一下同一处就收回去。
+  await ui.pointer({ type: 'down', x, y, button: 'left' })
+  await ui.pointer({ type: 'up', x, y, button: 'left' })
+  expect(await bubbleOpen()).toBe(false)
 
-    await ui.unmount()
-  }
+  await ui.unmount()
 })
 
-/** 顺着树找那串盲文空白（`Text` 的字符串子节点）。 */
-function findBlank(node: any): string | undefined {
-  if (!node || typeof node !== 'object') return undefined
-  if (node.type === 'Text') {
-    for (const kid of node.children ?? []) {
-      if (typeof kid === 'string' && kid.includes('⠀')) return kid
-    }
-  }
-  for (const kid of node.children ?? []) {
-    const hit = findBlank(kid)
-    if (hit) return hit
-  }
-  return undefined
-}
+/**
+ * 鲸鱼的键盘/点击按钮在任何表面上都得在。
+ *
+ * 终端不画 SVG，鲸鱼退化成一个表情，开合在树上没有可读的痕迹；所以这里
+ * 守的是**结构契约**：`whale-tap` 这个按钮仍在、仍是 `plain`、仍能按下。
+ * 「按下之后做什么」由 `tapWhale` 一份实现负责，桌面端的指针测试覆盖了它。
+ */
+test('终端上仍保留鲸鱼的键盘/点击按钮', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const button = await ui.find({ key: 'whale-tap' })
+  expect(button).toBeDefined()
+  expect((button?.props as any)?.plain).toBe(true)
+  // 按下不抛错，说明 onPress 接上了真正的实现。
+  await expect(ui.press({ key: 'whale-tap' })).resolves.toBeDefined()
+
+  await ui.unmount()
+})
