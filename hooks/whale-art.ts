@@ -23,11 +23,15 @@ export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
  * 宽度与高度由画布比例绑定，所以「最小高度」就是真正的下界：面板再窄，
  * 鲸鱼也至少有这么高，不会缩成一团看不清的色块。
  *
- * 从 96 提到 120：泡泡里的字（尤其第二行 46px 的主角）在 620 宽的画布上
- * 缩放后，96px 高时主角只剩约 14px，小字只剩 6px——在桌面上已经读不动了。
- * 120px 高对应约 17px 的主角、8px 的小字，是能看清的下限。
+ * 从 96 提到 120，再提到 180（+50%）：泡泡里的字（尤其第二行 46px 的主角）
+ * 在 620 宽的画布上缩放后，96px 高时主角只剩约 14px，小字只剩 6px——在桌面上
+ * 已经读不动了。120px 是「能看清」的下限（主角约 17px、小字 8px），
+ * 180px 则让主角约 26px、小字约 12px，小字号在普通面板上不必凑近看。
+ *
+ * 代价是最小宽度跟着到 120 / (320/620) ≈ 349px；面板很窄时立绘会占掉几乎
+ * 整行，这是有意为之——这个挂件的主角就是这条鲸鱼。
  */
-export const WHALE_MIN_HEIGHT = 120
+export const WHALE_MIN_HEIGHT = 180
 
 /**
  * 由最小高度反推出的最小宽度。
@@ -108,19 +112,18 @@ function escapeXml(text: string): string {
 }
 
 /**
- * 白色对话气泡：大椭圆 + 尾巴 + 两颗小泡。
+ * 白色对话气泡：大椭圆 + 两颗小泡。
  *
- * **整条「气泡 → 尾巴 → 小泡」必须指向鲸鱼。** 鲸鱼画在 `translate(318 16)`
- * 的右下角（画布 620×320，实际占 x 378~620、y 36~320），气泡在左边，所以
- * 尾巴与小泡要朝**右下**延伸。
+ * **没有尾巴。** 曾经从椭圆左下甩出一条装饰线，它不对应任何数据，还容易
+ * 让人以为气泡漏了气。气泡靠位置（在鲸鱼左边）就足以说明「这是谁在说话」。
  *
- * 回归：尾巴曾是 `M132 200 q-22 22 -38 38`——从椭圆左下**向左下**甩出去，
- * 两颗小泡也排在左下方 (126,240) / (172,272)。整条链指反了方向，看起来像
- * 气泡漏了气往地上掉，而不是在跟右边的鲸鱼说话。
+ * 两颗小泡从大泡右下沿同一条射线（方向约 (0.506, 0.862)）依次变小，指向
+ * 鲸鱼——「越来越远、越来越小」才读得出是同一句话的余音。小泡都留在鲸鱼
+ * **左侧**（鲸鱼占 x 378~620），否则会压到它脸上。
  *
- * 现在的几何以椭圆中心 (228,112)、rx 146、ry 90 为准：尾巴根部取右下
- * 约 55° 处的 (312,186)，末端落到 (368,232)；两颗小泡顺着同一条射线继续
- * 往右下，依次变小——「越来越远、越来越小」才读得出是同一句话的余音。
+ * 几何以椭圆中心 (228,112)、rx 146、ry 90 为准。三行文字的基线是
+ * 96 / 142 / 180：第三行原本在 188，贴着椭圆底端，可用宽度只剩 123px，
+ * 上移 8px 后放宽到 167px，也不再压着描边。
  */
 function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
   const tone = TONE[mood]
@@ -132,8 +135,11 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
       const size = isAmount ? 46 : index === 0 ? 25 : 21
       const weight = isAmount ? 800 : 600
       const color = isAmount ? tone.amount : index === 2 ? tone.hint : tone.ink
-      // 三行时 96 / 148 / 190；两行时整体下移居中；一行时只居中一行
-      const y = shown.length === 1 ? 118 : shown.length === 2 ? 108 + index * 44 : 96 + index * 46
+      // 三行时 96 / 142 / 180；两行时整体下移居中；一行时只居中一行。
+      // 第三行从 188 上提到 180：原来的位置贴着椭圆底端，左右只剩 61px，
+      // 小字既要挤在窄口里、看起来又像要掉出气泡。上移 8px 后可用宽度从
+      // 约 122px 放宽到约 167px，视觉上也不再压着描边。
+      const y = shown.length === 1 ? 118 : shown.length === 2 ? 108 + index * 44 : [96, 142, 180][index]!
       return `<text x="228" y="${y}" text-anchor="middle" font-family="'Segoe UI','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}">${escapeXml(line)}</text>`
     })
     .join('')
@@ -167,7 +173,7 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
  * @param mood 情绪，决定气泡配色
  * @param lines 气泡里最多三行文字（第一行标签、第二行金额、第三行提示）
  * @param options `isAnimating` 为真时鲸鱼轻微上下浮动（SMIL，无需脚本）；
- *   `isBubbleOpen` 为假时整块气泡（含尾巴与小泡）不画，只留鲸鱼。
+ *   `isBubbleOpen` 为假时整块气泡（含小泡）不画，只留鲸鱼。
  *   泡泡现在是常驻的，这个开关只为「画一张没有气泡的图」保留（导出、测试）。
  */
 export function whaleSvg(

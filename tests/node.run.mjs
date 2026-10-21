@@ -401,7 +401,7 @@ test('鲸鱼尺寸连续，高度严格按画布比例且不低于最小高度',
 
   // 下限同理：断言「不低于最小高度」与「窄面板确实落到下限」，不写死数值。
   assert.equal(whaleSizeFor(1).width, WHALE_MIN_WIDTH)
-  assert.equal(WHALE_MIN_HEIGHT, 120)
+  assert.equal(WHALE_MIN_HEIGHT, 180)
 
   for (const columns of [1, 10, 40, 100, 200]) {
     const { width, height } = whaleSizeFor(columns)
@@ -1333,11 +1333,11 @@ test('人设页的每句台词都放得进气泡椭圆', () => {
   const CY = 112
   const RX = 146 - 11 / 2
   const RY = 90 - 11 / 2
-  // 三行的基线（三行齐全时）：96 / 142 / 188；字号 25 / 46 / 21。
+  // 三行的基线（三行齐全时）：96 / 142 / 180；字号 25 / 46 / 21。
   const rows = [
     { y: 96, size: 25 },
     { y: 142, size: 46 },
-    { y: 188, size: 21 },
+    { y: 180, size: 21 },
   ]
 
   // 文字宽度的保守估计：汉字与全角标点按 1em，ASCII 按 0.62em（比常见
