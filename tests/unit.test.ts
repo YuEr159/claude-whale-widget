@@ -17,7 +17,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
+import { WHALE_ASPECT, WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, WHALE_STRETCH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
 import {
   barText,
   calendarHeat,
@@ -483,14 +483,17 @@ test('鲸鱼尺寸：连续公式，没有阈值跳变', () => {
   expect(whaleSizeFor(60).width).toBeGreaterThan(200)
 })
 
-test('鲸鱼高度严格等于画布比例，且不低于最小高度', () => {
+test('鲸鱼高度严格等于拉伸后的画布比例，且不低于最小高度', () => {
   for (const columns of [1, 10, 20, 40, 60, 80, 100, 200]) {
     const { width, height } = whaleSizeFor(columns)
-    // 比例严格保持：引擎的 preserveAspectRatio 不会留白抖动
-    expect(Math.abs(height / width - 320 / 620) < 1e-12).toBe(true)
+    // 比例严格保持：引擎的 preserveAspectRatio 不会留白抖动。
+    // 用 WHALE_ASPECT 而不是 320/620——后者是拉伸前的旧比例。
+    expect(Math.abs(height / width - WHALE_ASPECT) < 1e-12).toBe(true)
     // 最小高度是真正的下界：面板再窄也不会缩到看不清
     expect(height).toBeGreaterThanOrEqual(WHALE_MIN_HEIGHT - 1e-9)
   }
+  // 拉伸确实让画面变高：最大宽度处的高度高于等比时代的 196px。
+  expect(whaleSizeFor(200).height).toBeGreaterThan(WHALE_MAX_WIDTH * (320 / 620))
 })
 
 test('小时标签与原生用量页一致', () => {
