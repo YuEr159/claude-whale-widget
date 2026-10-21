@@ -353,25 +353,28 @@ test('指针点在鲸鱼中部也能开泡泡', async ($, on) => {
 
   expect(await bubbleOpen()).toBe(false)
 
-  // 点击区给测试的尺寸：`Client` 的 props 里带着行数与列数。
+  // 点击区的尺寸交给父容器：`100% × 100%`，不再按像素反算格数。
   const area = await ui.find({ key: 'whale-tap-area' })
   expect(area).toBeDefined()
-  const rows = Number((area?.props as any)?.height ?? 0)
-  const cols = Number((area?.props as any)?.width ?? 0)
-  expect(rows).toBeGreaterThan(1)
-  expect(cols).toBeGreaterThan(1)
+  expect((area?.props as any)?.height).toBe('100%')
+  expect((area?.props as any)?.width).toBe('100%')
 
-  // 点在正中间——正是旧实现够不着的地方。
-  const x = Math.floor(cols / 2)
-  const y = Math.floor(rows / 2)
-  await ui.pointer({ type: 'down', x, y, button: 'left' })
-  await ui.pointer({ type: 'up', x, y, button: 'left' })
+  // 布局好之后点正中间——正是旧实现够不着的地方。
+  await (ui as any).resize({ columns: 43, rows: 10, in: 'whale-tap-area' })
+  await ui.pointer({ type: 'down', x: 21, y: 5, button: 'left' })
+  await ui.pointer({ type: 'up', x: 21, y: 5, button: 'left' })
   expect(await bubbleOpen()).toBe(true)
 
   // 再点一下同一处就收回去。
-  await ui.pointer({ type: 'down', x, y, button: 'left' })
-  await ui.pointer({ type: 'up', x, y, button: 'left' })
+  await ui.pointer({ type: 'down', x: 21, y: 5, button: 'left' })
+  await ui.pointer({ type: 'up', x: 21, y: 5, button: 'left' })
   expect(await bubbleOpen()).toBe(false)
+
+  // **下沿**：最后一行同样要点得中。这是这次修的 bug——以前点击区的
+  // 行数按像素估，估少了下沿就落空。
+  await ui.pointer({ type: 'down', x: 21, y: 9, button: 'left' })
+  await ui.pointer({ type: 'up', x: 21, y: 9, button: 'left' })
+  expect(await bubbleOpen()).toBe(true)
 
   await ui.unmount()
 })
@@ -429,20 +432,20 @@ test('点击区绝对定位盖在鲸鱼上，且自己那块是二维的', async
   expect(positioned!.props.top).toBe(0)
   expect(positioned!.props.left).toBe(0)
 
-  // 区域本身的高度不止一行：`Client` 的 height 就是它收到的行数。
-  const h = Number(client.props.height)
-  const w = Number(client.props.width)
-  expect(h).toBeGreaterThan(1)
-  expect(w).toBeGreaterThan(1)
+  // 尺寸交给父容器：`100%`，不是按像素估出来的格数。这是这次修的 bug——
+  // 估出来的行数常常短于图片实际高度，下沿点不中。
+  expect(client.props.height).toBe('100%')
+  expect(client.props.width).toBe('100%')
 
-  // 内部那块真的铺成了 h 行，每行 w 列——漏 `flexDirection: 'column'`
-  // 时这里会是一行。
+  // 区域自己那块要按**布局后的**行列铺开（`surface.columns` / `rows`），
+  // 且必须是 column——漏 `flexDirection: 'column'` 时这里会是一行。
+  await (ui as any).resize({ columns: 43, rows: 10, in: 'whale-tap-area' })
   const inner: any = await (ui as any).drawn({ in: 'whale-tap-area' })
   expect(inner?.props?.flexDirection).toBe('column')
   const rows = (inner?.children ?? []) as any[]
-  expect(rows.length).toBe(h)
+  expect(rows.length).toBe(10)
   for (const row of rows) {
-    expect([...(row?.children?.[0] ?? '')].length).toBe(w)
+    expect([...(row?.children?.[0] ?? '')].length).toBe(43)
   }
 
   await ui.unmount()
