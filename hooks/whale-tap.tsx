@@ -36,7 +36,12 @@ const WhaleTap: ClientModule<TapProps, { isArmed: boolean }> = (props, surface) 
   }
 
   const { Box, Text } = surface.elements
+  // **`flexDirection: 'column'` 不能省。** `Box` 的默认方向是 `row`：不加
+  // 这一行，`rows` 个 `Text` 会排成一条横线，区域高度只有一行——点击区
+  // 就变成鲸鱼顶端那一条。JSX 里写 `<Box flexDirection="column">` 时看得见，
+  // 这里直接调构造函数，最容易漏。
   return Box({
+    flexDirection: 'column',
     children: Array.from({ length: props.rows }, () =>
       Text({ children: '⠀'.repeat(props.cols) }),
     ),
