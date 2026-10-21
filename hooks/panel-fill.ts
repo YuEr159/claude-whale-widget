@@ -46,14 +46,24 @@ const LIGHT_FILL: PanelFill = { backgroundColor: '#e3e7f7', borderColor: '#b4bcd
  * 深色主题的方向是**往亮走**、浅色主题是**往白走**——两者都是「更靠近前景」，
  * 也就是读者直觉里的「被选中、浮起来」。
  *
- * 只靠底色不够：浅色主题下 #e3e7f7 往白走最多只能到 #ffffff，两者对比度
+ * 底色差本身很有限：浅色主题下 #e3e7f7 往白走最多只能到 #ffffff，两者对比度
  * 只有 1.23，几乎看不出来——这是色彩空间的限制，换哪个值都突破不了。所以
- * 边框也一起换，而且换到对比更强的一档（深色 2.72、浅色 2.38）。**底色说
- * 「哪一块更亮」，边框说「哪一块被选中」**，两个通道加起来才在两套主题下
- * 都读得出来。
+ * 「被选中」这件事主要靠**文字**来说：`tabActiveText` 在激活底上是高对比的
+ * 正文色，再配加粗，两个通道加起来才在两套主题下都读得出来。
  */
 const DARK_TAB_ACTIVE = { backgroundColor: '#3a4260', borderColor: '#8e9ac9' }
 const LIGHT_TAB_ACTIVE = { backgroundColor: '#ffffff', borderColor: '#6675a8' }
+
+/**
+ * 页签被选中时**文字**的颜色。
+ *
+ * 不能直接拿 `tabActive.borderColor` 当文字色——那是为边框选的，WCAG 对
+ * 图形元素只要求 3.0；实测当正文用时深色只有 3.58、浅色 4.49，都够不上
+ * 正文的 4.5。这里单独选一对：深色 `#dee4ff` 对激活底 7.82，浅色 `#2b3657`
+ * 对白底 11.88，留了足够余量。
+ */
+const DARK_TAB_ACTIVE_TEXT = '#dee4ff'
+const LIGHT_TAB_ACTIVE_TEXT = '#2b3657'
 
 /** 主题值是浅色的吗。`light`、`light-daltonized`、`light-ansi` 都算。 */
 export function isLightTheme(themeValue: string | undefined): boolean {
@@ -170,6 +180,8 @@ export type ThemeColors = PanelFill & {
   chart: ChartPalette
   /** 页签被选中时的底色与边框：比所在大框再亮一档。 */
   tabActive: PanelFill
+  /** 页签被选中时的**文字**色：正文口径（≥4.5），不能拿边框色顶替。 */
+  tabActiveText: string
   /** 页内小块（图表、表格）的底色与边框：比所在大框深一档。 */
   inset: PanelFill
 }
@@ -180,6 +192,7 @@ const DARK: ThemeColors = {
   isLight: false,
   chart: DARK_CHART,
   tabActive: DARK_TAB_ACTIVE,
+  tabActiveText: DARK_TAB_ACTIVE_TEXT,
   inset: DARK_INSET,
 }
 /** 浅色一组。 */
@@ -188,6 +201,7 @@ const LIGHT: ThemeColors = {
   isLight: true,
   chart: LIGHT_CHART,
   tabActive: LIGHT_TAB_ACTIVE,
+  tabActiveText: LIGHT_TAB_ACTIVE_TEXT,
   inset: LIGHT_INSET,
 }
 

@@ -13,7 +13,13 @@ import type { ContextTurn, TurnDay } from '../types'
 import { CHART_PALETTES } from './panel-fill.ts'
 import type { ChartPalette } from './panel-fill.ts'
 import { tokens } from './format.ts'
-import { contextStack, turnBars } from './usage-overview.ts'
+import {
+  CONTEXT_CHART_PADDING,
+  CONTEXT_MAX_BARS,
+  contextStack,
+  contextVisibleCount,
+  turnBars,
+} from './usage-overview.ts'
 import type { ModelGrain, ModelStackBar, TurnBar } from './usage-overview.ts'
 
 /**
@@ -139,16 +145,15 @@ function escapeXml(text: string): string {
 }
 
 /**
- * 上下文柱状图一个槽位的最小宽度（CSS 像素）。
- *
- * 槽宽 = 柱宽 + 缝。1.4px 的槽对应 1px 柱子 + 0.4px 缝——1px 是这根柱子
- * 能被看见的底线，再窄就分不清是柱子还是抗锯齿。画布越宽能塞的槽越多，
- * 于是「显示最近多少轮」由宽度自己算出来，不需要翻页按钮。
+ * 上下文柱子数这个决定由数据层 `usage-overview.ts` 算（面板与图表都要用
+ * 同一个结果），这里只是把常量重导出，免得调用方为了一个数去两个模块找。
  */
-export const MIN_CONTEXT_SLOT = 1.4
-
-/** 上下文柱状图最多画多少根（宽度再大也不超过它）。 */
-export const CONTEXT_MAX_BARS = 60
+export {
+  CONTEXT_CHART_PADDING,
+  CONTEXT_MAX_BARS,
+  MIN_CONTEXT_SLOT,
+  contextVisibleCount,
+} from './usage-overview.ts'
 
 /**
  * 上下文占比的堆叠柱状图。
@@ -162,10 +167,7 @@ export const CONTEXT_MAX_BARS = 60
  * 压缩发生的那一轮，柱子左侧竖一条虚线：压缩后上下文骤降，读者看到柱子
  * 突然变矮时，要能一眼分清是「压缩造成的」还是「自己少用了」。
  *
- * **显示多少轮由画布宽度决定，不翻页**：每根柱子的槽宽不得低于
- * `MIN_CONTEXT_SLOT`，在这个下限之上能塞几根就塞几根，永远贴住最新一端。
- * 翻页按钮要求读者点两下才能看到前一段，而宽度本来就该自己适配——面板
- * 宽的时候多露几轮，窄的时候少露几轮，图注里的轮数随之变化。
+ * **显示多少轮由画布宽度决定，不翻页**，算法见 `contextVisibleCount`。
  *
  * @param turns     逐轮记录，按时间升序
  * @param width     画布宽度，CSS 像素
@@ -182,13 +184,16 @@ export function contextChartSvg(
   const height = 112
   // 左侧留出纵轴刻度与轴线的位置：刻度数字要放在轴线左边，给 26px。
   // 底部留出横轴刻度数字的位置，所以比上面多几像素。
-  const padding = { top: 10, right: 6, bottom: 26, left: 26 }
+  const { left, right } = CONTEXT_CHART_PADDING
+  const padding = { top: 10, right, bottom: 26, left }
   const plotWidth = Math.max(1, width - padding.left - padding.right)
   const plotHeight = Math.max(1, height - padding.top - padding.bottom)
 
-  // 宽度自适应：先按「最多想画几根」铺一次，如果槽宽低于下限就减根数。
-  const cap = Math.max(1, Math.min(maxBars, turns.length))
-  const visible = Math.max(1, Math.min(cap, Math.floor(plotWidth / MIN_CONTEXT_SLOT)))
+  // 宽度自适应：根数与面板侧共用同一个函数，图注与图才不会各说各的。
+  // 再裁一次**是幂等的**：面板侧传进来的通常已经是 `contextView` 裁好的
+  // 那一截，这里再走一遍不会改变结果。留着是因为这个函数是公开的绘图入口，
+  // 直接调用它的地方（测试、离线渲染脚本）不该被迫先自己裁一遍。
+  const visible = Math.min(contextVisibleCount(width, maxBars), Math.max(1, turns.length))
   const shown = turns.slice(-visible)
 
   const { bars, peak, yMax } = contextStack(shown, shown.length, bufferPct)

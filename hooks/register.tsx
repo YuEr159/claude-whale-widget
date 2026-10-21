@@ -29,8 +29,8 @@ import { clip, displayWidth, padCell, pct, tokens, countdown, usd } from './form
 import { UNPRICED, usdEstimate } from './provenance.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubbleLines, freshnessOf, toUsageView } from './usage-view.ts'
 import {
-  CONTEXT_MAX_BARS,
   contextChartSvg,
+  contextVisibleCount,
   heatWindowDays,
   modelFill,
   modelStackSvg,
@@ -40,7 +40,7 @@ import {
 import {
   barText,
   contextParts,
-  contextStack,
+  contextView,
   maskModel,
   modelDetailRows,
   modelRows,
@@ -53,9 +53,7 @@ import {
   overviewFooter,
   rasterizeStacks,
   rasterizeTurnBars,
-  stackCaption,
   stackColor,
-  stackLegendOf,
   turnBars,
   turnBarsCaption,
 } from './usage-overview.ts'
@@ -653,11 +651,11 @@ export const register: Register = (on, options) => {
             contextDetail.rawMaxTokens) *
           100
         : 0
-    // 显示最近几轮由画布宽度自己算（见 `contextChartSvg`）：面板宽就多露几轮，
-    // 窄就少露几轮，不要翻页按钮——那要求读者点两下才看得到前一段。
-    const stacks = contextStack(contextTurns, CONTEXT_MAX_BARS, Math.max(0, bufferPct))
-    const stackLegend = stackLegendOf(stacks.bars, theme.isLight)
+    // 显示最近几轮、柱子、图例、图注全由 `contextView` 一处算出：宽度决定
+    // 能放几根，图注与图例跟着同一份结果走。以前这里写死 60 轮、SVG 内部
+    // 又按宽度裁一次，窄画布下就会出现「图注说 60 轮、图上 34 根」。
     const chartWidth = Math.max(80, Math.min(width * 8 - 16, 640))
+    const contextScreen = contextView(contextTurns, chartWidth, Math.max(0, bufferPct), theme.isLight)
 
     const contextPage = (
       <>
@@ -678,19 +676,19 @@ export const register: Register = (on, options) => {
             {Svg ? (
               <Svg
                 source={contextChartSvg(
-                  contextTurns,
+                  contextScreen.turns,
                   chartWidth,
-                  CONTEXT_MAX_BARS,
+                  contextScreen.turns.length,
                   Math.max(0, bufferPct),
                   chart,
                 )}
-                alt={stackCaption(stacks.bars.length, stacks.peak, stacks.yMax)}
+                alt={contextScreen.caption}
                 width={chartWidth}
                 height={112}
               />
             ) : (
               <>
-                {rasterizeStacks(stacks.bars, width >= 60 ? 8 : 6).map((line, rowIndex) => (
+                {rasterizeStacks(contextScreen.bars, width >= 60 ? 8 : 6).map((line, rowIndex) => (
                   <Box key={`whale-stack-${rowIndex}`} flexDirection="row">
                     {line.map((bar, barIndex) => (
                       <Text
@@ -706,7 +704,7 @@ export const register: Register = (on, options) => {
             )}
             {/* 图例跟着数据走：只列这一屏里真正出现过的分类，缺构成的柱子仍按「已用」标。 */}
             <Box flexDirection="row" gap={1} flexWrap="wrap">
-              {stackLegend.map(item => (
+              {contextScreen.legend.map(item => (
                 <Box key={`whale-legend-${item.kind}`} flexDirection="row" gap={1}>
                   <Text color={item.color}>■</Text>
                   <Text dimColor>{item.label}</Text>
@@ -781,7 +779,7 @@ export const register: Register = (on, options) => {
                 backgroundColor={
                   isActive ? theme.tabActive.backgroundColor : fill.backgroundColor
                 }
-                color={isActive ? theme.tabActive.borderColor : undefined}
+                color={isActive ? theme.tabActiveText : undefined}
                 dimColor={!isActive}
                 bold={isActive}
               >
@@ -1086,7 +1084,7 @@ export const register: Register = (on, options) => {
       <Button key={key} plain label={label} onPress={onPress}>
         <Text
           backgroundColor={isActive ? theme.tabActive.backgroundColor : fill.backgroundColor}
-          color={isActive ? theme.tabActive.borderColor : undefined}
+          color={isActive ? theme.tabActiveText : undefined}
           dimColor={!isActive}
           bold={isActive}
         >
