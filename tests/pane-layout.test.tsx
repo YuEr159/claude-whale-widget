@@ -201,3 +201,96 @@ test('没有逐轮数据时上下文页只说明情况，不画翻页按钮', as
 
   await ui.unmount()
 })
+
+/**
+ * 鲸鱼的自动收起定时器，每次点击都要接管上一次的。
+ *
+ * 回归：以前每次点击都新起一个 4 秒定时器、从不取消前一个，而定时器到点时
+ * 只看「此刻 `isBubbleOpen` 是不是真」，不看「这次展开是不是我负责的那一次」。
+ * 于是「展开 → 收起 → 再展开」之后，第一次留下的定时器仍会按它自己的节奏
+ * 到点，把第二次展开的气泡提前关掉——点得越快越容易撞上。
+ *
+ * 现在点击时先 `cancel()` 掉上一轮的两个定时器。这条测试用假时钟逐步推进，
+ * 验证「第二次展开的存活时间」是完整的 4 秒。
+ */
+test('连点鲸鱼时，旧的自动收起定时器不会提前关掉新展开的气泡', async ($, on) => {
+  const clock = mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  /** 鲸鱼当前画的是展开还是收起的气泡。 */
+  const bubbleOpen = async (): Promise<boolean> => {
+    const svg = findLastSvg(await ui.drawn())
+    // 展开时画三个椭圆（气泡 + 两个小泡），收起时一个都没有。
+    const ellipses = ((svg?.props?.source ?? '').match(/<ellipse/g) || []).length
+    return ellipses >= 3
+  }
+
+  // t=0 展开。
+  await ui.press({ key: 'whale-tap' })
+  await clock.advance(0)
+  expect(await bubbleOpen()).toBe(true)
+
+  // t=1s 收起。
+  await clock.advance(1_000)
+  await ui.press({ key: 'whale-tap' })
+  await clock.advance(0)
+  expect(await bubbleOpen()).toBe(false)
+
+  // t=2s 再展开：这一次的 4 秒应当从此刻算起，到 t=6s 才收起。
+  await clock.advance(1_000)
+  await ui.press({ key: 'whale-tap' })
+  await clock.advance(0)
+  expect(await bubbleOpen()).toBe(true)
+
+  // t=4s：正是第一次点击那个定时器本该到点的时刻。修好之后它已经被取消，
+  // 气泡必须还开着。
+  await clock.advance(2_000)
+  expect(await bubbleOpen()).toBe(true)
+
+  // t=6s：第二次展开满 4 秒，正常收起。
+  await clock.advance(2_000)
+  expect(await bubbleOpen()).toBe(false)
+
+  await ui.unmount()
+})
+
+/**
+ * 控件的名字要说它这一步会做什么。
+ *
+ * 回归：`label` 固定叫「展开小鲸鱼摘要」，但这个按钮其实是开/关切换——
+ * 展开后再点会收起。读屏与键盘用户听到的应当是下一步的动作。
+ */
+test('鲸鱼的控件名跟着开合状态走', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  const labelOf = async () => (await ui.find({ key: 'whale-tap' }))?.props?.label
+
+  expect(await labelOf()).toBe('展开小鲸鱼摘要')
+  await ui.press({ key: 'whale-tap' })
+  expect(await labelOf()).toBe('收起小鲸鱼摘要')
+  await ui.press({ key: 'whale-tap' })
+  expect(await labelOf()).toBe('展开小鲸鱼摘要')
+
+  await ui.unmount()
+})

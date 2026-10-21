@@ -125,6 +125,20 @@ const TURN_WINDOW_DAYS = 400
 const BUBBLE_AUTO_HIDE_MS = 4_000
 
 /**
+ * 正在计时的那两个鲸鱼定时器；`null` 表示没有在跑。
+ *
+ * **每次点击都要先 `cancel()` 掉上一轮的**，否则会互相打架：定时器到点时
+ * 只看「此刻 isBubbleOpen 是不是真」，不看「这次展开是不是我负责的那一次」。
+ * 于是在「展开 → 收起 → 再展开」之后，第一次留下的那个定时器仍会在它自己的
+ * 4 秒到点，把第二次展开的气泡提前关掉——点得越快越容易撞上。
+ *
+ * 存模块级而不是 `$.state`：它们是执行期的一次性句柄，不是要持久化的偏好，
+ * 写进状态只会让界面为一次内部计时多重绘一遍。
+ */
+let bubbleHideTimer: { cancel: () => void } | null = null
+let pressReleaseTimer: { cancel: () => void } | null = null
+
+/**
  * 是否刚发生过一次压缩、还没落到某一轮的记录上。
  *
  * 压缩是两轮之间的动作，没有自己的柱子；下一次 `turn.complete` 记下这一轮
@@ -1214,7 +1228,9 @@ export const register: Register = (on, options) => {
               <Button
                 key="whale-tap"
                 plain
-                label="展开小鲸鱼摘要"
+                // 控件名跟着当前状态：现在是「展开」还是「收起」，读屏与
+                // 键盘用户听到的应当是这一步会做什么，而不是一个固定的动作名。
+                label={isBubbleOpen ? '收起小鲸鱼摘要' : '展开小鲸鱼摘要'}
                 onPress={() => {
                   void (async () => {
                     const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
@@ -1228,8 +1244,16 @@ export const register: Register = (on, options) => {
                       isBubbleOpen: isOpen,
                       isWhalePressed: true,
                     })
+                    // 这一轮点击接管两个定时器：先把上一轮留下的取消掉。
+                    // 不取消的话，上一次展开留下的自动收起仍会按它自己的
+                    // 节奏到点，把这一次刚展开的气泡提前关掉。
+                    pressReleaseTimer?.cancel()
+                    bubbleHideTimer?.cancel()
+                    pressReleaseTimer = null
+                    bubbleHideTimer = null
                     // 弹回：沙箱里没有脚本，按压形变只能靠「改状态 → 重画一次」。
-                    $.clock.after(PRESS_RELEASE_MS, () => {
+                    pressReleaseTimer = $.clock.after(PRESS_RELEASE_MS, () => {
+                      pressReleaseTimer = null
                       void (async () => {
                         const back = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
                         if ((back.value ?? DEFAULT_PREFS).isWhalePressed !== true) return
@@ -1241,8 +1265,9 @@ export const register: Register = (on, options) => {
                     })
                     if (!isOpen) return
                     // 几秒后自动收起。到点时重新读一次状态，只在「仍然展开」
-                    // 时才动它——期间用户可能已手动收起或再次展开。
-                    $.clock.after(BUBBLE_AUTO_HIDE_MS, () => {
+                    // 时才动它——期间用户可能已手动收起。
+                    bubbleHideTimer = $.clock.after(BUBBLE_AUTO_HIDE_MS, () => {
+                      bubbleHideTimer = null
                       void (async () => {
                         const later = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
                         const laterPrefs = later.value ?? DEFAULT_PREFS
