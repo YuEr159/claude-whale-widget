@@ -69,7 +69,7 @@ import {
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
+import { emblemOf, moodOf, whaleSizeFor, whaleSvg, WHALE_FLOAT_PERIOD_MS } from './whale-art.ts'
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
@@ -109,8 +109,20 @@ const PANEL_REFRESH_MS = 30_000
  *
  * 泡泡只是「扫一眼」的地方：换得太慢，读者永远只看得到第一页；换得太快，
  * 还没读完就翻走了。6 秒够读完三行短句，又不至于让一页霸占整个会话。
+ *
+ * **必须是 `WHALE_FLOAT_PERIOD_MS` 的整数倍**（这里是 2 倍）。每翻一页都会
+ * 换掉整份 SVG `source`，SMIL 动画随之从头开始；若两个周期不成整数倍，
+ * 翻页那一刻动画正好停在半途，画面会明显跳一下。
  */
 const BUBBLE_PAGE_MS = 6_000
+
+// 运行前就把这条约束钉死：两个模块级的周期一旦被各自改掉，翻页会重新开始
+// 跳帧。写在这里而不是只写注释，是因为注释不会拦住人。
+if (BUBBLE_PAGE_MS % WHALE_FLOAT_PERIOD_MS !== 0) {
+  throw new Error(
+    `BUBBLE_PAGE_MS (${BUBBLE_PAGE_MS}) 必须是 WHALE_FLOAT_PERIOD_MS (${WHALE_FLOAT_PERIOD_MS}) 的整数倍`,
+  )
+}
 
 /** 用户点了「刷新」时置真，下一次定时检查会忽略间隔立即扫。 */
 let isScanForced = false
