@@ -1302,6 +1302,26 @@ test('面板底色是三档同一份：深浅交给绘制端，图表才分档',
   assert.equal(panelFillFor([]).backgroundColor, 'userMessageBackground')
 })
 
+test('气泡里的本会话花费优先用插件价格表，而不是引擎 /cost 的估算', () => {
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  // 引擎读数是 $258.98——它按默认模型价估第三方模型；插件价格表算出来是 $3.05。
+  const view = toUsageView({ cost: { usd: 258.98 } })
+
+  const withPrices = bubblePages(view, now, {
+    totals: { wallMs: 0, turns: 3, linesAdded: 0, linesRemoved: 0 },
+    sessionCost: 3.05,
+  })
+  const sessionPage = withPrices.find(p => p.id === 'session')
+  assert.ok(sessionPage, '本会话页应当存在')
+  assert.equal(sessionPage.lines[1], '≈$3.05', '有插件价格时不该用引擎读数')
+
+  // 没有插件价格（模型未收录）时退回引擎读数——至少不会显示成 $0。
+  const withoutPrices = bubblePages(view, now, {
+    totals: { wallMs: 0, turns: 3, linesAdded: 0, linesRemoved: 0 },
+  })
+  assert.equal(withoutPrices.find(p => p.id === 'session').lines[1], '≈$258.98')
+})
+
 test('泡泡轮播：每页三行，主角在第二行；没有数据的页整页不出现', () => {
   const now = Date.parse('2026-10-20T12:00:00Z')
   const view = toUsageView({

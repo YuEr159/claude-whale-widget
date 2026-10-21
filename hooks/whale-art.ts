@@ -228,7 +228,14 @@ export function whaleSvg(
     : ''
 
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" role="img">` +
+    // 根元素**不写死显示尺寸**，用 100% 填满宿主给的框。
+    //
+    // 原因：传 `isInteractive` 时，引擎把 SVG 放进一个 sandbox iframe（SMIL
+    // 只在那种环境里跑），而 iframe 只给出一个 `width × height` 的窗口、
+    // **不会缩放里面的文档**。写死 `width="620" height="320"` 时，380×196
+    // 的窗口只看得到左上角那块——气泡还在、鲸鱼（x 378~620）被整个裁掉，
+    // 面板里就是一片白框。改成 100%×100% 后 `viewBox` 负责缩放到窗口大小。
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img">` +
     (isBubbleOpen ? bubbleSvg(lines, mood) : '') +
     // 鲸鱼：原图右下角贴边，尺寸 300×300。位置与气泡是否展开无关。
     `<g transform="translate(318 16)">` +

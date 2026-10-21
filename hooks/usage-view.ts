@@ -221,6 +221,15 @@ export type BubbleFacts = {
   windowDays?: number
   /** 当前情绪，决定台词页说什么。默认 `idle`。 */
   mood?: WhaleMood
+  /**
+   * 本会话按**插件自己的价格表**算出的花费。
+   *
+   * 为什么不用 `view.costUsd`：那是引擎 `/cost` 的读数，引擎只认 Anthropic
+   * 第一方价目表，遇到第三方网关的模型名会按**默认模型**估。实测同一批
+   * token，DeepSeek Flash 按官方价约 $3，引擎估成 $259。气泡是给人「扫一眼
+   * 花了多少」的地方，用这个数会离谱。传了就用它，没传才退回引擎读数。
+   */
+  sessionCost?: number
 }
 
 /**
@@ -263,14 +272,19 @@ export function bubblePages(
   }
 
   // 3. 本会话：主角是花费，另两行是轮次与代码增删。
+  //
+  // 花费优先用 `facts.sessionCost`——那是按插件价格表逐模型累加出来的，
+  // 与「模型分布」页的读数同源。`view.costUsd` 是引擎 `/cost`，只认第一方
+  // 价目表，第三方模型会按默认模型估出几十倍的数。
   const totals = facts.totals
-  const hasSession = view.costUsd !== undefined || totals !== undefined
+  const sessionCost = facts.sessionCost ?? view.costUsd
+  const hasSession = sessionCost !== undefined || totals !== undefined
   if (hasSession) {
     pages.push({
       id: 'session',
       lines: [
         totals && totals.turns > 0 ? `本会话 ${totals.turns} 轮` : '本会话花费',
-        usdEstimate(view.costUsd),
+        usdEstimate(sessionCost),
         totals && (totals.linesAdded > 0 || totals.linesRemoved > 0)
           ? `代码 +${totals.linesAdded} / -${totals.linesRemoved}`
           : '',
