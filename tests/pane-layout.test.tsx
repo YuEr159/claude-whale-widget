@@ -377,6 +377,78 @@ test('指针点在鲸鱼中部也能开泡泡', async ($, on) => {
 })
 
 /**
+ * 点击区必须**脱流**盖在立绘上，否则会跑到鲸鱼旁边或上方。
+ *
+ * 回归：`Client` 曾是 `Svg` 的普通兄弟节点，留在流里就各占一块——实测
+ * 看到的是「点击区在鲸鱼上方，而且只有一行」。测试宿主不做布局（文档原话
+ * 「never a surface's paint」），所以这里守的是**结构契约**：从点击区往上
+ * 找，最近的定位祖先必须是 `position="absolute"`，且它的原点是 (0,0)。
+ *
+ * 同时守 `Client` 自己那块的高度：`whale-tap.tsx` 里如果漏了
+ * `flexDirection: 'column'`，区块内容会排成一行——区域就塌成一条。
+ */
+test('点击区绝对定位盖在鲸鱼上，且自己那块是二维的', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const tree: any = await ui.drawn()
+
+  /** 找到节点并返回它到根的路径（含自身）。 */
+  const pathTo = (node: any, key: string): any[] | undefined => {
+    if (!node || typeof node !== 'object') return undefined
+    if (node.props?.key === key) return [node]
+    for (const kid of node.children ?? []) {
+      const sub = pathTo(kid, key)
+      if (sub) return [node, ...sub]
+    }
+    return undefined
+  }
+
+  const areaPath = pathTo(tree, 'whale-tap-area')
+  expect(areaPath).toBeDefined()
+
+  // `Client` 自己必须是绝对定位、原点对齐——不能留在流里跟 `Svg` 并排。
+  const client = areaPath![areaPath!.length - 1]
+  expect(client.type).toBe('Client')
+
+  // 往上找那个给它定位的 Box：最近的一个带 `position` 的祖先。
+  const ancestors = areaPath!.slice(0, -1).reverse()
+  const positioned = ancestors.find(n => n.props?.position !== undefined)
+  expect(positioned).toBeDefined()
+  expect(positioned!.props.position).toBe('absolute')
+  expect(positioned!.props.top).toBe(0)
+  expect(positioned!.props.left).toBe(0)
+
+  // 区域本身的高度不止一行：`Client` 的 height 就是它收到的行数。
+  const h = Number(client.props.height)
+  const w = Number(client.props.width)
+  expect(h).toBeGreaterThan(1)
+  expect(w).toBeGreaterThan(1)
+
+  // 内部那块真的铺成了 h 行，每行 w 列——漏 `flexDirection: 'column'`
+  // 时这里会是一行。
+  const inner: any = await (ui as any).drawn({ in: 'whale-tap-area' })
+  expect(inner?.props?.flexDirection).toBe('column')
+  const rows = (inner?.children ?? []) as any[]
+  expect(rows.length).toBe(h)
+  for (const row of rows) {
+    expect([...(row?.children?.[0] ?? '')].length).toBe(w)
+  }
+
+  await ui.unmount()
+})
+
+/**
  * 鲸鱼的键盘/点击按钮在任何表面上都得在。
  *
  * 终端不画 SVG，鲸鱼退化成一个表情，开合在树上没有可读的痕迹；所以这里

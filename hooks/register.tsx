@@ -1340,6 +1340,8 @@ export const register: Register = (on, options) => {
                读出来用），不会被画到鲸鱼上——之前写的是「展开小鲸鱼摘要」，
                终端会把这七个字直接印在鲸鱼身上。 */}
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
+          {/* 立绘**留在流里**，由它决定这块的尺寸与位置（和以前一样，鲸鱼
+              贴右）。点击层绝对定位盖在它上面，两层不再互相挤占空间。 */}
           <Box position="relative">
             {whale}
             {/* 指针点击区：整片盖住鲸鱼。
@@ -1348,15 +1350,25 @@ export const register: Register = (on, options) => {
                 「一整片区域响应指针」给的元素：区域按 `width`/`height` 铺开，
                 `onPointer` 收到区域内的格坐标。
 
-                终端没有 `Client`，那边靠下面的 `Button` 接点击。 */}
+                **必须绝对定位。** 它和 `Svg` 是兄弟节点，留在流里就会排在
+                鲸鱼旁边各占一块——之前正是这样：点击区跑到鲸鱼上方，而且
+                只剩一行。 */}
             {Client ? (
-              <Client
-                key="whale-tap-area"
-                module="./whale-tap.tsx"
-                props={{ rows: whaleTapRows, cols: whaleTapCols }}
+              <Box
+                position="absolute"
+                top={0}
+                left={0}
                 width={whaleTapCols}
                 height={whaleTapRows}
-              />
+              >
+                <Client
+                  key="whale-tap-area"
+                  module="./whale-tap.tsx"
+                  props={{ rows: whaleTapRows, cols: whaleTapCols }}
+                  width={whaleTapCols}
+                  height={whaleTapRows}
+                />
+              </Box>
             ) : null}
             {/* 键盘入口：一行高的透明按钮。指针命中由上面的 `Client` 负责，
                 这一层只保证「Tab 能到达、Enter 能按下」。 */}
