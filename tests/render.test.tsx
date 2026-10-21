@@ -198,6 +198,141 @@ test('选中的页签与未选中的都有底色，只是明暗不同', async ($
   await ui.unmount()
 })
 
+/**
+ * 设置页里的每一项都是**开关**：亮＝这一项开着。
+ *
+ * 回归：`whale-band-toggle` 曾经写死 `isActive=false`，于是它永远不亮，
+ * 读者没法从「亮不亮」判断用量条现在是显示还是收起；而它的标签又在
+ * 「隐藏用量条 / 显示用量条」之间来回变，成了同一组里唯一一个动作按钮。
+ */
+test('设置页的开关都按真实状态亮灭，不写死', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+  await ui.press({ key: 'whale-tab-settings' })
+
+  /** 取某个 chip 里那层 Text 的 props。 */
+  const textProps = async (key: string): Promise<any> => {
+    const found: any = await ui.find({ key })
+    const kids = found?.children ?? []
+    return kids.find((kid: any) => kid && typeof kid === 'object')?.props
+  }
+
+  // 默认用量条是显示的：这个开关应当亮着。
+  const bandOn = await textProps('whale-band-toggle')
+  expect(bandOn.bold).toBe(true)
+  expect(bandOn.dimColor).toBeFalsy()
+
+  // 点一下收起来：它应当变成灭的，且文字仍然是「显示用量条」——
+  // 标签说的是这个开关控制的东西，亮灭说的是它现在开没开。
+  await ui.press({ key: 'whale-band-toggle' })
+  const bandOff = await textProps('whale-band-toggle')
+  expect(bandOff.bold).toBe(false)
+  expect(bandOff.dimColor).toBe(true)
+
+  // 再点回来。
+  await ui.press({ key: 'whale-band-toggle' })
+  expect((await textProps('whale-band-toggle')).bold).toBe(true)
+
+  // 「轮次费用提示」默认关：灭着。
+  const costOff = await textProps('whale-turn-cost')
+  expect(costOff.bold).toBe(false)
+  await ui.press({ key: 'whale-turn-cost' })
+  expect((await textProps('whale-turn-cost')).bold).toBe(true)
+
+  // 口径按钮同样按真实状态亮灭：默认只开「额度窗口」。
+  expect((await textProps('whale-metric-window')).bold).toBe(true)
+  expect((await textProps('whale-metric-diff')).bold).toBe(false)
+
+  await ui.unmount()
+})
+
+/**
+ * 每一处的「没存过就用什么」都必须指向 `DEFAULT_PREFS`。
+ *
+ * 回归：热图的回退值曾写成字面量 `'messages'`，而 `DEFAULT_PREFS.heatMetric`
+ * 是 `'turns'`。正常情况下 `prefsNow` 已经合并过默认值，走不到那个 `??`；
+ * 但一旦状态里存了个 `undefined`，界面就会跳到与「默认」相反的那一档——
+ * 两处各写一个数，迟早会分叉。
+ *
+ * 这条测试是按热图实际呈现的口径断言的：默认应当按「轮次」着色。
+ */
+test('默认偏好只有一处来源：热图默认按轮次着色', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  // 「色深」控件当前值就是渲染用的那份口径。
+  const select: any = await ui.find({ key: 'whale-heat-metric' })
+  expect(select).toBeDefined()
+  expect(select.props?.value).toBe('turns')
+
+  await ui.unmount()
+})
+
+/**
+ * 最后一个口径不能被取消掉，但那次点击也不能静默消失。
+ *
+ * 回归：`if (next.length === 0) return` 什么都不做，读者点了一下、界面纹丝
+ * 不动，也没有任何解释——看起来像按钮坏了。现在给一句 toast。
+ */
+test('取消最后一个口径时给出提示，而不是静默无视', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  // `ui.toast` 是一个可监听事件：挂个钩子把它记下来。
+  const toasts: string[] = []
+  on('ui.toast', async ($2: any, e: any, next: any) => {
+    toasts.push(e.text)
+    return next(e)
+  })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+  await ui.press({ key: 'whale-tab-settings' })
+
+  const textProps = async (key: string): Promise<any> => {
+    const found: any = await ui.find({ key })
+    const kids = found?.children ?? []
+    return kids.find((kid: any) => kid && typeof kid === 'object')?.props
+  }
+
+  // 默认只有「额度窗口」一个口径开着；再点它就是要取消到 0 项。
+  expect((await textProps('whale-metric-window')).bold).toBe(true)
+  await ui.press({ key: 'whale-metric-window' })
+  // 它必须仍然亮着——点击被拒绝了。
+  expect((await textProps('whale-metric-window')).bold).toBe(true)
+  // 而且要说一声，不能静默。
+  expect(toasts.some(text => text.includes('至少要留一项'))).toBe(true)
+
+  await ui.unmount()
+})
+
 test('输入框上方有用量条：摘要 + 面板入口，但没有形象', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
