@@ -98,8 +98,19 @@ function escapeXml(text: string): string {
 }
 
 /**
- * 白色对话气泡：大椭圆 + 尾巴 + 两颗小泡，比例取自原版（1026×700 画布上
- * 大椭圆中心 (454,247)、rx 373、ry 232、描边 18）。这里等比缩到 620×320。
+ * 白色对话气泡：大椭圆 + 尾巴 + 两颗小泡。
+ *
+ * **整条「气泡 → 尾巴 → 小泡」必须指向鲸鱼。** 鲸鱼画在 `translate(318 16)`
+ * 的右下角（画布 620×320，实际占 x 378~620、y 36~320），气泡在左边，所以
+ * 尾巴与小泡要朝**右下**延伸。
+ *
+ * 回归：尾巴曾是 `M132 200 q-22 22 -38 38`——从椭圆左下**向左下**甩出去，
+ * 两颗小泡也排在左下方 (126,240) / (172,272)。整条链指反了方向，看起来像
+ * 气泡漏了气往地上掉，而不是在跟右边的鲸鱼说话。
+ *
+ * 现在的几何以椭圆中心 (228,112)、rx 146、ry 90 为准：尾巴根部取右下
+ * 约 55° 处的 (312,186)，末端落到 (368,232)；两颗小泡顺着同一条射线继续
+ * 往右下，依次变小——「越来越远、越来越小」才读得出是同一句话的余音。
  */
 function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
   const tone = TONE[mood]
@@ -119,13 +130,19 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
 
   return (
     `<g>` +
-    // 尾巴：从气泡左下伸向鲸鱼
-    `<path d="M132 200 q-22 22 -38 38" fill="none" stroke="${tone.stroke}" stroke-width="12" stroke-linecap="round"/>` +
+    // 尾巴、小泡 1、小泡 2 在**同一条射线**上：从椭圆右下缘 (312,186) 出发，
+    // 方向 (0.506, 0.862)——也就是约 60° 朝右下。三段共线才读得出「一句话
+    // 的余音往里递」，各画各的会像散落的碎片。
+    //
+    // 尾巴止于小泡 1 的边缘之外：它连的是大泡和小泡，戳进泡里就成了「把小泡
+    // 串在签子上」。
+    `<path d="M312 186 q13 22 21 36" fill="none" stroke="${tone.stroke}" stroke-width="13" stroke-linecap="round"/>` +
     // 大椭圆
     `<ellipse cx="228" cy="112" rx="146" ry="90" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="11"/>` +
-    // 两颗小泡
-    `<ellipse cx="126" cy="240" rx="16" ry="11" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="7"/>` +
-    `<ellipse cx="172" cy="272" rx="10" ry="7" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="6"/>` +
+    // 两颗小泡：沿同一条射线，依次变小。位置都留在鲸鱼**左侧**（鲸鱼占
+    // x 378~620），否则会压到它脸上。
+    `<ellipse cx="335" cy="226" rx="15" ry="10" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="7"/>` +
+    `<ellipse cx="359" cy="265" rx="9" ry="6" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="6"/>` +
     texts +
     `</g>`
   )
