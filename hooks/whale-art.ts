@@ -11,42 +11,7 @@
  */
 import { WHALE_ASSETS } from './whale-asset.ts'
 
-/**
- * 「呼吸」的幅度：纵向缩放倍数在 `1 ± WHALE_BREATH_AMPLITUDE` 之间波动。
- *
- * 这是一个**动画**，不是静态造型。鲸鱼不再上下平移——位移会让它在面板里
- * 晃来晃去；改成纵向轻微胀缩：底边不动，上沿上下移动，像呼吸。
- *
- * ±5% 是**整幅**（气泡、小泡、鲸鱼、文字）一起缩放。上一版曾把文字单独
- * 拆出来不缩放，那是因为固定 1.35 的拉伸会把字形压扁；而 ±5% 的变化量
- * 小到看不出字被拉长，整幅一起缩放反而更自然——气泡胀的时候，字也跟着
- * 一起胀。
- */
-export const WHALE_BREATH_AMPLITUDE = 0.05
-
-/**
- * 「呼吸」动画，周期 `WHALE_FLOAT_PERIOD_MS`。
- *
- * 用 `keySplines` 而不是一串 `values`：SMIL 的 `values` 默认线性插值，
- * 折线看起来像机械伸缩；`0.5 0 0.5 1` 是标准的 ease-in-out，四段拼起来
- * 在一个周期内的观感与正弦几乎一致。
- *
- * `if (isAnimating)` 在调用处判断——静态图（导出、测试、预览）不画这条线，
- * 否则每张图各跑一条时间线。
- */
-function breatheAnimation(): string {
-  const low = (1 - WHALE_BREATH_AMPLITUDE).toFixed(4)
-  const high = (1 + WHALE_BREATH_AMPLITUDE).toFixed(4)
-  return (
-    `<animateTransform attributeName="transform" type="scale" ` +
-    `values="1 1; 1 ${high}; 1 1; 1 ${low}; 1 1" ` +
-    `keyTimes="0; 0.25; 0.5; 0.75; 1" ` +
-    `calcMode="spline" keySplines="0.5 0 0.5 1; 0.5 0 0.5 1; 0.5 0 0.5 1; 0.5 0 0.5 1" ` +
-    `dur="${WHALE_FLOAT_PERIOD_MS}ms" repeatCount="indefinite" additive="sum"/>`
-  )
-}
-
-/** 面板立绘的画布尺寸。呼吸只是动画，画布按未呼吸时的比例。 */
+/** 面板立绘的画布尺寸；外部显示尺寸必须按这个比例算，否则会留白抖动。 */
 export const WHALE_CANVAS = { width: 620, height: 320 } as const
 
 /** 画布的高宽比，外部计算 height 时直接乘它。 */
@@ -58,12 +23,12 @@ export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
  * 宽度与高度由画布比例绑定，所以「最小高度」就是真正的下界：面板再窄，
  * 鲸鱼也至少有这么高，不会缩成一团看不清的色块。
  *
- * 数值沿革：96 → 120 → 180。泡泡里的字（尤其 46px 的主角行）在 620 宽的
- * 画布上缩放后，96px 高时主角只剩约 14px，小字只剩 6px——桌面上已经读不动。
- * 180px 高对应缩放 0.29（画布 620×320 缩到 180px 高）：主角约 13px、
- * 小字约 6px，是「再小就真的看不清」的下限。
+ * 从 96 提到 120，再提到 180（+50%）：泡泡里的字（尤其第二行 46px 的主角）
+ * 在 620 宽的画布上缩放后，96px 高时主角只剩约 14px，小字只剩 6px——在桌面上
+ * 已经读不动了。120px 是「能看清」的下限（主角约 17px、小字 8px），
+ * 180px 则让主角约 26px、小字约 12px，小字号在普通面板上不必凑近看。
  *
- * 代价是最小宽度 = 180 / (320/620) ≈ 349px；面板很窄时立绘会占掉几乎
+ * 代价是最小宽度跟着到 120 / (320/620) ≈ 349px；面板很窄时立绘会占掉几乎
  * 整行，这是有意为之——这个挂件的主角就是这条鲸鱼。
  */
 export const WHALE_MIN_HEIGHT = 180
@@ -86,21 +51,12 @@ export const WHALE_MIN_WIDTH = WHALE_MIN_HEIGHT / WHALE_ASPECT
 export const WHALE_MAX_WIDTH = 380
 
 /**
- * 呼吸动画的周期（毫秒）。**气泡翻页周期必须是它的整数倍**：
- * 每翻一页都会换掉整份 SVG `source`，SMIL 动画随之从头开始；若两个周期
- * 不成整数倍，翻页那一刻动画正好停在半途，画面会跳一下。
- */
-export const WHALE_FLOAT_PERIOD_MS = 3_000
-
-/**
  * 面板宽度（字符列）→ 立绘的显示尺寸，宽高严格按画布比例。
  *
- * 先按面板宽度算出理想宽度，再用它推高度。不变量：
+ * 先按面板宽度算出理想宽度，再把它夹进「最小高度」与「最大宽度」之间，
+ * 最后**由宽度推出高度**。这样两个不变量同时成立：
  *   - 高度永远 ≥ `WHALE_MIN_HEIGHT`；
- *   - 高宽比永远等于 `WHALE_ASPECT`，根 SVG 才不会留白。
- *
- * 呼吸动画在 ±5% 以内胀缩，不改变这个静态尺寸——`Svg` 的盒子按静态
- * 尺寸占位，动画只画在里面。
+ *   - 高宽比永远等于画布比例，`preserveAspectRatio` 不会留白抖动。
  */
 export function whaleSizeFor(columns: number): { width: number; height: number } {
   const pxPerColumn = 8
@@ -169,15 +125,6 @@ function escapeXml(text: string): string {
  * 88 / 134 / 172：整体比椭圆中线略高，第三行离下缘留出余量，不再贴着
  * 收窄的口子。
  */
-/**
- * 气泡里三行文字的基线（三行齐全时）：96 / 142 / 180。
- *
- * 比椭圆中线（112）略偏上：第三行若贴到下缘，椭圆在那里已经收得很窄，
- * 字会被描边压住。2026-10 整体上移 8px（约 1/4 行）后，第三行可用宽度
- * 从 123px 放宽到 167px。
- */
-const BUBBLE_TEXT_Y = [96, 142, 180] as const
-
 function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
   const tone = TONE[mood]
   const shown = lines.slice(0, 3)
@@ -188,13 +135,13 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
       const size = isAmount ? 46 : index === 0 ? 25 : 21
       const weight = isAmount ? 800 : 600
       const color = isAmount ? tone.amount : index === 2 ? tone.hint : tone.ink
-      // 三行时用固定的一组基线；两行时整体下移居中；一行时只居中一行。
-      const y =
-        shown.length === 1
-          ? 110
-          : shown.length === 2
-            ? 100 + index * 44
-            : BUBBLE_TEXT_Y[index]!
+      // 三行时 88 / 134 / 172；两行时整体下移居中；一行时只居中一行。
+      //
+      // 2026-10 整体上移 8px（约 1/4 行）：原来的三行贴椭圆中线偏下，视觉上
+      // 沉在气泡底部。第三行原本在 188、贴着椭圆下缘，可用宽度只剩 123px；
+      // 上移后这一行位置到 172，可用宽度反而放宽到约 198px，小字不再挤在
+      // 收窄的口子里。三行都上移，行距不变，读起来仍是一个整体。
+      const y = shown.length === 1 ? 110 : shown.length === 2 ? 100 + index * 44 : [88, 134, 172][index]!
       return `<text x="228" y="${y}" text-anchor="middle" font-family="'Segoe UI','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}">${escapeXml(line)}</text>`
     })
     .join('')
@@ -227,8 +174,8 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
  *
  * @param mood 情绪，决定气泡配色
  * @param lines 气泡里最多三行文字（第一行标签、第二行金额、第三行提示）
- * @param options `isAnimating` 为真时整幅画面做纵向「呼吸」（SMIL，无需
- *   脚本）；`isBubbleOpen` 为假时整块气泡（含小泡）不画，只留鲸鱼。
+ * @param options `isAnimating` 为真时鲸鱼轻微上下浮动（SMIL，无需脚本）；
+ *   `isBubbleOpen` 为假时整块气泡（含小泡）不画，只留鲸鱼。
  *   泡泡现在是常驻的，这个开关只为「画一张没有气泡的图」保留（导出、测试）。
  */
 export function whaleSvg(
@@ -244,42 +191,18 @@ export function whaleSvg(
   const isBubbleOpen = options.isBubbleOpen ?? true
   // 常驻条很小（显示约 46×24 像素），用小图省内存；面板用大图保证清晰。
   const asset = options.isCompact ? WHALE_ASSETS.small : WHALE_ASSETS.large
-  // 呼吸：整幅纵向 0.95~1.05 缩放，**没有平移**。SMIL 在无脚本沙箱里也能跑。
-  //
-  // 周期写成 `WHALE_FLOAT_PERIOD_MS`，因为**气泡翻页周期必须是它的整数倍**
-  // ——每翻一页整份 `source` 被换掉，动画从头开始；不成整数倍时翻页那一刻
-  // 动画停在半途，画面会跳一下。
-  const breathe = isAnimating ? breatheAnimation() : ''
+  // 呼吸：整体上下浮动 ±4px。SMIL 在无脚本沙箱里也能跑。
+  const float = isAnimating
+    ? `<animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" dur="3.6s" repeatCount="indefinite" additive="sum"/>`
+    : ''
 
   return (
-    // 根元素**不写死显示尺寸**，用 100% 填满宿主给的框。原因：`Svg` 带
-    // `isInteractive` 时，引擎把它放进一个沙箱 iframe（SMIL 才跑得起来），
-    // 而 iframe 只负责给出一个 `width × height` 的窗口、**不会缩放里面的
-    // 文档**。写死 `width="620" height="320"` 时，380×196 的窗口只看得到
-    // 左上角那块——气泡还在、鲸鱼（x 378~620）被整个裁掉，画面就是一片
-    // 白底。改成 100%×100% 后，`viewBox` 负责把 620×320 缩放到窗口大小。
-    // 不传 `isInteractive` 时它被当作 <img>，百分比同样按图片框解析。
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img">` +
-    // 呼吸作用在**整幅**内容上，并且**底边固定、上沿上下动**。
-    //
-    // 用三层嵌套而不是 `transform-origin`：缩放以原点为中心时，画面会
-    // 上下两边同时涨缩、整体位置看起来在飘；而 `transform-origin` 是 CSS
-    // 属性，SVG 光栅化器不保证实现。三层平移把原点搬到画布底边：
-    //   外层 translate(0 H) → 中间 scale(1 s) → 内层 translate(0 -H)
-    // 任一内容点 P 的最终位置是 s·(P − H) + H，P = H 时不动，正是底边。
-    `<g transform="translate(0 ${WHALE_CANVAS.height})">` +
-    // 中间这层不写静态 transform：SMIL 的 `additive` 默认为 replace，
-    // 叠加顺序在不同渲染器里一致，不用赌 `sum` 的语义。
-    `<g>` +
-    breathe +
-    `<g transform="translate(0 -${WHALE_CANVAS.height})">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" role="img">` +
     (isBubbleOpen ? bubbleSvg(lines, mood) : '') +
     // 鲸鱼：原图右下角贴边，尺寸 300×300。位置与气泡是否展开无关。
     `<g transform="translate(318 16)">` +
+    float +
     `<image x="0" y="0" width="300" height="300" preserveAspectRatio="xMaxYMax meet" href="data:image/png;base64,${asset}"/>` +
-    `</g>` +
-    `</g>` +
-    `</g>` +
     `</g>` +
     `</svg>`
   )

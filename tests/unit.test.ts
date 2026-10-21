@@ -17,7 +17,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { WHALE_ASPECT, WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
+import { WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
 import {
   barText,
   calendarHeat,
@@ -486,13 +486,11 @@ test('鲸鱼尺寸：连续公式，没有阈值跳变', () => {
 test('鲸鱼高度严格等于画布比例，且不低于最小高度', () => {
   for (const columns of [1, 10, 20, 40, 60, 80, 100, 200]) {
     const { width, height } = whaleSizeFor(columns)
-    // 比例严格保持：引擎的 preserveAspectRatio 不会留白抖动。
-    expect(Math.abs(height / width - WHALE_ASPECT) < 1e-12).toBe(true)
+    // 比例严格保持：引擎的 preserveAspectRatio 不会留白抖动
+    expect(Math.abs(height / width - 320 / 620) < 1e-12).toBe(true)
     // 最小高度是真正的下界：面板再窄也不会缩到看不清
     expect(height).toBeGreaterThanOrEqual(WHALE_MIN_HEIGHT - 1e-9)
   }
-  // 呼吸只是动画，静态尺寸仍按原图比例——这里锁住「没有偷偷加回固定拉伸」。
-  expect(Math.abs(WHALE_ASPECT - 320 / 620) < 1e-12).toBe(true)
 })
 
 test('小时标签与原生用量页一致', () => {
