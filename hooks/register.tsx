@@ -97,9 +97,12 @@ const DEFAULT_PREFS: Prefs = {
  * 立绘缩放档位。
  *
  * 引擎没有滑块，所以「拖动条」是一排档位：点哪一档就跳到哪个比例，
- * 选中那档高亮。档位取「最小 ~ 最大」区间上的等距点，1.0 是默认。
+ * 选中那档高亮。1.0 是默认（即 `WHALE_MAX_WIDTH`）。
+ *
+ * 上限给到 200%：面板宽到 100 列时，760px 的立绘仍放得下；放不下时
+ * `whaleSizeFor` 会按可用宽度收住，不会溢出到面板外。
  */
-const WHALE_SCALES = [0.6, 0.8, 1, 1.2, 1.4] as const
+const WHALE_SCALES = [0.25, 0.5, 1, 1.5, 2] as const
 
 /** 缩放档位落在区间外时的夹取。 */
 function clampScale(value: number): number {

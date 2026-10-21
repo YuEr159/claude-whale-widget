@@ -18,31 +18,7 @@ export const WHALE_CANVAS = { width: 620, height: 320 } as const
 export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
 
 /**
- * 立绘的高度下限（CSS 像素）。
- *
- * 宽度与高度由画布比例绑定，所以「最小高度」就是真正的下界：面板再窄，
- * 鲸鱼也至少有这么高，不会缩成一团看不清的色块。
- *
- * 从 96 提到 120，再提到 180（+50%）：泡泡里的字（尤其第二行 46px 的主角）
- * 在 620 宽的画布上缩放后，96px 高时主角只剩约 14px，小字只剩 6px——在桌面上
- * 已经读不动了。120px 是「能看清」的下限（主角约 17px、小字 8px），
- * 180px 则让主角约 26px、小字约 12px，小字号在普通面板上不必凑近看。
- *
- * 代价是最小宽度跟着到 120 / (320/620) ≈ 349px；面板很窄时立绘会占掉几乎
- * 整行，这是有意为之——这个挂件的主角就是这条鲸鱼。
- */
-export const WHALE_MIN_HEIGHT = 180
-
-/**
- * 由最小高度反推出的最小宽度。
- *
- * 尺寸最终由 `whaleSizeFor()` 一次算定，这个常量只用于断言与文档：
- * 任何显示尺寸都必须同时满足 `height ≥ WHALE_MIN_HEIGHT`。
- */
-export const WHALE_MIN_WIDTH = WHALE_MIN_HEIGHT / WHALE_ASPECT
-
-/**
- * 立绘的最大显示宽度。
+ * 立绘的最大显示宽度，也是**默认尺寸**（设置页 100% 档）。
  *
  * 从 300 提到 380：停靠面板常见 100~140 列（约 800~1120px），300px 的立绘
  * 只占三分之一，泡泡里的字被压得太小。380px 在同样宽度下约占一半，仍给
@@ -53,17 +29,21 @@ export const WHALE_MAX_WIDTH = 380
 /**
  * 面板宽度（字符列）→ 立绘的显示尺寸，宽高严格按画布比例。
  *
- * 先按面板宽度算出理想宽度，再把它夹进「最小高度」与「最大宽度」之间，
- * 最后**由宽度推出高度**。这样两个不变量同时成立：
- *   - 高度永远 ≥ `WHALE_MIN_HEIGHT`；
- *   - 高宽比永远等于画布比例，`preserveAspectRatio` 不会留白抖动。
+ * **默认固定尺寸，不随面板宽度变化。** 早先按面板宽度算（宽度取面板的
+ * 55%），结果面板一横向压缩，鲸鱼跟着缩水——读者只是把窗口拉窄，画面里
+ * 的主角却变了个大小。
+ *
+ * 只有一种情况会缩：**面板窄到放不下**。这时按可用宽度收缩，否则立绘会
+ * 溢出到面板外被裁掉（引擎的 `overflow` 只有 visible / hidden，没有滚动）。
+ * 边界在 48 列附近（380px ÷ 8px 每列），比它宽的停靠面板一律用原尺寸。
+ *
+ * 想主动改大小，用设置页的「立绘大小」档位——那是读者自己的选择，
+ * 与「窗口被拉窄」是两回事。
  */
 export function whaleSizeFor(columns: number): { width: number; height: number } {
-  const pxPerColumn = 8
-  const share = 0.55
-  const byPanel = columns * pxPerColumn * share
-  // 宽度下界由最小高度决定，上界是面板观感的极限。
-  const width = Math.max(WHALE_MIN_WIDTH, Math.min(byPanel, WHALE_MAX_WIDTH))
+  // 一列约 8px（等宽字体在桌面端的常见值）；留一格余量，免得立绘贴死边缘。
+  const availablePx = Math.max(0, columns - 1) * 8
+  const width = Math.min(WHALE_MAX_WIDTH, availablePx)
   return { width, height: width * WHALE_ASPECT }
 }
 

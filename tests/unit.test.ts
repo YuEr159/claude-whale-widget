@@ -17,7 +17,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
+import { WHALE_MAX_WIDTH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
 import {
   barText,
   calendarHeat,
@@ -511,26 +511,33 @@ test('口径全选时同一条数字不印两遍：window 已写 5h，context �
   expect(bandSummary(view as never, ['context'], Date.now())).toBe('5h 24% · 7d 41%')
 })
 
-test('鲸鱼尺寸：连续公式，没有阈值跳变', () => {
-  // 关键回归：旧公式在 59→60 列处会一次缩 84px
-  let maxJump = 0
-  for (let columns = 16; columns <= 140; columns += 1) {
-    const jump = Math.abs(whaleSizeFor(columns + 1).width - whaleSizeFor(columns).width)
-    if (jump > maxJump) maxJump = jump
+test('鲸鱼尺寸默认固定，只在面板放不下时才缩', () => {
+  // 回归：尺寸曾按面板宽度的 55% 算，窗口一横向压缩鲸鱼就跟着缩水。
+  const fixed = whaleSizeFor(60).width
+  expect(fixed).toBe(WHALE_MAX_WIDTH)
+  for (const columns of [49, 60, 80, 100, 140, 200]) {
+    expect(whaleSizeFor(columns).width).toBe(fixed)
   }
-  expect(maxJump).toBeLessThanOrEqual(5)
-  // 两端夹住，中间线性。上限跟常量走，不在测试里另写一个数。
-  expect(whaleSizeFor(200).width).toBe(WHALE_MAX_WIDTH)
-  expect(whaleSizeFor(60).width).toBeGreaterThan(200)
+  // 窄到放不下时才缩：可用宽度 = (列数 − 1) × 8px。
+  expect(whaleSizeFor(41).width).toBe(40 * 8)
+  expect(whaleSizeFor(30).width).toBe(29 * 8)
+  // 尺寸随列数单调不减，相邻一列的跳变不超过 8px。
+  for (let columns = 16; columns <= 140; columns += 1) {
+    const a = whaleSizeFor(columns).width
+    const b = whaleSizeFor(columns + 1).width
+    expect(b).toBeGreaterThanOrEqual(a)
+    expect(b - a).toBeLessThanOrEqual(8 + 1e-9)
+  }
 })
 
-test('鲸鱼高度严格等于画布比例，且不低于最小高度', () => {
-  for (const columns of [1, 10, 20, 40, 60, 80, 100, 200]) {
+test('鲸鱼高度严格等于画布比例', () => {
+  // 0 列的极端情况宽度会被夹到 0（面板里一格空间都没有），比例无从谈起。
+  expect(whaleSizeFor(0).width).toBe(0)
+  expect(whaleSizeFor(1).width).toBe(0)
+  for (const columns of [2, 10, 20, 40, 60, 80, 100, 200]) {
     const { width, height } = whaleSizeFor(columns)
     // 比例严格保持：引擎的 preserveAspectRatio 不会留白抖动
     expect(Math.abs(height / width - 320 / 620) < 1e-12).toBe(true)
-    // 最小高度是真正的下界：面板再窄也不会缩到看不清
-    expect(height).toBeGreaterThanOrEqual(WHALE_MIN_HEIGHT - 1e-9)
   }
 })
 
