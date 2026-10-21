@@ -1315,3 +1315,53 @@ test('泡泡轮播：每页三行，主角在第二行；没有数据的页整�
   assert.equal(empty[0].id, 'session')
   assert.ok(empty[0].lines.length >= 1)
 })
+
+test('气泡的尾巴与小泡都朝右下指向鲸鱼，且不压到它身上', () => {
+  const svg = whaleSvg('idle', ['a', 'b', 'c'], { isAnimating: false })
+
+  /** 从 SVG 里取出一类元素的中心点。 */
+  const ellipseCenters = [...svg.matchAll(/<ellipse cx="([\d.]+)" cy="([\d.]+)"/g)].map(m => ({
+    x: Number(m[1]),
+    y: Number(m[2]),
+  }))
+  // 三个椭圆：大泡 + 两颗小泡，按绘制顺序。
+  assert.equal(ellipseCenters.length, 3)
+  const [big, small1, small2] = ellipseCenters
+
+  // 鲸鱼画在 translate(318 16)，原图 300×300 按 xMaxYMax 对齐，实际占
+  // x [378, 620]、y [236?..]——保守取左边界 378 就够判断「有没有压上去」。
+  const WHALE_LEFT = 378
+
+  // 1. 小泡一个比一个小，一个比一个靠右下。
+  assert.ok(small1.x > big.x, '小泡 1 在大泡右侧')
+  assert.ok(small1.y > big.y, '小泡 1 在大泡下方')
+  assert.ok(small2.x > small1.x, '小泡 2 在小泡 1 右侧')
+  assert.ok(small2.y > small1.y, '小泡 2 在小泡 1 下方')
+
+  // 2. 两颗小泡都留在鲸鱼左侧，别压到脸上（算上最大半径 15）。
+  assert.ok(small1.x + 15 < WHALE_LEFT, `小泡 1 的右缘 ${small1.x + 15} 不该越过鲸鱼左边界`)
+  assert.ok(small2.x + 9 < WHALE_LEFT, `小泡 2 的右缘 ${small2.x + 9} 不该越过鲸鱼左边界`)
+
+  // 3. 尾巴**朝右下**伸：起点在大泡上，终点比起点更靠右、更靠下。
+  //    回归：原来是 `M132 200 q-22 22 -38 38`——向左下，正对着鲸鱼的
+  //    反方向，整条气泡链看起来在往地上漏气。
+  const tail = svg.match(/<path d="M([\d.]+) ([\d.]+) q(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+)"/)
+  assert.ok(tail, '找不到尾巴的 path')
+  // `q dx1 dy1 dx dy` 的后两对都是**相对**起点的偏移，不是绝对坐标。
+  const [, startX, startY, dCtrlX, dCtrlY, dEndX, dEndY] = tail.map(Number)
+  const endX = startX + dEndX
+  const endY = startY + dEndY
+  assert.ok(endX > startX, '尾巴终点在起点右侧')
+  assert.ok(endY > startY, '尾巴终点在起点下方')
+  // 控制点也要朝右，否则曲线会先往回勾。
+  assert.ok(dCtrlX > 0, '尾巴的控制点在右侧')
+  assert.ok(dCtrlY > 0, '尾巴的控制点在下方')
+  const sx = startX
+  const sy = startY
+
+  // 4. 尾巴根部落在大泡边缘附近（椭圆参数 ≈ 1），不是从半空中飘出来的。
+  const rx = 146
+  const ry = 90
+  const onEdge = ((sx - big.x) / rx) ** 2 + ((sy - big.y) / ry) ** 2
+  assert.ok(onEdge > 0.9 && onEdge < 1.1, `尾巴根部应贴在大泡边缘上，实际椭圆参数 ${onEdge.toFixed(2)}`)
+})
