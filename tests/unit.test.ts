@@ -25,6 +25,7 @@ import {
   hourLabel,
   maskModel,
   modelDetailRows,
+  detailTableLayout,
   modelRows,
   overviewCards,
   heatLevel,
@@ -671,53 +672,78 @@ test('表格对齐：按显示宽度补空格，中文与英文混排也不歪',
 })
 
 /**
- * 模型明细表的表头与数据行必须逐列对齐。
+ * 明细表的列宽由 `detailTableLayout` 一处算出，表头与数据行共用它。
  *
- * 回归：表头曾是 4 个格子（`padCell('模型', nameWidth + 2)` + 三列数字），
- * 而数据行是 5 个格子（`■` 色块 + 模型名 + 三列）。`Box` 的 `gap={1}` 是
- * 每两格之间加一格，格数不同就少了一道缝隙，于是右边三列整体左移，
- * 「输入 / 输出 / 费用」全部错位。
+ * 这条测试**直接调真实算法**。上一版是照着渲染代码再抄一份列宽算法来比对，
+ * 于是算法本身错了它照样绿——`fitWidth` 曾写成 `Math.min(...)`（取最短的
+ * 那一项），输入列按 `8.0万`（5 格）定宽，而 `21.50亿`（7 格）比它长，
+ * 被 `clip` 截成 `21.5…`。用户看到的就是「表格里的字挤在一起」。
  *
- * 修法是把表头也补成 5 格：一个空格替色块，再加 gap。这条测试按**逐列的
- * 起始列号**断言，而不是只看总宽度——总宽相同但内部错位的情况也能抓到。
+ * 现在守三件事：
+ *   1. 每一列都放得下它**最长**的那一项（不许截断数字）；
+ *   2. 列间有可见缝隙；
+ *   3. 表头与数据行逐列对齐。
  */
-test('模型明细表：表头与数据行逐列对齐', () => {
-  const nameWidth = 12
-  const inputWidth = 6
-  const outputWidth = 6
-  const costWidth = 8
-  const gap = 1
+test('模型明细表：列宽放得下最长的读数，且表头与数据行对齐', () => {
+  // 造一组「短长混排」的数据：最短 4 格、最长 7 格。
+  const rows = modelDetailRows([
+    { model: 'DeepSeek Flash', isPriced: true, input: 2_150_000_000, output: 6_779_000, cacheRead: 0, cacheWrite: 0, cost: 18.39, messages: 9 },
+    { model: 'claude-opus-5-5', isPriced: true, input: 1_400_000, output: 120_000, cacheRead: 0, cacheWrite: 0, cost: 8.5, messages: 3 },
+    { model: 'qwen3.8-27b', isPriced: true, input: 80_000, output: 9_000, cacheRead: 0, cacheWrite: 0, cost: 0.31, messages: 1 },
+  ])
 
-  // 与 `modelsPage` 里的写法一一对应。
-  const head = [
-    padCell('', 1),
-    padCell('模型', nameWidth),
-    padCell('输入', inputWidth, 'right'),
-    padCell('输出', outputWidth, 'right'),
-    padCell('费用', costWidth, 'right'),
-  ]
-  const row = [
-    '■',
-    padCell(clip('DeepSeek Flash', nameWidth), nameWidth),
-    padCell('1.2万', inputWidth, 'right'),
-    padCell('3.4千', outputWidth, 'right'),
-    padCell('$1.23', costWidth, 'right'),
-  ]
+  for (const panelWidth of [60, 100, 140]) {
+    const layout = detailTableLayout(rows, panelWidth)
+    const columns = [
+      ['输入', layout.inputWidth, layout.input],
+      ['输出', layout.outputWidth, layout.output],
+      ['费用', layout.costWidth, layout.cost],
+    ] as const
 
-  // 每列的起始列号必须一致。
-  const starts = (cells: string[]): number[] => {
-    const out: number[] = []
-    let x = 0
-    for (const cell of cells) {
-      out.push(x)
-      x += displayWidth(cell) + gap
+    // 1. 每一列的宽度都得放得下这一列最长的文字。放不下就会被 clip 截掉，
+    //    数字截掉就是错的读数（`21.5…` 不是 `21.50亿`）。
+    for (const [name, width, texts] of columns) {
+      for (const text of texts) {
+        expect(displayWidth(text)).toBeLessThanOrEqual(width)
+      }
+      expect(width).toBeGreaterThanOrEqual(displayWidth(name))
     }
-    return out
+
+    // 2. 列间缝隙至少 2 格：1 格时 `21.50亿` 与 `677.9万` 会贴成一片。
+    expect(layout.gap).toBeGreaterThanOrEqual(2)
+
+    // 3. 表头与数据行逐列对齐（格子数相同、宽度相同）。
+    const head = [
+      padCell('', 1),
+      padCell(clip('模型', layout.nameWidth), layout.nameWidth),
+      padCell(clip('输入', layout.inputWidth), layout.inputWidth, 'right'),
+      padCell(clip('输出', layout.outputWidth), layout.outputWidth, 'right'),
+      padCell(clip('费用', layout.costWidth), layout.costWidth, 'right'),
+    ]
+    const cellsOf = (index: number) => [
+      '■',
+      padCell(clip(rows[index]!.model, layout.nameWidth), layout.nameWidth),
+      padCell(clip(layout.input[index]!, layout.inputWidth), layout.inputWidth, 'right'),
+      padCell(clip(layout.output[index]!, layout.outputWidth), layout.outputWidth, 'right'),
+      padCell(clip(layout.cost[index]!, layout.costWidth), layout.costWidth, 'right'),
+    ]
+    const starts = (cells: string[]): number[] => {
+      const out: number[] = []
+      let x = 0
+      for (const cell of cells) {
+        out.push(x)
+        x += displayWidth(cell) + layout.gap
+      }
+      return out
+    }
+    for (const index of rows.keys()) {
+      expect(starts(cellsOf(index))).toEqual(starts(head))
+    }
+
+    // 4. 整表不能超出面板宽度。
+    const totalWidth = starts(head).at(-1)! + layout.costWidth
+    expect(totalWidth).toBeLessThanOrEqual(panelWidth)
   }
-  expect(starts(head)).toEqual(starts(row))
-  // 两行总宽也要一致，否则右边会多出或少掉一截底色。
-  const total = (cells: string[]) => starts(cells)[cells.length - 1]! + displayWidth(cells[cells.length - 1]!)
-  expect(total(head)).toBe(total(row))
 })
 
 test('图表翻页已取消：上下文柱状图按宽度自适应，没有翻页状态', () => {

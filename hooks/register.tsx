@@ -43,6 +43,7 @@ import {
   contextView,
   maskModel,
   modelDetailRows,
+  detailTableLayout,
   modelRows,
   MODEL_STACK_KEEP,
   modelGrainFor,
@@ -973,39 +974,14 @@ export const register: Register = (on, options) => {
     }
 
     // 明细表按列对齐：模型名、输入、输出、金额各占固定宽度，数字右对齐。
-    // 用 `displayWidth` 而不是 `length` 补空格——中文与英文混排时码点数不等于
-    // 显示列数，按 length 补会让后面几列整体歪掉。
-    //
-    // **列宽自适应**：先按每一列的实际内容算「理想宽度」，再按面板宽度收缩。
-    // 只按内容算的话，长模型名 + 大数字会把整行撑出面板，右边两列被切掉；
-    // 只按固定宽度算的话，短内容又会浪费列。收缩优先削模型名列——它是唯一
-    // 可以靠 `clip` 截断而不丢信息的列，数字列截断会变成错误读数。
-    const inputTexts = modelDetails.map(row => tokens(row.input))
-    const outputTexts = modelDetails.map(row => tokens(row.output))
-    const costTexts = modelDetails.map(row =>
-      row.cost === null ? '—' : usd(row.cost),
-    )
-    /** 一列的理想宽度：够放下这一列所有内容，再留一格呼吸。 */
-    const fitWidth = (texts: string[], floor: number, ceiling: number): number =>
-      Math.max(floor, Math.min(ceiling, ...texts.map(displayWidth)))
-    // 结构开销：左右 paddingX 各 1 + 边框 2 列 + 色块 1 格 + 四个 gap。
-    const tableChrome = 2 + 2 + 1 + 4
-    const nameFloor = 6
-    const nameCeiling = 16
-    // 数字列的宽度**由内容定，不参与收缩**。原因：`padCell` 只补空格、不截断，
-    // 列宽给窄了内容会直接溢出，把后面几列整体推歪——比不收缩更糟。
-    // 封顶 9 格：再宽只会是极端值（`1.20万亿`），而那类读数本来就该靠单位
-    // 压缩，不该把表撑开；超出 9 格的少数几个用 `clip` 截断。
-    const inputWidth = fitWidth(inputTexts, 4, 9)
-    const outputWidth = fitWidth(outputTexts, 4, 9)
-    const costWidth = fitWidth(costTexts, 4, 9)
-    // 模型名列拿剩下的全部：面板宽就多给，窄就少给，下限 6 格（够放
-    // `Deep…` 这种缩写）。它是唯一靠 `clip` 截断而不丢信息的列，所以
-    // 收缩的代价全由它承担。
-    const nameWidth = Math.max(
-      nameFloor,
-      Math.min(nameCeiling, width - (tableChrome + inputWidth + outputWidth + costWidth)),
-    )
+    // 列宽与每一格的文字都由 `detailTableLayout` 一处算出——它有一套必须
+    // 整体成立的约束（数字列放得下最长的读数、列间要有缝隙、只有模型名
+    // 可以截断），放在渲染里既测不了、错了也很难看出来。
+    const detailColumns = detailTableLayout(modelDetails, width)
+    const { nameWidth, inputWidth, outputWidth, costWidth, gap: tableGap } = detailColumns
+    const inputTexts = detailColumns.input
+    const outputTexts = detailColumns.output
+    const costTexts = detailColumns.cost
 
     // 「范围」放在模型页：它改变的是逐日统计的窗口，与概览卡片无关——
     // 概览的六张卡一直看扫描到的全部数据，柱子与明细才跟着这个范围走。
@@ -1097,13 +1073,12 @@ export const register: Register = (on, options) => {
               paddingX={1}
               marginTop={1}
             >
-              {/* 表头与数据行共用同一组列宽，所以各列能对齐。
+              {/* 表头与数据行共用同一组列宽与同一个 `gap`，所以各列能对齐。
                   表头第一列要补出数据行那个色块的**位置与缝隙**：
-                  数据行是 `■` + gap + 模型名，共 nameWidth + 2 格加两个 gap；
-                  表头若只写一个 nameWidth + 2 的格子，就少了一个 gap，
-                  右边三列会整体左移一格。所以这里用两段：一个空格替色块，
-                  再来 gap，最后是 nameWidth 宽的表头字。 */}
-              <Box flexDirection="row" gap={1}>
+                  数据行是 `■` + gap + 模型名，表头就用一格空白替色块，
+                  后面照常隔一个 gap——两行的格子数必须相同，少一格右边
+                  三列会整体错开。 */}
+              <Box flexDirection="row" gap={tableGap}>
                 <Text dimColor>{padCell('', 1)}</Text>
                 <Text dimColor>{padCell(clip('模型', nameWidth), nameWidth)}</Text>
                 <Text dimColor>{padCell(clip('输入', inputWidth), inputWidth, 'right')}</Text>
@@ -1111,7 +1086,7 @@ export const register: Register = (on, options) => {
                 <Text dimColor>{padCell(clip('费用', costWidth), costWidth, 'right')}</Text>
               </Box>
               {modelDetails.map((row, index) => (
-                <Box key={`whale-mrow-${row.model}-${index}`} flexDirection="row" gap={1}>
+                <Box key={`whale-mrow-${row.model}-${index}`} flexDirection="row" gap={tableGap}>
                   <Text color={modelColorOf(row.model)}>■</Text>
                   <Text>{padCell(clip(row.model, nameWidth), nameWidth)}</Text>
                   {/* 数字也用 clip：列宽封顶 9 格，`1.20万亿` 这种极端值
@@ -1293,9 +1268,15 @@ export const register: Register = (on, options) => {
               <Button
                 key="whale-tap"
                 plain
-                // 控件名跟着当前状态：现在是「展开」还是「收起」，读屏与
-                // 键盘用户听到的应当是这一步会做什么，而不是一个固定的动作名。
-                label={isBubbleOpen ? '收起小鲸鱼摘要' : '展开小鲸鱼摘要'}
+                // **不要传 `label`。** 引擎文档说「有 children 时 label 只作
+                // 控件名、不参与绘制」，终端那份实现确实如此；但桌面端把
+                // Button 画成原生按钮、把 label 当按钮文字画了出来——于是
+                // 「展开小鲸鱼摘要」七个字直接压在鲸鱼身上。
+                //
+                // 这一层的唯一作用是**提供点击区**（`Svg` 自己没有 onPress），
+                // 内容是一整块盲文空白，视觉上什么都不该出现。控件仍以
+                // `key="whale-tap"` 寻址；读屏与键盘用户走的是引擎在鲸鱼
+                // 旁边画的入口，不依赖这里。
                 onPress={() => {
                   void (async () => {
                     const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
