@@ -949,6 +949,30 @@ test('压缩标记只落在压缩后的第一轮', () => {
   expect(bars.map(bar => bar.isAfterCompact)).toEqual([false, true, false])
 })
 
+/**
+ * 根元素必须是「像素尺寸 + CSS 100%」，不能只写 `width="100%"`。
+ *
+ * 回归：传 `isInteractive` 后引擎把 SVG 放进 sandbox iframe，而
+ * `height="100%"` 在 iframe 文档里相对 `body` 解析——`body` 高度是 auto，
+ * 百分比失去基准、塌成 0，整幅图不画。面板里看到的就是一块纯白。
+ *
+ * 四种写法在 sandbox iframe 里实测，只有全百分比那种是白的；像素尺寸 +
+ * CSS 百分比正常显示、且铺满窗口。
+ */
+test('鲸鱼 SVG 的根元素用像素尺寸 + CSS 百分比，铺满沙箱窗口而不塌成 0', () => {
+  const svg = whaleSvg('idle', ['a', 'b', 'c'])
+  // 必须带像素宽高：这是根元素的固有尺寸，iframe 靠它决定文档尺寸。
+  expect(svg).toContain('width="620"')
+  expect(svg).toContain('height="320"')
+  // 且不能把百分比写进 width/height 属性——那会让高度塌成 0。
+  expect(svg).not.toContain('width="100%"')
+  expect(svg).not.toContain('height="100%"')
+  // 铺满窗口交给内联样式。
+  expect(svg).toContain('style="display:block;width:100%;height:100%"')
+  // viewBox 仍在，负责把 620×320 缩放到窗口大小。
+  expect(svg).toContain('viewBox="0 0 620 320"')
+})
+
 test('气泡里的本会话花费优先用插件价格表，而不是引擎 /cost 的估算', () => {
   const now = Date.parse('2026-10-20T12:00:00Z')
   // 引擎读数是 $258.98——它按默认模型价估第三方模型；插件价格表算出 $3.05。

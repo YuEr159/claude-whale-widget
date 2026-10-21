@@ -228,14 +228,23 @@ export function whaleSvg(
     : ''
 
   return (
-    // 根元素**不写死显示尺寸**，用 100% 填满宿主给的框。
+    // ## 根元素的尺寸：像素 + CSS 100%，**不能只写 width="100%"
     //
-    // 原因：传 `isInteractive` 时，引擎把 SVG 放进一个 sandbox iframe（SMIL
-    // 只在那种环境里跑），而 iframe 只给出一个 `width × height` 的窗口、
-    // **不会缩放里面的文档**。写死 `width="620" height="320"` 时，380×196
-    // 的窗口只看得到左上角那块——气泡还在、鲸鱼（x 378~620）被整个裁掉，
-    // 面板里就是一片白框。改成 100%×100% 后 `viewBox` 负责缩放到窗口大小。
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img">` +
+    // 传 `isInteractive` 时，引擎把这份 SVG 放进一个 sandbox iframe（SMIL
+    // 只在那种环境里跑）。iframe 只给出一个 `width × height` 的窗口、不会
+    // 缩放里面的文档，所以根元素必须自己铺满窗口，否则：
+    //
+    //   - 写死 `width="620" height="320"`：380×196 的窗口只看得到左上角，
+    //     鲸鱼（x 378~620）被整个裁掉，面板里一片白框。
+    //   - 只写 `width="100%" height="100%"`：**更糟，整幅图消失**。
+    //     `height="100%"` 是相对父级解析的，而 iframe 文档里的 `body` 高度
+    //     是 `auto`——百分比没有基准，塌成 0，整个 SVG 都不画。实测四种
+    //     写法在 sandbox iframe 里只有这一种是全白。
+    //
+    // 所以两条都要：`width`/`height` 给**像素**，让根元素有确定的固有尺寸；
+    // 再用 CSS 把它拉到 100% 覆盖窗口。内联 `style` 里的百分比不受上面那条
+    // 「无基准」的限制——它相对的是 iframe 的视口。
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" style="display:block;width:100%;height:100%" preserveAspectRatio="xMidYMid meet" role="img">` +
     (isBubbleOpen ? bubbleSvg(lines, mood) : '') +
     // 鲸鱼：原图右下角贴边，尺寸 300×300。位置与气泡是否展开无关。
     `<g transform="translate(318 16)">` +
