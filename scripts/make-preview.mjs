@@ -9,7 +9,7 @@
 import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { WHALE_CANVAS, whaleSvg } from '../hooks/whale-art.ts'
+import { whaleSvg } from '../hooks/whale-art.ts'
 import { whaleTraitOf } from '../hooks/usage-view.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -26,14 +26,14 @@ const STATES = [
 /**
  * 静态快照：没有动画，否则每张图各跑一条 SMIL 时间线。
  *
- * 还要把根元素的 `100%×100%` 换回像素尺寸：插件交付给 `Svg` 时用百分比是
- * 为了让引擎的 sandbox iframe 自己缩放，而**独立文件没有宿主框**，百分比
- * 高度会塌成 0。这是唯一该写死尺寸的地方。
+ * 根元素现在是「像素尺寸 + CSS 100%」——像素是给沙箱 iframe 的固有尺寸，
+ * CSS 百分比负责铺满窗口。**独立文件没有窗口可铺**，`height:100%` 在
+ * `<body>` 里同样没有基准，所以要把那段内联样式去掉，只留像素尺寸。
  */
 const svgFor = (state, lines) =>
   whaleSvg(state.mood, lines, { isAnimating: false }).replace(
-    /(<svg[^>]*?)width="100%" height="100%"/,
-    `$1width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}"`,
+    /style="display:block;width:100%;height:100%"/,
+    'style="display:block"',
   )
 
 // 1. preview.svg：单独一张「正常」状态，README 里直接嵌入。
