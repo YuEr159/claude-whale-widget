@@ -279,3 +279,69 @@ test('没有逐轮数据时上下文页只说明情况，不画翻页按钮', as
 
   await ui.unmount()
 })
+
+/**
+ * 情绪按**一天里的钟点**走：同一份数据、不同的时刻，画出的台词与配色不同。
+ *
+ * 这是「情绪不再和额度相关」的端到端验证。只断 `moodOf` 的返回值不够——
+ * 那条纯函数测试全绿、渲染层却仍拿额度算情绪，用户看到的还是老样子。
+ *
+ * 做法：让 `session.usage` 返回空，气泡只剩人设页（它永远在），于是
+ * 第一行文字就是这一档的台词，不会被别的页混进来。
+ */
+test('同一天的不同钟点画出不同的人设台词', async ($, on) => {
+  const clock = mock.clock(on, { now: new Date(2026, 9, 22, 0, 0, 0).getTime() })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+  on('session.usage', async () => ({ value: undefined } as never))
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  /**
+   * 把时钟拨到本地时间 `hour` 点，逐页扫一遍气泡，取人设页的第一行。
+   *
+   * 人设页永远排在最后，但前面还有几页取决于当场的数据：`session.usage`
+   * 返回空时「额度」「上下文」两页不出现，而「本会话花费」因为 `totals`
+   * 总有零值仍然在。所以不能假设人设页是第一个，得按换页间隔走一圈。
+   */
+  const traitAt = async (hour: number): Promise<string> => {
+    const start = new Date(2026, 9, 22, hour, 0, 0).getTime()
+    await clock.set(start)
+    let line = ''
+    for (let page = 0; page < 8; page++) {
+      await clock.set(start + page * 6000)
+      await ui.redraw()
+      const source = String(findLastSvg(await ui.drawn())?.props?.source ?? '')
+      const title = source.match(/>([^<>]+)<\/text>/)?.[1] ?? ''
+      // 人设页的五档第一行是固定的这几句；命中即返回。
+      if (['探索未至之境', '内心 OS 很长', '胃口特别大', '我去吃饭了', 'DeepSleep'].includes(title)) {
+        line = title
+        break
+      }
+    }
+    return line
+  }
+
+  // 深夜、上午、午饭、夜里——四档各取一句。
+  const deepNight = await traitAt(3)
+  const morning = await traitAt(10)
+  const lunch = await traitAt(12)
+  const evening = await traitAt(22)
+
+  expect(deepNight).toBe('DeepSleep')
+  expect(morning).toBe('内心 OS 很长')
+  expect(lunch).toBe('胃口特别大')
+  expect(evening).toBe('我去吃饭了')
+
+  // 四句互不相同：这不是一个常数。
+  expect(new Set([deepNight, morning, lunch, evening]).size).toBe(4)
+
+  await ui.unmount()
+})

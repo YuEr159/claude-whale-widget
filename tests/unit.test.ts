@@ -161,13 +161,37 @@ test('长文本按宽度截断并补省略号', () => {
   expect(clip('abcdef', 4)).toBe('abc…')
 })
 
-test('情绪随用量升高而变差，工作中优先显示工作态', () => {
-  expect(moodOf(10, false)).toBe('idle')
-  expect(moodOf(10, true)).toBe('working')
-  expect(moodOf(60, false)).toBe('busy')
-  expect(moodOf(85, false)).toBe('tired')
-  expect(moodOf(98, false)).toBe('sleep')
-  expect(moodOf(undefined, true)).toBe('working')
+/**
+ * 情绪按**一天里的钟点**走，不再跟额度走。
+ *
+ * 用本地时区构造时刻（`new Date(y, m, d, h)`），所以断言在任何时区都成立。
+ * 各段的边界是整点、左闭右开：6 点整进入早晨、9 点整开工、12 点午饭……
+ */
+test('情绪随一天里的时间变化，与额度无关', () => {
+  /** 本地时间某一钟点的时间戳。 */
+  const at = (hour: number, minute = 0) => new Date(2026, 9, 22, hour, minute, 0).getTime()
+
+  expect(moodOf(at(0))).toBe('sleep') // 深夜
+  expect(moodOf(at(5, 59))).toBe('sleep') // 临界：5:59 仍是深夜
+  expect(moodOf(at(6))).toBe('idle') // 6:00 起床摸鱼
+  expect(moodOf(at(8, 59))).toBe('idle')
+  expect(moodOf(at(9))).toBe('working') // 9:00 开工
+  expect(moodOf(at(11, 59))).toBe('working')
+  expect(moodOf(at(12))).toBe('busy') // 12:00 午饭
+  expect(moodOf(at(13, 59))).toBe('busy')
+  expect(moodOf(at(14))).toBe('working') // 14:00 下午
+  expect(moodOf(at(17, 59))).toBe('working')
+  expect(moodOf(at(18))).toBe('busy') // 18:00 晚饭
+  expect(moodOf(at(20, 59))).toBe('busy')
+  expect(moodOf(at(21))).toBe('tired') // 21:00 累了
+  expect(moodOf(at(23, 59))).toBe('tired')
+
+  // 一整天转一圈，五个情绪都该出现——否则某几段写成了同一个。
+  const seen = new Set<number>()
+  for (let hour = 0; hour < 24; hour++) seen.add(new Date(2026, 9, 22, hour).getHours())
+  expect(seen.size).toBe(24)
+  const moods = new Set([...Array(24).keys()].map(hour => moodOf(at(hour))))
+  expect(moods.size).toBe(5)
 })
 
 test('usage 视图挑出 5h/7d 两个窗口', () => {
