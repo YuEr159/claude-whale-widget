@@ -252,7 +252,14 @@ export function whaleSvg(
   const breathe = isAnimating ? breatheAnimation() : ''
 
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" role="img">` +
+    // 根元素**不写死显示尺寸**，用 100% 填满宿主给的框。原因：`Svg` 带
+    // `isInteractive` 时，引擎把它放进一个沙箱 iframe（SMIL 才跑得起来），
+    // 而 iframe 只负责给出一个 `width × height` 的窗口、**不会缩放里面的
+    // 文档**。写死 `width="620" height="320"` 时，380×196 的窗口只看得到
+    // 左上角那块——气泡还在、鲸鱼（x 378~620）被整个裁掉，画面就是一片
+    // 白底。改成 100%×100% 后，`viewBox` 负责把 620×320 缩放到窗口大小。
+    // 不传 `isInteractive` 时它被当作 <img>，百分比同样按图片框解析。
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img">` +
     // 呼吸作用在**整幅**内容上，并且**底边固定、上沿上下动**。
     //
     // 用三层嵌套而不是 `transform-origin`：缩放以原点为中心时，画面会

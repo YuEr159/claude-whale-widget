@@ -1412,6 +1412,20 @@ test('气泡没有尾巴，两颗小泡朝右下指向鲸鱼且不压到它身�
   }
 })
 
+test('根 SVG 交付给窗口的尺寸自适应，不写死 620×320', () => {
+  const svg = whaleSvg('idle', ['a', 'b', 'c'])
+  // 回归：带 `isInteractive` 时引擎把 SVG 放进沙箱 iframe，而 iframe 不会
+  // 缩放里面的文档。根元素写死 `width="620" height="320"` 时，380×196 的
+  // 窗口只显示左上角那块——鲸鱼被裁掉，面板里就是一片白框。
+  const open = svg.slice(0, svg.indexOf('>') + 1)
+  assert.ok(open.includes('width="100%"'), '根元素宽度应当交给窗口')
+  assert.ok(open.includes('height="100%"'), '根元素高度应当交给窗口')
+  assert.ok(open.includes('viewBox="0 0 620 320"'), 'viewBox 仍是画布坐标')
+  // 不能写死成像素，否则又回到被裁切的老问题。
+  assert.ok(!/width="\d+"/.test(open), '根元素不该写死像素宽度')
+  assert.ok(!/height="\d+"/.test(open), '根元素不该写死像素高度')
+})
+
 test('呼吸是纵向正弦缩放，没有上下平移，且底边固定', () => {
   const animated = whaleSvg('idle', ['a', 'b', 'c'])
   const still = whaleSvg('idle', ['a', 'b', 'c'], { isAnimating: false })
