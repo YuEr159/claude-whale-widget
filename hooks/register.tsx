@@ -550,6 +550,19 @@ export const register: Register = (on, options) => {
     const totals = heldTotals.value ?? EMPTY_TOTALS
     const heldByModel = await $.state.get({ plugin: 'whale-usage', key: 'byModel' } as const)
     const byModel = heldByModel.value ?? []
+
+    /**
+     * 本会话按**插件价格表**算出的花费：逐模型把 `costOf()` 的结果加起来。
+     *
+     * 气泡「本会话」页用这个数，而不是 `view.costUsd`（引擎 `/cost`）——
+     * 后者只认第一方价目表，第三方模型会按默认模型估出几十倍。只有所有
+     * 模型都有价时才算得出；有一款未收录就返回 `undefined`，让气泡退回
+     * 引擎读数（至少不会少算一笔）。
+     */
+    const sessionCostOfPrices =
+      byModel.length > 0 && byModel.every(entry => entry.cost !== null)
+        ? byModel.reduce((sum, entry) => sum + (entry.cost ?? 0), 0)
+        : undefined
     const heldContextTurns = await $.state.get({ plugin: 'whale-usage', key: 'contextTurns' } as const)
     const contextTurns = heldContextTurns.value ?? []
     // 用量条口径：老状态里没有这个字段时退回默认，空数组按默认处理——
@@ -585,6 +598,7 @@ export const register: Register = (on, options) => {
       total: data?.total,
       windowDays: data?.windowDays,
       mood,
+      sessionCost: sessionCostOfPrices,
     })
     const bubblePage = bubblePagesNow[Math.floor(now / BUBBLE_PAGE_MS) % bubblePagesNow.length]!
     const lines = bubblePage.lines
@@ -608,7 +622,20 @@ export const register: Register = (on, options) => {
         source={whaleSvg(mood, lines, { isBubbleOpen: true, now, epoch: WHALE_FLOAT_EPOCH })}
         alt={`小鲸鱼：${lines.join('，')}`}
         width={whaleWidth}
+        // 高度：显示尺寸 = 宽度 × 画布比例。动画只在 `Svg` 内部缩放，
+        // 不改变占位高度——盒子由这两个数决定。
         height={whaleHeight}
+        // **必须为 true，否则浮动动画不跑。** 引擎文档：`true` 时把 SVG 画进
+        // 一个无脚本的 sandbox frame，SMIL 才执行；不传则当作一张静态图片
+        // （"absent, an image"），里面只画出 `begin` 所指的那一帧。
+        //
+        // 实测（canvas 逐帧读像素）：`<img>` 里的 SMIL 完全不推进，永远停在
+        // 起始帧。所以不传这个开关时，面板里看到的「浮动」其实是每次重绘
+        // 换了一张静态图——翻页那一刻就跳回去，这才是卡帧的来源。
+        //
+        // 连带要求：根 SVG 必须用 `100%×100%` 填满 iframe。frame 只给窗口、
+        // 不缩放文档，写死 620×320 会只露出左上角（白框）。
+        isInteractive
       />
     ) : (
       <Text>{emblemOf(mood)}</Text>
@@ -1091,29 +1118,31 @@ export const register: Register = (on, options) => {
                   每一列都补到**分区宽度**（`partitions`），不是内容宽度：
                   内容宽度只决定数字从哪一格开始，分区宽度决定这一列占多远。
                   不这么做的话，模型名列被夹在 24 格，宽面板下右边三大片空白，
-                  四列挤在左边像没排好。 */}
+                  四列挤在左边像没排好。
+                  **四列一律左对齐**：数字右对齐时，同一列里的 `8.0万` 与
+                  `21.50亿` 位数不同，左边参差不齐，扫读时每一格都要重新找
+                  起点；左对齐后四位数字的起始位置固定，纵向扫一眼就对得上。 */}
               <Box flexDirection="row" gap={tableGap}>
                 <Text dimColor>{padCell('', 1)}</Text>
                 <Text dimColor>{padCell(clip('模型', nameWidth), partitions[0])}</Text>
-                <Text dimColor>{padCell(clip('输入', inputWidth), partitions[1], 'right')}</Text>
-                <Text dimColor>{padCell(clip('输出', outputWidth), partitions[2], 'right')}</Text>
-                <Text dimColor>{padCell(clip('费用', costWidth), partitions[3], 'right')}</Text>
+                <Text dimColor>{padCell(clip('输入', inputWidth), partitions[1])}</Text>
+                <Text dimColor>{padCell(clip('输出', outputWidth), partitions[2])}</Text>
+                <Text dimColor>{padCell(clip('费用', costWidth), partitions[3])}</Text>
               </Box>
               {modelDetails.map((row, index) => (
                 <Box key={`whale-mrow-${row.model}-${index}`} flexDirection="row" gap={tableGap}>
                   <Text color={modelColorOf(row.model)}>■</Text>
                   <Text>{padCell(clip(row.model, nameWidth), partitions[0])}</Text>
                   {/* 数字的**内容宽度**仍按最长读数定（截断由 `clip` 兜底），
-                      但这一格补到**分区宽度**：数字靠右，于是在分区里右对齐，
-                      三个数字列的个位仍然在同一列上。 */}
+                      但这一格补到**分区宽度**，且靠左——见上面表头处的说明。 */}
                   <Text dimColor>
-                    {padCell(clip(inputTexts[index] ?? '—', inputWidth), partitions[1], 'right')}
+                    {padCell(clip(inputTexts[index] ?? '—', inputWidth), partitions[1])}
                   </Text>
                   <Text dimColor>
-                    {padCell(clip(outputTexts[index] ?? '—', outputWidth), partitions[2], 'right')}
+                    {padCell(clip(outputTexts[index] ?? '—', outputWidth), partitions[2])}
                   </Text>
                   <Text dimColor>
-                    {padCell(clip(costTexts[index] ?? '—', costWidth), partitions[3], 'right')}
+                    {padCell(clip(costTexts[index] ?? '—', costWidth), partitions[3])}
                   </Text>
                 </Box>
               ))}

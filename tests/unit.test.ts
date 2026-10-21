@@ -7,7 +7,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { costOf, priceOf } from '../hooks/pricing'
 import { clip, countdown, displayWidth, padCell, pct, tokens, usd } from '../hooks/format'
-import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, freshnessOf, toUsageView } from '../hooks/usage-view'
+import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, freshnessOf, toUsageView } from '../hooks/usage-view'
 import {
   addModelSpend,
   countPatchLines,
@@ -762,19 +762,22 @@ test('模型明细表：列宽放得下最长的读数，且表头与数据行�
     expect(layout.gap).toBeGreaterThanOrEqual(2)
 
     // 3. 表头与数据行逐列对齐（格子数相同、宽度相同）。
+    //
+    // 这里两侧都用**左对齐**构造，与渲染层一致。曾经是右对齐：位数不同的
+    // 读数（`8.0万` 与 `21.50亿`）左边参差不齐，扫读时每一格都要重新找起点。
     const head = [
       padCell('', 1),
       padCell(clip('模型', layout.nameWidth), layout.nameWidth),
-      padCell(clip('输入', layout.inputWidth), layout.inputWidth, 'right'),
-      padCell(clip('输出', layout.outputWidth), layout.outputWidth, 'right'),
-      padCell(clip('费用', layout.costWidth), layout.costWidth, 'right'),
+      padCell(clip('输入', layout.inputWidth), layout.inputWidth),
+      padCell(clip('输出', layout.outputWidth), layout.outputWidth),
+      padCell(clip('费用', layout.costWidth), layout.costWidth),
     ]
     const cellsOf = (index: number) => [
       '■',
       padCell(clip(rows[index]!.model, layout.nameWidth), layout.nameWidth),
-      padCell(clip(layout.input[index]!, layout.inputWidth), layout.inputWidth, 'right'),
-      padCell(clip(layout.output[index]!, layout.outputWidth), layout.outputWidth, 'right'),
-      padCell(clip(layout.cost[index]!, layout.costWidth), layout.costWidth, 'right'),
+      padCell(clip(layout.input[index]!, layout.inputWidth), layout.inputWidth),
+      padCell(clip(layout.output[index]!, layout.outputWidth), layout.outputWidth),
+      padCell(clip(layout.cost[index]!, layout.costWidth), layout.costWidth),
     ]
     const starts = (cells: string[]): number[] => {
       const out: number[] = []
@@ -944,6 +947,22 @@ test('压缩标记只落在压缩后的第一轮', () => {
     0,
   )
   expect(bars.map(bar => bar.isAfterCompact)).toEqual([false, true, false])
+})
+
+test('气泡里的本会话花费优先用插件价格表，而不是引擎 /cost 的估算', () => {
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  // 引擎读数是 $258.98——它按默认模型价估第三方模型；插件价格表算出 $3.05。
+  const view = toUsageView({ cost: { usd: 258.98 } })
+  const totals = { wallMs: 0, turns: 3, linesAdded: 0, linesRemoved: 0 }
+
+  const withPrices = bubblePages(view, now, { totals, sessionCost: 3.05 })
+  const sessionPage = withPrices.find(page => page.id === 'session')
+  expect(sessionPage).toBeDefined()
+  expect(sessionPage!.lines[1]).toBe('≈$3.05')
+
+  // 模型未收录时退回引擎读数，至少不会显示成 $0。
+  const withoutPrices = bubblePages(view, now, { totals })
+  expect(withoutPrices.find(page => page.id === 'session')!.lines[1]).toBe('≈$258.98')
 })
 
 test('面板底色是三档同一份：深浅交给绘制端，图表才分档', () => {

@@ -9,7 +9,7 @@
 import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { whaleSvg } from '../hooks/whale-art.ts'
+import { WHALE_CANVAS, whaleSvg } from '../hooks/whale-art.ts'
 import { whaleTraitOf } from '../hooks/usage-view.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -23,8 +23,18 @@ const STATES = [
   { mood: 'sleep', label: '额度满 95%+', lines: ['5h 99%', '≈$21.60', '3m 后重置'] },
 ]
 
-/** 静态快照：没有动画，否则每张图各跑一条 SMIL 时间线。 */
-const svgFor = (state, lines) => whaleSvg(state.mood, lines, { isAnimating: false })
+/**
+ * 静态快照：没有动画，否则每张图各跑一条 SMIL 时间线。
+ *
+ * 还要把根元素的 `100%×100%` 换回像素尺寸：插件交付给 `Svg` 时用百分比是
+ * 为了让引擎的 sandbox iframe 自己缩放，而**独立文件没有宿主框**，百分比
+ * 高度会塌成 0。这是唯一该写死尺寸的地方。
+ */
+const svgFor = (state, lines) =>
+  whaleSvg(state.mood, lines, { isAnimating: false }).replace(
+    /(<svg[^>]*?)width="100%" height="100%"/,
+    `$1width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}"`,
+  )
 
 // 1. preview.svg：单独一张「正常」状态，README 里直接嵌入。
 writeFileSync(join(root, 'assets/preview.svg'), svgFor(STATES[0], STATES[0].lines) + '\n')
