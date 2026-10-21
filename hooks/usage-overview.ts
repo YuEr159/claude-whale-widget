@@ -15,7 +15,7 @@ import type {
   ModelDayCell,
   TurnDay,
 } from '../types'
-import { tokens } from './format.ts'
+import { displayWidth, tokens, usd } from './format.ts'
 import { usdEstimate } from './provenance.ts'
 
 /** 概览页的一张指标卡。 */
@@ -476,6 +476,93 @@ export function modelDetailRows(models: LocalModel[]): ModelDetailRow[] {
 export function overviewFooter(overview: LocalOverview | undefined, totalCost: number): string {
   if (!overview) return '还没有统计数据'
   return `共 ${tokens(overview.totalTokens)} tok · ${usdEstimate(totalCost)}`
+}
+
+// ---------------- 模型明细表的列宽 ----------------
+
+/**
+ * 明细表的列宽，以及每一格要画的文字。
+ *
+ * 抽成纯函数是因为它有一套**必须整体成立**的约束，内联在渲染里既测不了、
+ * 也看不出哪里错了：
+ *
+ *   1. 数字列必须放得下这一列**最长**的那一项。`padCell` 只补空格、不截断，
+ *      列宽给窄了内容会溢出，把后面几列整体推歪——比不收缩更糟。
+ *   2. 列间要有缝隙。1 格时相邻数字会贴成一个长串（`21.50亿140.0万`），
+ *      读不出这是两列。
+ *   3. 模型名列拿剩下的宽度，且**它可以被截断**——名字截短还能认，
+ *      数字截短就成了错的读数。
+ *
+ * 曾经踩过的坑：`fitWidth` 写成取最小值，于是输入列按最短的那项（`8.0万`）
+ * 定宽，而 `21.50亿` 比它长，被截成 `21.5…`。看着像「挤」，其实是算窄了。
+ */
+
+/** 明细表每一列的宽度。 */
+export type DetailTableLayout = {
+  /** 模型名列（唯一允许截断的列）。 */
+  nameWidth: number
+  /** 输入 token 列。 */
+  inputWidth: number
+  /** 输出 token 列。 */
+  outputWidth: number
+  /** 金额列。 */
+  costWidth: number
+  /** 列与列之间的空格数。 */
+  gap: number
+}
+
+/** 列间距。1 格会把相邻两列的数字粘在一起。 */
+export const DETAIL_TABLE_GAP = 2
+
+/** 结构开销：左右 paddingX 各 1 + 边框 2 列 + 色块 1 格 + 四个间隙。 */
+const TABLE_CHROME = 2 + 2 + 1 + DETAIL_TABLE_GAP * 4
+
+/** 列宽的下限与上限。 */
+const NAME_FLOOR = 6
+/**
+ * 模型名的上限。
+ *
+ * 再宽也只是在名字与右侧三列之间空出一大片，读数反而离得远。24 格够放下
+ * `DeepSeek-V4.1-Flash-1017` 这类网关写法的大半，剩下的靠 `clip`。
+ */
+const NAME_CEILING = 24
+/** 数字列的上下限：4 格够放 `9999`，9 格够放 `1.20万亿`。 */
+const NUMBER_FLOOR = 4
+const NUMBER_CEILING = 9
+
+/**
+ * 明细表要显示的文字与算出的列宽。
+ *
+ * 文字一并给出，免得调用方再算一遍 `tokens()` / `usd()` —— 列宽是按这些
+ * 文字定的，两处各算一次就可能对不上（比如格式化规则改了、只改了一处）。
+ */
+export function detailTableLayout(
+  rows: readonly ModelDetailRow[],
+  panelWidth: number,
+): DetailTableLayout & {
+  input: string[]
+  output: string[]
+  cost: string[]
+} {
+  const input = rows.map(row => tokens(row.input))
+  const output = rows.map(row => tokens(row.output))
+  const cost = rows.map(row => (row.cost === null ? '—' : usd(row.cost)))
+
+  /** 一列的理想宽度：够放下这一列**最长**的那一项。 */
+  const widest = (texts: readonly string[]): number =>
+    texts.reduce((max, text) => Math.max(max, displayWidth(text)), 0)
+  const fit = (texts: readonly string[], floor: number, ceiling: number): number =>
+    Math.max(floor, Math.min(ceiling, widest(texts)))
+
+  const inputWidth = fit(input, NUMBER_FLOOR, NUMBER_CEILING)
+  const outputWidth = fit(output, NUMBER_FLOOR, NUMBER_CEILING)
+  const costWidth = fit(cost, NUMBER_FLOOR, NUMBER_CEILING)
+
+  // 模型名列拿剩下的全部；窄了就截断它，不动数字列。
+  const rest = panelWidth - (TABLE_CHROME + inputWidth + outputWidth + costWidth)
+  const nameWidth = Math.max(NAME_FLOOR, Math.min(NAME_CEILING, rest))
+
+  return { nameWidth, inputWidth, outputWidth, costWidth, gap: DETAIL_TABLE_GAP, input, output, cost }
 }
 
 // ---------------- 上下文构成 ----------------

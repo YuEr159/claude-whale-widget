@@ -265,12 +265,18 @@ test('连点鲸鱼时，旧的自动收起定时器不会提前关掉新展开�
 })
 
 /**
- * 控件的名字要说它这一步会做什么。
+ * 鲸鱼上不许出现任何文字——点击层不能带 `label`。
  *
- * 回归：`label` 固定叫「展开小鲸鱼摘要」，但这个按钮其实是开/关切换——
- * 展开后再点会收起。读屏与键盘用户听到的应当是下一步的动作。
+ * 回归：这层按钮原本同时给了 `label`（跟着开合状态变「展开 / 收起小鲸鱼
+ * 摘要」）和 children（一整块盲文空白，用来撑出点击区）。终端那份渲染器
+ * 在按钮有 children 时不画 label；但**桌面端把 Button 画成原生按钮**，
+ * 引擎文档的原话是 "A desktop draws its native button either way"——
+ * `plain` 也拦不住。于是「展开小鲸鱼摘要」七个字直接压在鲸鱼身上。
+ *
+ * 这一层的唯一作用是提供点击区，视觉上必须是空的。控件以
+ * `key="whale-tap"` 寻址，不靠 label。
  */
-test('鲸鱼的控件名跟着开合状态走', async ($, on) => {
+test('鲸鱼点击层不带 label：桌面端会把 label 画成按钮文字', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
@@ -284,13 +290,37 @@ test('鲸鱼的控件名跟着开合状态走', async ($, on) => {
     viewport: { columns: 100, rows: 40 },
   })
 
-  const labelOf = async () => (await ui.find({ key: 'whale-tap' }))?.props?.label
+  /** 顺着树找 `whale-tap` 那个 Button，返回它**画出来的** props。 */
+  const tapProps = async (): Promise<any> => {
+    const find = (node: any): any => {
+      if (!node || typeof node !== 'object') return undefined
+      if (node.type === 'Button' && node.props?.key === 'whale-tap') return node.props
+      for (const kid of node.children ?? []) {
+        const hit = find(kid)
+        if (hit) return hit
+      }
+      return undefined
+    }
+    return find(await ui.drawn())
+  }
 
-  expect(await labelOf()).toBe('展开小鲸鱼摘要')
+  // 关键：`ui.find` / `ui.drawn()` 都会把 children 的文字回填成 `label`
+  // （引擎文档：「absent, it is the children's text」）。所以这里不断言
+  // label 不存在，而是断言它**没有可见文字**：children 全是 U+2800 盲文
+  // 空白，即便桌面端把它当按钮文字画出来，也是一片空白。
+  //
+  // 这正是不传 label 的目测效果，也守得住回归：一旦把「展开小鲸鱼摘要」
+  // 写回 label，这串字就会留在 props 里，断言立刻变红。
+  const onlyBlank = (text: string): boolean =>
+    text.replace(/[\s⠀]/gu, '').length === 0
+
+  const tap = await tapProps()
+  expect(tap).toBeDefined()
+  expect(onlyBlank(String(tap.label ?? ''))).toBe(true)
+
+  // 开合切换不该改变这个控件，它始终只是一层透明的点击区。
   await ui.press({ key: 'whale-tap' })
-  expect(await labelOf()).toBe('收起小鲸鱼摘要')
-  await ui.press({ key: 'whale-tap' })
-  expect(await labelOf()).toBe('展开小鲸鱼摘要')
+  expect(onlyBlank(String((await tapProps()).label ?? ''))).toBe(true)
 
   await ui.unmount()
 })
