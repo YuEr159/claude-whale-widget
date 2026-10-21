@@ -607,7 +607,14 @@ export const register: Register = (on, options) => {
         source={whaleSvg(mood, lines, { isBubbleOpen: true })}
         alt={`小鲸鱼：${lines.join('，')}`}
         width={whaleWidth}
+        // 高度：显示尺寸 = 宽度 × 画布比例。呼吸动画只在 `Svg` 内部缩放，
+        // 不改变占位高度——盒子由这两个数决定。
         height={whaleHeight}
+        // **必须为 true，否则呼吸动画不会跑。** 引擎文档：`true` 时把 SVG
+        // 画进一个无脚本的沙箱 frame，SMIL 动画、CSS `:hover` 与 `<title>`
+        // 提示才会生效；不传则当作一张静态图片（"absent, an image"）。
+        // 这个挂件从加上动画起就一直没传它，于是在面板里画的是一张静止的图。
+        isInteractive
       />
     ) : (
       <Text>{emblemOf(mood)}</Text>

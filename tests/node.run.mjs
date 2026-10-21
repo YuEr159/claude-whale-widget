@@ -24,7 +24,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { WHALE_ASPECT, WHALE_CANVAS, WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, WHALE_MIN_WIDTH, WHALE_STRETCH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
+import { WHALE_ASPECT, WHALE_BREATH_AMPLITUDE, WHALE_CANVAS, WHALE_FLOAT_PERIOD_MS, WHALE_MAX_WIDTH, WHALE_MIN_HEIGHT, WHALE_MIN_WIDTH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   canonicalModelName,
@@ -405,7 +405,6 @@ test('鲸鱼尺寸连续，高度严格按画布比例且不低于最小高度',
 
   for (const columns of [1, 10, 40, 100, 200]) {
     const { width, height } = whaleSizeFor(columns)
-    // 比例要跟**拉伸后**的画布走；沿用 320/620 会在这里立刻红。
     assert.ok(
       Math.abs(height / width - WHALE_ASPECT) < 1e-12,
       `${columns} 列比例失守: ${height}/${width}`,
@@ -414,13 +413,8 @@ test('鲸鱼尺寸连续，高度严格按画布比例且不低于最小高度',
     assert.ok(width <= WHALE_MAX_WIDTH + 1e-9, `${columns} 列宽度 ${width} 超过上限`)
   }
 
-  // 纵向拉伸确实作用到了画布上：高宽比 = 原比例 × WHALE_STRETCH。
-  assert.ok(
-    Math.abs(WHALE_ASPECT - (320 / 620) * WHALE_STRETCH) < 1e-6,
-    '画布比例没有跟着拉伸倍数走',
-  )
-  // 同样是最大宽度，拉伸后的高度必须比原来高——否则这个功能等于没开。
-  assert.ok(whaleSizeFor(200).height > WHALE_MAX_WIDTH * (320 / 620), '纵向拉伸没有生效')
+  // 画布就是原图比例：呼吸是动画，不该改变静态尺寸。
+  assert.ok(Math.abs(WHALE_ASPECT - 320 / 620) < 1e-12, '画布比例不该再含静态拉伸')
 })
 
 test('概览与模型页的整形', () => {
@@ -1339,18 +1333,17 @@ test('泡泡轮播：每页三行，主角在第二行；没有数据的页整�
 })
 
 test('人设页的每句台词都放得进气泡椭圆', () => {
-  // 气泡几何与 `bubbleSvg` 保持一致：图形层被 `scale(1 WHALE_STRETCH)`
-  // 纵向拉长，所以椭圆的 ry 与中心 y 都要乘上拉伸倍数；rx 不变。
+  // 气泡几何与 `bubbleSvg` 保持一致：cx 228 / cy 112 / rx 146 / ry 90，
+  // 描边 11px 向外扩，文字只占内缘以内的空间。
   const CX = 228
-  const CY = 112 * WHALE_STRETCH
+  const CY = 112
   const RX = 146 - 11 / 2
-  const RY = (90 - 11 / 2) * WHALE_STRETCH
-  // 三行的基线（三行齐全时）：119 / 181 / 232——文字层不缩放，
-  // 所以用 BUBBLE_TEXT_Y 的原值；字号 25 / 46 / 21。
+  const RY = 90 - 11 / 2
+  // 三行的基线（三行齐全时）：96 / 142 / 180；字号 25 / 46 / 21。
   const rows = [
-    { y: 119, size: 25 },
-    { y: 181, size: 46 },
-    { y: 232, size: 21 },
+    { y: 96, size: 25 },
+    { y: 142, size: 46 },
+    { y: 180, size: 21 },
   ]
 
   // 文字宽度的保守估计：汉字与全角标点按 1em，ASCII 按 0.62em（比常见
@@ -1413,35 +1406,46 @@ test('气泡没有尾巴，两颗小泡朝右下指向鲸鱼且不压到它身�
   assert.ok(small2.x + 9 < WHALE_LEFT, `小泡 2 的右缘 ${small2.x + 9} 不该越过鲸鱼左边界`)
 
   // 3. 两颗小泡朝右下延伸，且都在大泡之外（不压在大泡身上）。
-  //    判定时按拉伸后的椭圆计算：图形层被 `scale(1 WHALE_STRETCH)` 拉长。
   for (const [name, p] of [['小泡 1', small1], ['小泡 2', small2]]) {
-    const onEdge =
-      ((p.x - big.x) / 146) ** 2 + ((p.y - big.y) / (90 * WHALE_STRETCH)) ** 2
+    const onEdge = ((p.x - big.x) / 146) ** 2 + ((p.y - big.y) / 90) ** 2
     assert.ok(onEdge > 1.05, `${name} 应在气泡椭圆之外，实际椭圆参数 ${onEdge.toFixed(2)}`)
   }
 })
 
-test('纵向拉伸只作用于图形层，文字层不缩放', () => {
-  const svg = whaleSvg('idle', ['a', 'b', 'c'], { isAnimating: false })
+test('呼吸是纵向正弦缩放，没有上下平移，且底边固定', () => {
+  const animated = whaleSvg('idle', ['a', 'b', 'c'])
+  const still = whaleSvg('idle', ['a', 'b', 'c'], { isAnimating: false })
 
-  // 图形层（椭圆 + 鲸鱼）各有一个 scale(1 WHALE_STRETCH)。
-  const scales = [...svg.matchAll(/scale\(1 ([\d.]+)\)/g)].map(m => Number(m[1]))
-  assert.equal(scales.length, 2, '应有气泡与鲸鱼两处纵向缩放')
-  for (const value of scales) {
-    assert.ok(Math.abs(value - WHALE_STRETCH) < 1e-9, `缩放值 ${value} 不等于 ${WHALE_STRETCH}`)
+  // 1. 不再有 translate 动画：位移会让整只鲸鱼在面板里晃。
+  assert.ok(!animated.includes('type="translate"'), '不该再有上下平移的动画')
+  assert.ok(animated.includes('type="scale"'), '呼吸应当是缩放动画')
+
+  // 2. 缩放只动纵向，横向恒为 1。
+  for (const match of animated.matchAll(/values="([^"]+)"/g)) {
+    for (const pair of match[1].split(';')) {
+      const [sx, sy] = pair.trim().split(/\s+/).map(Number)
+      assert.equal(sx, 1, `横向不该缩放，实际 ${sx}`)
+      assert.ok(
+        Math.abs(sy - 1) <= WHALE_BREATH_AMPLITUDE + 1e-9,
+        `纵向倍数 ${sy} 超出 1±${WHALE_BREATH_AMPLITUDE}`,
+      )
+    }
   }
 
-  // 三行 `<text>` 必须在**气泡的**缩放组之外：整幅一起拉会把字形压成瘦长条。
-  // 气泡组是第一个 `scale(`，在它的 `</g>` 之前不该出现 text。
-  const bubbleScaleAt = svg.indexOf('scale(1 ')
-  const bubbleGroupEnd = svg.indexOf('</g>', bubbleScaleAt)
-  assert.ok(bubbleScaleAt > 0 && bubbleGroupEnd > bubbleScaleAt, '气泡缩放组应当存在')
-  const textPositions = [...svg.matchAll(/<text /g)].map(m => m.index)
-  assert.equal(textPositions.length, 3)
-  for (const at of textPositions) {
-    assert.ok(at > bubbleGroupEnd, 'text 落在了气泡缩放组内部，字会被拉扁')
-  }
+  // 3. 幅度两端确实用到了：最高 1.05、最低 0.95。
+  const ys = [...animated.matchAll(/1 ([\d.]+)/g)].map(m => Number(m[1]))
+  assert.ok(Math.abs(Math.max(...ys) - (1 + WHALE_BREATH_AMPLITUDE)) < 1e-3, '最高点没到 1.05')
+  assert.ok(Math.abs(Math.min(...ys) - (1 - WHALE_BREATH_AMPLITUDE)) < 1e-3, '最低点没到 0.95')
 
-  // 画布高度本身也长了，否则缩放后的图形会被裁掉。
-  assert.ok(WHALE_CANVAS.height > 320, '画布高度没有随拉伸变大')
+  // 4. 周期写成常量，翻页周期才能与它对齐。
+  assert.ok(animated.includes(`dur="${WHALE_FLOAT_PERIOD_MS}ms"`), '动画周期没有引用常量')
+
+  // 5. 底边固定：画布高度 H，外层 translate(0 H) 与内层 translate(0 -H)
+  //    互为逆，缩放原点因此落在 y = H（底边）。缺一条，画面就会整体飘。
+  const H = WHALE_CANVAS.height
+  assert.ok(animated.includes(`translate(0 ${H})`), '缺少把原点搬到画布底边的外层平移')
+  assert.ok(animated.includes(`translate(0 -${H})`), '缺少抵消外层平移的内层平移')
+
+  // 6. 静态图不带动画，否则每张导出图各跑一条时间线。
+  assert.ok(!still.includes('animateTransform'), '静态渲染不该画动画')
 })
