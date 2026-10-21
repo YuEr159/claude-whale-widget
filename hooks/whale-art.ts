@@ -22,8 +22,12 @@ export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
  *
  * 宽度与高度由画布比例绑定，所以「最小高度」就是真正的下界：面板再窄，
  * 鲸鱼也至少有这么高，不会缩成一团看不清的色块。
+ *
+ * 从 96 提到 120：泡泡里的字（尤其第二行 46px 的主角）在 620 宽的画布上
+ * 缩放后，96px 高时主角只剩约 14px，小字只剩 6px——在桌面上已经读不动了。
+ * 120px 高对应约 17px 的主角、8px 的小字，是能看清的下限。
  */
-export const WHALE_MIN_HEIGHT = 96
+export const WHALE_MIN_HEIGHT = 120
 
 /**
  * 由最小高度反推出的最小宽度。
@@ -33,8 +37,14 @@ export const WHALE_MIN_HEIGHT = 96
  */
 export const WHALE_MIN_WIDTH = WHALE_MIN_HEIGHT / WHALE_ASPECT
 
-/** 立绘的最大显示宽度：超过它面板会显得头重脚轻。 */
-export const WHALE_MAX_WIDTH = 300
+/**
+ * 立绘的最大显示宽度。
+ *
+ * 从 300 提到 380：停靠面板常见 100~140 列（约 800~1120px），300px 的立绘
+ * 只占三分之一，泡泡里的字被压得太小。380px 在同样宽度下约占一半，仍给
+ * 上方的内容留足空间；再宽就会喧宾夺主。
+ */
+export const WHALE_MAX_WIDTH = 380
 
 /**
  * 面板宽度（字符列）→ 立绘的显示尺寸，宽高严格按画布比例。
@@ -130,17 +140,13 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
 
   return (
     `<g>` +
-    // 尾巴、小泡 1、小泡 2 在**同一条射线**上：从椭圆右下缘 (312,186) 出发，
-    // 方向 (0.506, 0.862)——也就是约 60° 朝右下。三段共线才读得出「一句话
-    // 的余音往里递」，各画各的会像散落的碎片。
-    //
-    // 尾巴止于小泡 1 的边缘之外：它连的是大泡和小泡，戳进泡里就成了「把小泡
-    // 串在签子上」。
-    `<path d="M312 186 q13 22 21 36" fill="none" stroke="${tone.stroke}" stroke-width="13" stroke-linecap="round"/>` +
-    // 大椭圆
+    // 大椭圆。**没有尾巴**：曾经从椭圆左下甩出一条，但它是纯粹的装饰线，
+    // 既不对应任何数据，还会让人以为气泡漏气了。气泡靠位置（在鲸鱼左边）
+    // 就足以说明「这是谁在说话」。
     `<ellipse cx="228" cy="112" rx="146" ry="90" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="11"/>` +
-    // 两颗小泡：沿同一条射线，依次变小。位置都留在鲸鱼**左侧**（鲸鱼占
-    // x 378~620），否则会压到它脸上。
+    // 两颗小泡：从大泡右下沿同一条射线（方向约 (0.506, 0.862)，即朝右下）
+    // 依次变小，指向鲸鱼。位置都留在鲸鱼**左侧**（鲸鱼占 x 378~620），
+    // 否则会压到它脸上。
     `<ellipse cx="335" cy="226" rx="15" ry="10" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="7"/>` +
     `<ellipse cx="359" cy="265" rx="9" ry="6" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="6"/>` +
     texts +
