@@ -144,6 +144,19 @@ let isCompactPending = false
  */
 let themeCache: ThemeColors | null = null
 
+/**
+ * 鲸鱼浮动动画的零点（毫秒），模块加载时定一次，之后不再变。
+ *
+ * 为什么需要它：宿主每次重绘都换一份新的 SVG 文档，SMIL 时间轴归零，
+ * 浮动就从最上面那一帧重来——泡泡每 6 秒翻页，于是每 6 秒「卡」一下。
+ * 修法是给动画一个负的 `begin`，把它拨到当前相位（见 `whaleSvg`）。
+ * 相位要按**一个固定的零点**算；每帧重算零点等于相位永远为 0，白改。
+ *
+ * 取 `Date.now()` 而不是 `$.clock.now()`：这里在模块加载时执行，还没有 `$`。
+ * 宿主时钟与墙钟在相位上只差一个常量，而这个常量本来就被零点吸收了。
+ */
+const WHALE_FLOAT_EPOCH = Date.now()
+
 /** 扫描进行中的互斥标记：避免定时检查与手动刷新同时启动两个 node 进程。 */
 let isScanning = false
 
@@ -592,7 +605,7 @@ export const register: Register = (on, options) => {
 
     const whale = Svg ? (
       <Svg
-        source={whaleSvg(mood, lines, { isBubbleOpen: true })}
+        source={whaleSvg(mood, lines, { isBubbleOpen: true, now, epoch: WHALE_FLOAT_EPOCH })}
         alt={`小鲸鱼：${lines.join('，')}`}
         width={whaleWidth}
         height={whaleHeight}
@@ -975,6 +988,7 @@ export const register: Register = (on, options) => {
     // 可以截断），放在渲染里既测不了、错了也很难看出来。
     const detailColumns = detailTableLayout(modelDetails, width)
     const { nameWidth, inputWidth, outputWidth, costWidth, gap: tableGap } = detailColumns
+    const partitions = detailColumns.partitions.widths
     const inputTexts = detailColumns.input
     const outputTexts = detailColumns.output
     const costTexts = detailColumns.cost
@@ -1073,29 +1087,33 @@ export const register: Register = (on, options) => {
                   表头第一列要补出数据行那个色块的**位置与缝隙**：
                   数据行是 `■` + gap + 模型名，表头就用一格空白替色块，
                   后面照常隔一个 gap——两行的格子数必须相同，少一格右边
-                  三列会整体错开。 */}
+                  三列会整体错开。
+                  每一列都补到**分区宽度**（`partitions`），不是内容宽度：
+                  内容宽度只决定数字从哪一格开始，分区宽度决定这一列占多远。
+                  不这么做的话，模型名列被夹在 24 格，宽面板下右边三大片空白，
+                  四列挤在左边像没排好。 */}
               <Box flexDirection="row" gap={tableGap}>
                 <Text dimColor>{padCell('', 1)}</Text>
-                <Text dimColor>{padCell(clip('模型', nameWidth), nameWidth)}</Text>
-                <Text dimColor>{padCell(clip('输入', inputWidth), inputWidth, 'right')}</Text>
-                <Text dimColor>{padCell(clip('输出', outputWidth), outputWidth, 'right')}</Text>
-                <Text dimColor>{padCell(clip('费用', costWidth), costWidth, 'right')}</Text>
+                <Text dimColor>{padCell(clip('模型', nameWidth), partitions[0])}</Text>
+                <Text dimColor>{padCell(clip('输入', inputWidth), partitions[1], 'right')}</Text>
+                <Text dimColor>{padCell(clip('输出', outputWidth), partitions[2], 'right')}</Text>
+                <Text dimColor>{padCell(clip('费用', costWidth), partitions[3], 'right')}</Text>
               </Box>
               {modelDetails.map((row, index) => (
                 <Box key={`whale-mrow-${row.model}-${index}`} flexDirection="row" gap={tableGap}>
                   <Text color={modelColorOf(row.model)}>■</Text>
-                  <Text>{padCell(clip(row.model, nameWidth), nameWidth)}</Text>
-                  {/* 数字也用 clip：列宽封顶 9 格，`1.20万亿` 这种极端值
-                      仍可能占满 8 格，留一格缓冲；再长的就截断，不让它
-                      把后面的列推歪。 */}
+                  <Text>{padCell(clip(row.model, nameWidth), partitions[0])}</Text>
+                  {/* 数字的**内容宽度**仍按最长读数定（截断由 `clip` 兜底），
+                      但这一格补到**分区宽度**：数字靠右，于是在分区里右对齐，
+                      三个数字列的个位仍然在同一列上。 */}
                   <Text dimColor>
-                    {padCell(clip(inputTexts[index] ?? '—', inputWidth), inputWidth, 'right')}
+                    {padCell(clip(inputTexts[index] ?? '—', inputWidth), partitions[1], 'right')}
                   </Text>
                   <Text dimColor>
-                    {padCell(clip(outputTexts[index] ?? '—', outputWidth), outputWidth, 'right')}
+                    {padCell(clip(outputTexts[index] ?? '—', outputWidth), partitions[2], 'right')}
                   </Text>
                   <Text dimColor>
-                    {padCell(clip(costTexts[index] ?? '—', costWidth), costWidth, 'right')}
+                    {padCell(clip(costTexts[index] ?? '—', costWidth), partitions[3], 'right')}
                   </Text>
                 </Box>
               ))}

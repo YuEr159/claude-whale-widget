@@ -253,6 +253,28 @@ test('SVG 合法、文字转义、动画可选', () => {
   assert.ok(whaleSvg('working', ['x']).includes('animateTransform'))
 })
 
+test('浮动动画的 begin 接上当前相位，翻页重建时不跳回起点', () => {
+  const epoch = 1_000_000
+  const period = 3_600
+  const beginOf = svg => {
+    const hit = svg.match(/begin="-([\d.]+)s"/)
+    return hit ? Number(hit[1]) : null
+  }
+
+  // 零点：没有相位，begin 不出现（等价于从 0 开始）
+  assert.equal(beginOf(whaleSvg('idle', ['a'], { now: epoch, epoch })), null)
+  // 播到 1.5 秒：begin 正好是 -1.500s
+  assert.ok(Math.abs(beginOf(whaleSvg('idle', ['a'], { now: epoch + 1_500, epoch })) - 1.5) < 1e-6)
+  // 跨一个周期：相位回绕，不是继续累加
+  assert.ok(Math.abs(beginOf(whaleSvg('idle', ['a'], { now: epoch + period + 900, epoch })) - 0.9) < 1e-6)
+  // 同一个 now 反复画，begin 稳定
+  const a = whaleSvg('idle', ['a'], { now: epoch + 700, epoch })
+  const b = whaleSvg('idle', ['b'], { now: epoch + 700, epoch })
+  assert.equal(beginOf(a), beginOf(b))
+  // 不传 now/epoch 时与旧调用方一致
+  assert.equal(beginOf(whaleSvg('idle', ['a'])), null)
+})
+
 test('数据新鲜度：刚更新、分钟、小时、过期判定', () => {
   const now = 1_000_000
   const never = freshnessOf(null, now, 300_000)
