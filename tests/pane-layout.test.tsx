@@ -124,6 +124,35 @@ test('泡泡常驻：一打开就有气泡，不需要点', async ($, on) => {
 })
 
 /**
+ * 立绘必须带 `isInteractive`，否则呼吸动画根本不会跑。
+ *
+ * 引擎文档写得很直白：`true` 时画进无脚本的沙箱 frame，SMIL 动画才会生效；
+ * 不传则当作一张静态图片。这个挂件从加上动画起一直没传它，面板里画的
+ * 其实是一张静止的图——这条用例防止它再被无声地删掉。
+ */
+test('立绘带上 isInteractive，呼吸动画才会跑', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const svg = findLastSvg(await ui.drawn())
+  expect(svg?.props?.isInteractive).toBe(true)
+  // 动画本身也在标记里——静态图（`isAnimating: false`）不该带这条线。
+  expect(String(svg?.props?.source)).toContain('animateTransform')
+
+  await ui.unmount()
+})
+
+/**
  * 泡泡内容会轮播：不同时刻画出的文字不同。
  *
  * 页号由时钟算（`floor(now / BUBBLE_PAGE_MS) % pages.length`），所以推进

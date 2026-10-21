@@ -12,38 +12,59 @@
 import { WHALE_ASSETS } from './whale-asset.ts'
 
 /**
- * 纵向拉伸倍数：图形层纵向放大这么多，文字层不缩放。
+ * 「呼吸」的幅度：纵向缩放倍数在 `1 ± WHALE_BREATH_AMPLITUDE` 之间波动。
  *
- * 原图与气泡是按 620×320 设计的，可面板是竖向的，196px 高的立绘在停靠
- * 面板里显得扁。这里只把**图形**（气泡椭圆、小泡、鲸鱼）纵向拉长，
- * 文字仍按原字号绘制——整幅图一起拉伸会把字压成瘦长条，读起来很糟。
+ * 这是一个**动画**，不是静态造型。鲸鱼不再上下平移——位移会让它在面板里
+ * 晃来晃去；改成纵向轻微胀缩：底边不动，上沿上下移动，像呼吸。
  *
- * 1.35 是观感折中：再高，气泡里的字相对椭圆显得越来越空；再低，看不出
- * 与等比放大的区别。
+ * ±5% 是**整幅**（气泡、小泡、鲸鱼、文字）一起缩放。上一版曾把文字单独
+ * 拆出来不缩放，那是因为固定 1.35 的拉伸会把字形压扁；而 ±5% 的变化量
+ * 小到看不出字被拉长，整幅一起缩放反而更自然——气泡胀的时候，字也跟着
+ * 一起胀。
  */
-export const WHALE_STRETCH = 1.35
+export const WHALE_BREATH_AMPLITUDE = 0.05
 
-/** 面板立绘的画布尺寸；高度已经含 `WHALE_STRETCH`。 */
-export const WHALE_CANVAS = {
-  width: 620,
-  height: Math.round(320 * WHALE_STRETCH),
-} as const
+/**
+ * 「呼吸」动画，周期 `WHALE_FLOAT_PERIOD_MS`。
+ *
+ * 用 `keySplines` 而不是一串 `values`：SMIL 的 `values` 默认线性插值，
+ * 折线看起来像机械伸缩；`0.5 0 0.5 1` 是标准的 ease-in-out，四段拼起来
+ * 在一个周期内的观感与正弦几乎一致。
+ *
+ * `if (isAnimating)` 在调用处判断——静态图（导出、测试、预览）不画这条线，
+ * 否则每张图各跑一条时间线。
+ */
+function breatheAnimation(): string {
+  const low = (1 - WHALE_BREATH_AMPLITUDE).toFixed(4)
+  const high = (1 + WHALE_BREATH_AMPLITUDE).toFixed(4)
+  return (
+    `<animateTransform attributeName="transform" type="scale" ` +
+    `values="1 1; 1 ${high}; 1 1; 1 ${low}; 1 1" ` +
+    `keyTimes="0; 0.25; 0.5; 0.75; 1" ` +
+    `calcMode="spline" keySplines="0.5 0 0.5 1; 0.5 0 0.5 1; 0.5 0 0.5 1; 0.5 0 0.5 1" ` +
+    `dur="${WHALE_FLOAT_PERIOD_MS}ms" repeatCount="indefinite" additive="sum"/>`
+  )
+}
+
+/** 面板立绘的画布尺寸。呼吸只是动画，画布按未呼吸时的比例。 */
+export const WHALE_CANVAS = { width: 620, height: 320 } as const
 
 /** 画布的高宽比，外部计算 height 时直接乘它。 */
 export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
 
 /**
- * 立绘的高度下限（CSS 像素，**已含** `WHALE_STRETCH`）。
+ * 立绘的高度下限（CSS 像素）。
  *
- * 宽度与高度由拉伸后的画布比例绑定，所以「最小高度」就是真正的下界：
- * 面板再窄，鲸鱼也至少有这么高，不会缩成一团看不清的色块。
+ * 宽度与高度由画布比例绑定，所以「最小高度」就是真正的下界：面板再窄，
+ * 鲸鱼也至少有这么高，不会缩成一团看不清的色块。
  *
  * 数值沿革：96 → 120 → 180。泡泡里的字（尤其 46px 的主角行）在 620 宽的
  * 画布上缩放后，96px 高时主角只剩约 14px，小字只剩 6px——桌面上已经读不动。
- * 现在 180px 高对应缩放 0.417：主角约 19px、小字约 9px，是不必凑近看的下限。
+ * 180px 高对应缩放 0.29（画布 620×320 缩到 180px 高）：主角约 13px、
+ * 小字约 6px，是「再小就真的看不清」的下限。
  *
- * 代价是最小宽度约 258px；面板很窄时立绘会占掉几乎整行，这是有意为之
- * ——这个挂件的主角就是这条鲸鱼。
+ * 代价是最小宽度 = 180 / (320/620) ≈ 349px；面板很窄时立绘会占掉几乎
+ * 整行，这是有意为之——这个挂件的主角就是这条鲸鱼。
  */
 export const WHALE_MIN_HEIGHT = 180
 
@@ -65,20 +86,21 @@ export const WHALE_MIN_WIDTH = WHALE_MIN_HEIGHT / WHALE_ASPECT
 export const WHALE_MAX_WIDTH = 380
 
 /**
- * 鲸鱼浮动的周期（毫秒）。**气泡翻页周期必须是它的整数倍**：
+ * 呼吸动画的周期（毫秒）。**气泡翻页周期必须是它的整数倍**：
  * 每翻一页都会换掉整份 SVG `source`，SMIL 动画随之从头开始；若两个周期
  * 不成整数倍，翻页那一刻动画正好停在半途，画面会跳一下。
  */
 export const WHALE_FLOAT_PERIOD_MS = 3_000
 
 /**
- * 面板宽度（字符列）→ 立绘的显示尺寸，宽高严格按**拉伸后**的画布比例。
+ * 面板宽度（字符列）→ 立绘的显示尺寸，宽高严格按画布比例。
  *
- * 先按面板宽度算出理想宽度，再用它推高度。三个不变量：
+ * 先按面板宽度算出理想宽度，再用它推高度。不变量：
  *   - 高度永远 ≥ `WHALE_MIN_HEIGHT`；
- *   - 高宽比永远等于 `WHALE_ASPECT`（已含 `WHALE_STRETCH`），
- *     根 SVG 才不会留白；
- *   - 宽度的上下界不变，拉伸只花在高度上。
+ *   - 高宽比永远等于 `WHALE_ASPECT`，根 SVG 才不会留白。
+ *
+ * 呼吸动画在 ±5% 以内胀缩，不改变这个静态尺寸——`Svg` 的盒子按静态
+ * 尺寸占位，动画只画在里面。
  */
 export function whaleSizeFor(columns: number): { width: number; height: number } {
   const pxPerColumn = 8
@@ -148,13 +170,13 @@ function escapeXml(text: string): string {
  * 收窄的口子。
  */
 /**
- * 气泡里三行文字在**拉伸后画布**上的基线。
+ * 气泡里三行文字的基线（三行齐全时）：96 / 142 / 180。
  *
- * 图形层被 `scale(1 WHALE_STRETCH)` 拉长了，文字层没有——所以文字的 y
- * 不能沿用图形层的 88 / 134 / 172（那是 320 高的坐标系），要按同一个
- * 中心与相近的字间距重新排到 432 高的画布上。
+ * 比椭圆中线（112）略偏上：第三行若贴到下缘，椭圆在那里已经收得很窄，
+ * 字会被描边压住。2026-10 整体上移 8px（约 1/4 行）后，第三行可用宽度
+ * 从 123px 放宽到 167px。
  */
-const BUBBLE_TEXT_Y = [119, 181, 232] as const
+const BUBBLE_TEXT_Y = [96, 142, 180] as const
 
 function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
   const tone = TONE[mood]
@@ -167,25 +189,18 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
       const weight = isAmount ? 800 : 600
       const color = isAmount ? tone.amount : index === 2 ? tone.hint : tone.ink
       // 三行时用固定的一组基线；两行时整体下移居中；一行时只居中一行。
-      // 三个值的间距（62 / 51）比拉伸前的（46 / 38）宽——画布高了 35%，
-      // 行距不跟着放开的话三行会挤在椭圆上半部。
       const y =
         shown.length === 1
-          ? BUBBLE_TEXT_Y[1]
+          ? 110
           : shown.length === 2
-            ? BUBBLE_TEXT_Y[0] + 14 + index * 62
+            ? 100 + index * 44
             : BUBBLE_TEXT_Y[index]!
       return `<text x="228" y="${y}" text-anchor="middle" font-family="'Segoe UI','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}">${escapeXml(line)}</text>`
     })
     .join('')
 
   return (
-    // 图形层整体纵向拉伸。`transform-origin` 默认为元素原点，所以缩放
-    // 从 y=0 开始：椭圆中心 112 被拉到 151，底缘到 273。文字层不缩放，
-    // 三行落在 119 / 181 / 232，正好包住拉长后的椭圆——可用宽度分别是
-    // 270 / 271 / 198px，与拉伸前（269 / 271 / 198）几乎一致，所以人设
-    // 台词的长度约束不用改。
-    `<g transform="scale(1 ${WHALE_STRETCH})">` +
+    `<g>` +
     // 大椭圆。**没有尾巴**：曾经从椭圆左下甩出一条，但它是纯粹的装饰线，
     // 既不对应任何数据，还会让人以为气泡漏气了。气泡靠位置（在鲸鱼左边）
     // 就足以说明「这是谁在说话」。
@@ -195,18 +210,16 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
     // 否则会压到它脸上。
     `<ellipse cx="335" cy="226" rx="15" ry="10" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="7"/>` +
     `<ellipse cx="359" cy="265" rx="9" ry="6" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="6"/>` +
-    `</g>` +
-    // 文字层不缩放：整幅一起拉会把字形压扁。
-    texts
+    texts +
+    `</g>`
   )
 }
 
 /**
  * 生成整幅 SVG：左边气泡 + 右下原图鲸鱼。
  *
- * 鲸鱼以 512px 的内嵌 PNG 呈现，`preserveAspectRatio` 保持比例。画布
- * 620×432 是「620×320 再纵向拉 1.35 倍」的结果：气泡椭圆与鲸鱼都跟着
- * 变高，文字不变形。
+ * 鲸鱼以 512px 的内嵌 PNG 呈现，`preserveAspectRatio` 保持比例；画布
+ * 620×320 与原版 1026×700 的构图比例接近。
  *
  * **鲸鱼的位置不随气泡变化**：无论气泡画不画、画几行，鲸鱼都钉在同一个
  * `translate(318 16)` 上。这样点开 / 收起泡泡时画面不会跳，鲸鱼也不会
@@ -214,8 +227,8 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
  *
  * @param mood 情绪，决定气泡配色
  * @param lines 气泡里最多三行文字（第一行标签、第二行金额、第三行提示）
- * @param options `isAnimating` 为真时鲸鱼轻微上下浮动（SMIL，无需脚本）；
- *   `isBubbleOpen` 为假时整块气泡（含小泡）不画，只留鲸鱼。
+ * @param options `isAnimating` 为真时整幅画面做纵向「呼吸」（SMIL，无需
+ *   脚本）；`isBubbleOpen` 为假时整块气泡（含小泡）不画，只留鲸鱼。
  *   泡泡现在是常驻的，这个开关只为「画一张没有气泡的图」保留（导出、测试）。
  */
 export function whaleSvg(
@@ -231,23 +244,35 @@ export function whaleSvg(
   const isBubbleOpen = options.isBubbleOpen ?? true
   // 常驻条很小（显示约 46×24 像素），用小图省内存；面板用大图保证清晰。
   const asset = options.isCompact ? WHALE_ASSETS.small : WHALE_ASSETS.large
-  // 呼吸：整体上下浮动 ±4px。SMIL 在无脚本沙箱里也能跑。
+  // 呼吸：整幅纵向 0.95~1.05 缩放，**没有平移**。SMIL 在无脚本沙箱里也能跑。
   //
   // 周期写成 `WHALE_FLOAT_PERIOD_MS`，因为**气泡翻页周期必须是它的整数倍**
   // ——每翻一页整份 `source` 被换掉，动画从头开始；不成整数倍时翻页那一刻
   // 动画停在半途，画面会跳一下。
-  const float = isAnimating
-    ? `<animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" dur="${WHALE_FLOAT_PERIOD_MS}ms" repeatCount="indefinite" additive="sum"/>`
-    : ''
+  const breathe = isAnimating ? breatheAnimation() : ''
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" role="img">` +
+    // 呼吸作用在**整幅**内容上，并且**底边固定、上沿上下动**。
+    //
+    // 用三层嵌套而不是 `transform-origin`：缩放以原点为中心时，画面会
+    // 上下两边同时涨缩、整体位置看起来在飘；而 `transform-origin` 是 CSS
+    // 属性，SVG 光栅化器不保证实现。三层平移把原点搬到画布底边：
+    //   外层 translate(0 H) → 中间 scale(1 s) → 内层 translate(0 -H)
+    // 任一内容点 P 的最终位置是 s·(P − H) + H，P = H 时不动，正是底边。
+    `<g transform="translate(0 ${WHALE_CANVAS.height})">` +
+    // 中间这层不写静态 transform：SMIL 的 `additive` 默认为 replace，
+    // 叠加顺序在不同渲染器里一致，不用赌 `sum` 的语义。
+    `<g>` +
+    breathe +
+    `<g transform="translate(0 -${WHALE_CANVAS.height})">` +
     (isBubbleOpen ? bubbleSvg(lines, mood) : '') +
-    // 鲸鱼与气泡一样纵向拉伸。`translate` 之后再 `scale`，所以 16 的
-    // 上边距也被拉到 21.6，与气泡的缩放原点一致。
-    `<g transform="translate(318 16) scale(1 ${WHALE_STRETCH})">` +
-    float +
+    // 鲸鱼：原图右下角贴边，尺寸 300×300。位置与气泡是否展开无关。
+    `<g transform="translate(318 16)">` +
     `<image x="0" y="0" width="300" height="300" preserveAspectRatio="xMaxYMax meet" href="data:image/png;base64,${asset}"/>` +
+    `</g>` +
+    `</g>` +
+    `</g>` +
     `</g>` +
     `</svg>`
   )
