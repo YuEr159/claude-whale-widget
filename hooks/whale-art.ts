@@ -104,17 +104,21 @@ export function emblemOf(mood: WhaleMood): string {
 /**
  * 气泡与文字的颜色：沿用原图的配色（#203170 描边、#4858A8 主体蓝）。
  *
- * 现在的情绪按**一天里的钟点**走（见 `moodOf`），配色跟着时段变：白天是
- * 清爽的白底蓝字，两顿饭的时段（`busy`）底色转暖，夜里（`tired`）再暖一点，
- * 深夜（`sleep`）回到灰蓝。这是氛围而不是数据——额度已经在面板里用柱状图
- * 与百分比说清楚了，气泡不必再说一遍。
+ * **所有情绪共用一套配色。** 曾经按情绪换底色：额度过半转暖、夜里再暖一点，
+ * 深夜转灰蓝。那套配色让气泡在一天里不断变色，读者每换一个时段都要重新
+ * 适应一次，而它表达的既不是数据也不是状态——额度已经在面板里用柱状图与
+ * 百分比说清楚了。情绪现在只体现在**台词**上（见 `usage-view.ts` 的
+ * `WHALE_TRAITS`），画面保持原图那一份干净的白底蓝字。
+ *
+ * 保留这个映射而不用一个常量，是为了让 `bubbleSvg` 的签名不必改：将来若
+ * 又想给某一档换色，在这里改一行即可。
  */
 const TONE: Record<WhaleMood, { bubble: string; stroke: string; ink: string; amount: string; hint: string }> = {
   idle: { bubble: '#FFFFFF', stroke: '#203170', ink: '#203170', amount: '#2F4F8F', hint: '#7C8CB0' },
   working: { bubble: '#FFFFFF', stroke: '#203170', ink: '#203170', amount: '#2F4F8F', hint: '#7C8CB0' },
-  busy: { bubble: '#FFFAF0', stroke: '#7A5A20', ink: '#5C4318', amount: '#B07A28', hint: '#A08A60' },
-  tired: { bubble: '#FFF3E8', stroke: '#8A4A2A', ink: '#6B3620', amount: '#B5653C', hint: '#A88470' },
-  sleep: { bubble: '#F2F3F8', stroke: '#4A4F68', ink: '#3A3F58', amount: '#6B7088', hint: '#9AA0B8' },
+  busy: { bubble: '#FFFFFF', stroke: '#203170', ink: '#203170', amount: '#2F4F8F', hint: '#7C8CB0' },
+  tired: { bubble: '#FFFFFF', stroke: '#203170', ink: '#203170', amount: '#2F4F8F', hint: '#7C8CB0' },
+  sleep: { bubble: '#FFFFFF', stroke: '#203170', ink: '#203170', amount: '#2F4F8F', hint: '#7C8CB0' },
 }
 
 function escapeXml(text: string): string {

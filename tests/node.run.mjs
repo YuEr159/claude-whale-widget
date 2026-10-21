@@ -1465,6 +1465,23 @@ test('人设页的每句台词都放得进气泡椭圆', () => {
   assert.equal(new Set(firstLines).size, firstLines.length)
 })
 
+test('气泡配色不随情绪变化，所有情绪共用原图那一套', () => {
+  // 曾经按情绪换底色：额度过半转暖、夜里更暖、深夜转灰蓝。一天里不断变色，
+  // 读者每换一个时段都要重新适应，而它既不是数据也不是状态。情绪现在只体现
+  // 在台词上；画面保持原图那份白底蓝字。
+  const fillOf = (mood) => {
+    const svg = whaleSvg(mood, ['a', 'b', 'c'], { isAnimating: false })
+    const big = svg.match(/<ellipse cx="228" cy="112"[^>]*fill="([^"]+)" stroke="([^"]+)"/)
+    assert.ok(big, `${mood} 应画出大椭圆`)
+    return `${big[1]}|${big[2]}`
+  }
+  const idle = fillOf('idle')
+  assert.equal(idle, '#FFFFFF|#203170')
+  for (const mood of ['working', 'busy', 'tired', 'sleep']) {
+    assert.equal(fillOf(mood), idle, `${mood} 的气泡配色应与 idle 相同`)
+  }
+})
+
 test('气泡没有尾巴，两颗小泡朝右下指向鲸鱼且不压到它身上', () => {
   const svg = whaleSvg('idle', ['a', 'b', 'c'], { isAnimating: false })
 
