@@ -494,13 +494,26 @@ export const register: Register = (on, options) => {
     // 这就是「随代码改动实时变化」的全部机制，不需要额外的定时器。
     const heldTotals = await $.state.get({ plugin: 'whale-usage', key: 'totals' } as const)
     const totals = heldTotals.value ?? EMPTY_TOTALS
+    // 「本会话花费」按**插件价目表**算，与面板同一个口径：引擎 `/cost` 只认
+    // 第一方价目表，第三方模型会按默认模型估出几十倍。逐模型累加
+    // `byModel[].cost`（写入时已按价格表算过）；只要有一款未收录就返回
+    // `undefined`，让 `bandSummary` 退回引擎读数——至少不会少算一笔。
+    //
+    // 读 `byModel` 同时让条子成为该状态的订阅者：`turn.complete` 写它，
+    // 条子随即重绘。
+    const heldBandByModel = await $.state.get({ plugin: 'whale-usage', key: 'byModel' } as const)
+    const bandByModel = heldBandByModel.value ?? []
+    const bandSessionCost =
+      bandByModel.length > 0 && bandByModel.every(entry => entry.cost !== null)
+        ? bandByModel.reduce((sum, entry) => sum + (entry.cost ?? 0), 0)
+        : undefined
     // 空数组按默认处理：一条空白用量条比显示得多更糟。面板侧同一份判断
     // 写在 `metrics` 那段，两处口径必须一致。
     const metrics =
       Array.isArray(prefsNow.bandMetrics) && prefsNow.bandMetrics.length > 0
         ? prefsNow.bandMetrics
         : DEFAULT_PREFS.bandMetrics
-    const summary = bandSummary(view, metrics, now)
+    const summary = bandSummary(view, metrics, now, bandSessionCost)
 
     const { Box, Text, Button } = $.ui.resolve(e)
     // 注意：这里不能在 Text 里用 `<>` 或嵌套 Text。
@@ -689,14 +702,17 @@ export const register: Register = (on, options) => {
     // 本会话：花费与上下文压成一行，上一轮单独一行，再补上原生 /usage 的会话总量：
     // 时长、代码增删、轮次数。
     //
-    // **「花费」这一格要能说明它可不可信。** 它取的是引擎 `/cost` 的会话
-    // 累计；引擎只认 Anthropic 第一方的价目表，遇到不认识的名字（第三方
-    // 网关的那些）就按**默认模型的价格**估——见 `isEnginePriced` 的注释。
+    // **「花费」这一格按插件价目表算**，与用量条、气泡同一个数。
     //
-    // 后果很具体（本机实测）：同一个会话、同一批 token，DeepSeek Flash 按
-    // 官方价是 $3.05，引擎按默认模型估成 $258.98——于是面板上的「本会话
-    // 花费」反而高于「用量概览」里跨 30 天的总额。两个数字都对，只是口径
-    // 不同；并排放着却不说明，就成了自相矛盾。
+    // 早先它取引擎 `/cost` 的会话累计：引擎只认 Anthropic 第一方的价目表，
+    // 遇到不认识的名字（第三方网关的那些）就按**默认模型的价格**估——见
+    // `isEnginePriced` 的注释。后果很具体（本机实测）：同一个会话、同一批
+    // token，DeepSeek Flash 按官方价是 $3.05，引擎按默认模型估成 $258.98，
+    // 于是面板上的「本会话花费」反而高于概览里跨 30 天的总额。
+    //
+    // 现在优先用 `sessionCostOfPrices`；只有某一款模型未收录价格时才退回
+    // 引擎读数，并在后面注明「按默认模型价估」——那种情况下这个数本来就不
+    // 完整，读者需要知道。
     //
     // 判据是「本会话用过引擎不认识的模型」。**不能**用 `byModel[].cost ===
     // null`：DeepSeek 在**插件**的价目表里有价（那是概览用的），引擎那边
@@ -710,8 +726,8 @@ export const register: Register = (on, options) => {
     const session = (
       <Box flexDirection="column">
         <Text>
-          花费 {usdEstimate(view.costUsd)}
-          {hasNonEngineModel ? '（含引擎未收录的模型，按默认模型价估）' : ''} · 上下文{' '}
+          花费 {usdEstimate(sessionCostOfPrices ?? view.costUsd)}
+          {sessionCostOfPrices === undefined && hasNonEngineModel ? '（含引擎未收录的模型，按默认模型价估）' : ''} · 上下文{' '}
           {pct(view.contextPercent)}
           {view.contextTokens !== undefined
             ? ` ${tokens(view.contextTokens)}/${tokens(view.contextWindow)}`
@@ -1250,10 +1266,18 @@ export const register: Register = (on, options) => {
             void (async () => {
               const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
               const nowPrefs = latest.value ?? DEFAULT_PREFS
+              const isNext = !nowPrefs.isTurnCostOn
+              // 与同一页的其它开关保持一致：点亮/熄灭时给出提示，否则读者
+              // 只看到方块明暗变了一下，不知道刚才那一下生效了没有。
+              // 顺带说明这个开关管的是什么——它只弹「上一轮」那一次提示，
+              // 不改面板里的任何读数。
               await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
                 ...nowPrefs,
-                isTurnCostOn: !nowPrefs.isTurnCostOn,
+                isTurnCostOn: isNext,
               })
+              $.ui.toast(
+                isNext ? '轮次费用提示：已开启，每轮结束时弹一次' : '轮次费用提示：已关闭',
+              )
             })()
           })}
           {/* 这也是开关：亮＝用量条正在显示。点它把用量条收起来或叫回来。

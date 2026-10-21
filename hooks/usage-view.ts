@@ -102,11 +102,18 @@ const NO_LIMITS = '无额度窗口'
  * 之所以能做到「实时」：用量条在渲染时读了 `totals`，而 `$.state.set`
  * 会重绘读过该值的绘制点——Edit / Write 一写入，条子就跟着重画，
  * 不靠定时轮询。
+ *
+ * @param sessionCost 本会话花费，按**插件价目表**逐模型算出的值。
+ *   传了就用它，「本会话」那一项不再读 `view.costUsd`（引擎 `/cost`）——
+ *   引擎只认第一方价目表，第三方模型会按默认模型估出几十倍（DeepSeek
+ *   Flash 实测 $3.05 被估成 $258.98）。没传（或传 `undefined`）时退回
+ *   引擎读数：至少不会因为某一款没价就少算一笔。
  */
 export function bandSummary(
   view: UsageView,
   metrics: readonly BandMetric[],
   now: number,
+  sessionCost?: number,
 ): string {
   const five = pct(view.fiveHour?.percentUsed)
   const seven = pct(view.sevenDay?.percentUsed)
@@ -118,7 +125,7 @@ export function bandSummary(
   const one = (metric: BandMetric): string => {
     switch (metric) {
       case 'session':
-        return `本会话 ${usdEstimate(view.costUsd)}`
+        return `本会话 ${usdEstimate(sessionCost ?? view.costUsd)}`
       case 'cost':
         return `上下文 ${pct(view.contextPercent)}`
       case 'context':
