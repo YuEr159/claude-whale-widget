@@ -509,6 +509,11 @@ export type DetailTableLayout = {
   costWidth: number
   /** 列与列之间的空格数。 */
   gap: number
+  /**
+   * 四列各自的分区宽度（列宽 + 其后的缝隙），用来把整张表在面板里铺开。
+   * 见 `tablePartitions`。
+   */
+  partitions: { widths: [number, number, number, number]; gap: number }
 }
 
 /** 列间距。1 格会把相邻两列的数字粘在一起。 */
@@ -529,6 +534,54 @@ const NAME_CEILING = 24
 /** 数字列的上下限：4 格够放 `9999`，9 格够放 `1.20万亿`。 */
 const NUMBER_FLOOR = 4
 const NUMBER_CEILING = 9
+
+/**
+ * 四列的**分区宽度**：每一列连同它右边那道缝隙算作一格。
+ *
+ * 为什么要有「分区」而不是只按内容定宽：内容定宽会让整张表挤在左边，
+ * 面板越宽、右边空得越多，四列看起来像没排好。分区把可用宽度四等分，
+ * 每列在自己的分区里靠右（数字）或靠左（模型名），四列于是均匀铺开，
+ * 宽面板下也一眼看得出是四列。
+ *
+ * **分区不得小于内容**：内容宽度是这一列的底线（数字列尤其如此，截断就是
+ * 错的读数）。所以算法分两步：
+ *
+ *   1. 每列先拿到自己的内容宽度；
+ *   2. 剩下的空白四等分，按内容宽度从宽到窄依次补足——补到「内容 + 均分」
+ *      为止，补不完的余数留给最后一轮。
+ *
+ * 面板窄到连内容都放不下时，分区就等于内容宽度，总和会超出面板；那种
+ * 面板本来就得靠 `clip` 截断，分区再挤也变不出空间。
+ *
+ * @param panelWidth 面板正文的字符列数
+ * @param contentWidths 四列各自的内容宽度（按固定次序）
+ */
+export function tablePartitions(
+  panelWidth: number,
+  contentWidths: readonly [number, number, number, number],
+): { widths: [number, number, number, number]; gap: number } {
+  // 结构开销：边框 2 + 左右 padding 各 1 + 色块 1 + 四道缝隙。
+  const chrome = 2 + 2 + 1 + DETAIL_TABLE_GAP * 4
+  const contentSum = contentWidths[0] + contentWidths[1] + contentWidths[2] + contentWidths[3]
+  const spare = Math.max(0, panelWidth - chrome - contentSum)
+
+  // 把空白尽量均分：每一轮给还没补够的列补 `share`，补不下的轮次退出，
+  // 剩下的空白再在仍有余量的列之间重分。这样三列数字列拿到的增量一致，
+  // 模型名列拿到它需要的差额——既不会空出一大片，也不会截断任何一列。
+  const widths: [number, number, number, number] = [...contentWidths] as [number, number, number, number]
+  // 把空白按「水切法」均分：每一轮只给**当前拿到最少的那一列**补一格，
+  // 直到空白用尽。这样三列数字列最终拿到相同增量（它们从同一起点出发），
+  // 模型名列拿到它需要的差额，任何一列都不会溢出。
+  for (let left = spare; left > 0; left--) {
+    let pick = 0
+    for (let i = 1; i < 4; i++) {
+      if (widths[i]! < widths[pick]!) pick = i
+    }
+    widths[pick]! += 1
+  }
+
+  return { widths, gap: DETAIL_TABLE_GAP }
+}
 
 /**
  * 明细表要显示的文字与算出的列宽。
@@ -562,7 +615,21 @@ export function detailTableLayout(
   const rest = panelWidth - (TABLE_CHROME + inputWidth + outputWidth + costWidth)
   const nameWidth = Math.max(NAME_FLOOR, Math.min(NAME_CEILING, rest))
 
-  return { nameWidth, inputWidth, outputWidth, costWidth, gap: DETAIL_TABLE_GAP, input, output, cost }
+  // 四列分区：每列连同其后的缝隙占一格。渲染时不要把分区宽度当成列宽
+  // ——列宽仍是上面按内容算出的数，差额在分区内以空白补上（见 `padCell`）。
+  const partitions = tablePartitions(panelWidth, [nameWidth, inputWidth, outputWidth, costWidth])
+
+  return {
+    nameWidth,
+    inputWidth,
+    outputWidth,
+    costWidth,
+    gap: DETAIL_TABLE_GAP,
+    partitions,
+    input,
+    output,
+    cost,
+  }
 }
 
 // ---------------- 上下文构成 ----------------

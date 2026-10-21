@@ -162,21 +162,39 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
   )
 }
 
+/** 浮动的周期（毫秒）与幅度（CSS 像素）。 */
+export const WHALE_FLOAT_PERIOD_MS = 3_600
+export const WHALE_FLOAT_AMPLITUDE = 4
+
 /**
  * 生成整幅 SVG：左边气泡 + 右下原图鲸鱼。
  *
- * 鲸鱼以 512px 的内嵌 PNG 呈现，`preserveAspectRatio` 保持比例；画布
+ * 鲸鱼以 256px 的内嵌 PNG 呈现，`preserveAspectRatio` 保持比例；画布
  * 620×320 与原版 1026×700 的构图比例接近。
  *
  * **鲸鱼的位置不随气泡变化**：无论气泡画不画、画几行，鲸鱼都钉在同一个
  * `translate(318 16)` 上。这样点开 / 收起泡泡时画面不会跳，鲸鱼也不会
  * 因为左边让出空间而挪位——它始终在右下角。
  *
+ * ## 浮动动画为什么带负 `begin`
+ *
+ * 宿主把 `Svg` 的 `source` 当作元素的**数据**：字符串一变，整份 SVG 文档
+ * 重建，里面的 SMIL 时间轴随之归零。泡泡每 6 秒翻一页，`source` 就换一次，
+ * 浮动于是每次都从「最上面那一帧」重新开始——看起来就是「卡一下再从头浮」。
+ *
+ * 修法是给动画一个**负的 `begin`**，把它拨到「已经播了多久」的位置：新文档
+ * 一出现，SMIL 直接算到当前相位，而不是从头播。`begin="-2.7s"` 表示这条
+ * 动画在文档时间 −2.7 秒时就已经开始。
+ *
+ * 因此 `whaleSvg` 需要知道**当前时刻**与**动画自己的零点**。零点必须由调用
+ * 方固定住（模块加载时记一次），不能每帧重算——否则相位会跟着墙钟乱跳。
+ *
  * @param mood 情绪，决定气泡配色
  * @param lines 气泡里最多三行文字（第一行标签、第二行金额、第三行提示）
  * @param options `isAnimating` 为真时鲸鱼轻微上下浮动（SMIL，无需脚本）；
  *   `isBubbleOpen` 为假时整块气泡（含小泡）不画，只留鲸鱼。
  *   泡泡现在是常驻的，这个开关只为「画一张没有气泡的图」保留（导出、测试）。
+ *   `now` 与 `epoch` 用来算负 `begin`：不传就按「刚好从头开始」处理。
  */
 export function whaleSvg(
   mood: WhaleMood,
@@ -185,15 +203,28 @@ export function whaleSvg(
     isAnimating?: boolean
     isCompact?: boolean
     isBubbleOpen?: boolean
+    /** 当前时刻（毫秒）。与 `epoch` 一起决定动画相位。 */
+    now?: number
+    /** 动画的零点（毫秒）。应当固定，不随重绘变化。 */
+    epoch?: number
   } = {},
 ): string {
   const isAnimating = options.isAnimating ?? true
   const isBubbleOpen = options.isBubbleOpen ?? true
   // 常驻条很小（显示约 46×24 像素），用小图省内存；面板用大图保证清晰。
   const asset = options.isCompact ? WHALE_ASSETS.small : WHALE_ASSETS.large
-  // 呼吸：整体上下浮动 ±4px。SMIL 在无脚本沙箱里也能跑。
+  // 浮动：整体上下 ±4px。SMIL 在无脚本沙箱里也能跑。
+  //
+  // `begin` 取**负值**：把动画拨到「已经播了 phase 毫秒」的位置。宿主重绘
+  // 换一份新文档时，SMIL 从 `begin` 起算，于是接着原来的相位播，不再归零。
+  // 没有 `now`/`epoch` 时 phase 为 0，行为与以前一致（从头开始）。
+  const elapsed = options.now !== undefined && options.epoch !== undefined
+    ? Math.max(0, options.now - options.epoch)
+    : 0
+  const phase = elapsed % WHALE_FLOAT_PERIOD_MS
+  const begin = phase > 0 ? ` begin="-${(phase / 1000).toFixed(3)}s"` : ''
   const float = isAnimating
-    ? `<animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" dur="3.6s" repeatCount="indefinite" additive="sum"/>`
+    ? `<animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" dur="3.6s" repeatCount="indefinite" additive="sum"${begin}/>`
     : ''
 
   return (

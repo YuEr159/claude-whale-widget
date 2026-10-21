@@ -215,6 +215,47 @@ test('泡泡收起时不画气泡，但鲸鱼的位置不变', () => {
   expect(whaleSvg('idle', ['a'])).toContain('<ellipse')
 })
 
+/**
+ * 浮动动画必须带负 `begin`，把相位拨到「已经播了多久」。
+ *
+ * 回归：宿主把 `Svg` 的 `source` 当数据，泡泡每 6 秒翻一页就换一份新文档，
+ * 里面的 SMIL 从第 0 帧重新开始——面板里看到的就是「每 6 秒卡一下」。
+ * 浏览器实测：不带 `begin` 时重建瞬间跳 32.5px；按当前相位给负 `begin`
+ * 时只差 1.3px（正常帧间位移）。
+ *
+ * 这条测试守两件事：
+ *   1. 有 `now`/`epoch` 时 `begin` 等于当前相位（负数）；
+ *   2. 相位随 `now` 变化，且跨周期会回绕——不是恒等于 0。
+ */
+test('浮动动画的 begin 接上当前相位，翻页重建时不跳回起点', () => {
+  const epoch = 1_000_000
+  const period = 3_600
+
+  const beginOf = (svg: string): number | null => {
+    const hit = svg.match(/begin="-([\d.]+)s"/)
+    return hit ? Number(hit[1]) : null
+  }
+
+  // 动画零点：没有相位，begin 不出现（等价于从 0 开始）。
+  expect(beginOf(whaleSvg('idle', ['a'], { now: epoch, epoch }))).toBeNull()
+
+  // 播到 1.5 秒：begin 应当正好是 -1.500s。
+  const at1500 = beginOf(whaleSvg('idle', ['a'], { now: epoch + 1_500, epoch }))
+  expect(Math.abs((at1500 ?? 0) - 1.5) < 1e-6).toBe(true)
+
+  // 播过一个周期多 0.9 秒：相位回绕到 0.9s，而不是继续累加成 -4.5s。
+  const wrapped = beginOf(whaleSvg('idle', ['a'], { now: epoch + period + 900, epoch }))
+  expect(Math.abs((wrapped ?? 0) - 0.9) < 1e-6).toBe(true)
+
+  // 同一个 now 反复画，begin 必须稳定——否则每次重绘都会改相位，画面抖。
+  const a = whaleSvg('idle', ['a'], { now: epoch + 700, epoch })
+  const b = whaleSvg('idle', ['b'], { now: epoch + 700, epoch })
+  expect(beginOf(a)).toBe(beginOf(b))
+
+  // 不传 now/epoch 时行为与旧调用方一致：从头播。
+  expect(beginOf(whaleSvg('idle', ['a']))).toBeNull()
+})
+
 test('数据新鲜度：刚更新、分钟、小时、过期判定', () => {
   const now = 1_000_000
   // 从没扫过：不算过期，只是没数据
@@ -754,8 +795,42 @@ test('模型明细表：列宽放得下最长的读数，且表头与数据行�
   }
 })
 
-test('图表翻页已取消：上下文柱状图按宽度自适应，没有翻页状态', () => {
-  // 翻页的 `pageOf` 与 `contextOffset` 一并删掉了。这里守的是「不再有
+/**
+ * 四列各占一个**分区**，四个分区加起来正好铺满面板。
+ *
+ * 回归：以前只有内容列宽、没有分区，宽面板下整张表挤在左边——
+ * 模型名被夹在 24 格，右边空出几十格，四列看起来像没排好。
+ */
+test('模型明细表：四列分区正好铺满面板宽度', () => {
+  const rows = modelDetailRows([
+    { model: 'DeepSeek Flash', isPriced: true, input: 2_150_000_000, output: 6_779_000, cacheRead: 0, cacheWrite: 0, cost: 18.39, messages: 9 },
+    { model: 'qwen3.8-27b', isPriced: true, input: 80_000, output: 9_000, cacheRead: 0, cacheWrite: 0, cost: 0.31, messages: 1 },
+  ])
+
+  for (const panelWidth of [60, 80, 100, 140]) {
+    const layout = detailTableLayout(rows, panelWidth)
+    const p = layout.partitions.widths
+    // 结构开销与渲染层一致：边框 2 + 左右 padding 各 1 + 色块 1 + 四道缝隙。
+    const chrome = 2 + 2 + 1 + layout.gap * 4
+    const total = chrome + p[0] + p[1] + p[2] + p[3]
+    // 不超出面板（溢出会被裁掉），也不留下大片空白。
+    expect(total).toBeLessThanOrEqual(panelWidth)
+    expect(panelWidth - total).toBeLessThanOrEqual(4)
+
+    // 分区一定不小于内容：否则 `padCell` 会截断读数。
+    expect(p[0]).toBeGreaterThanOrEqual(layout.nameWidth)
+    expect(p[1]).toBeGreaterThanOrEqual(layout.inputWidth)
+    expect(p[2]).toBeGreaterThanOrEqual(layout.outputWidth)
+    expect(p[3]).toBeGreaterThanOrEqual(layout.costWidth)
+
+    // 三个数字列分区几乎等宽（相差不超过 1 格，余数只有一个）。
+    // 完全等宽在窄面板上做不到：空白是逐格补的，总会剩一格余数。
+    expect(Math.abs(p[1] - p[2])).toBeLessThanOrEqual(1)
+    expect(Math.abs(p[2] - p[3])).toBeLessThanOrEqual(1)
+  }
+})
+
+test('图表翻页已取消：上下文柱状图按宽度自适应，没有翻页状态', () => {  // 翻页的 `pageOf` 与 `contextOffset` 一并删掉了。这里守的是「不再有
   // 翻页入口」：显示轮数只由宽度决定，图注里的轮数跟着变化。
   // 宽度自适应的数值本身在 `tests/node.run.mjs` 里断言。
   expect(contextChartSvg([], 320).includes('NaN')).toBe(false)
