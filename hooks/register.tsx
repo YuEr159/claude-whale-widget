@@ -829,7 +829,9 @@ export const register: Register = (on, options) => {
     // 一整段空格，还会让图注宣称一个并不存在的范围。
     const turnChartWidth = Math.max(80, Math.min(width * 8 - 16, 900))
     const heatWindow = Math.min(heatWindowDays(turnChartWidth), TURN_WINDOW_DAYS)
-    const heatMetric = prefsNow.heatMetric ?? 'messages'
+    // 回退值必须与 `DEFAULT_PREFS.heatMetric` 一致：两处写不同的档，状态里
+    // 一旦存了个 `undefined`，界面就会跳到与「默认」相反的那一档。
+    const heatMetric = prefsNow.heatMetric ?? DEFAULT_PREFS.heatMetric
     const turnHistory = turnBars(data?.turnsDaily ?? [], heatWindow)
     const heatHeight = turnHeatHeight()
     const turnGrid = rasterizeTurnBars(turnHistory, 6)
@@ -1093,13 +1095,16 @@ export const register: Register = (on, options) => {
       </Button>
     )
 
-    // 设置页：用量条口径（多选）与两个开关。它们曾排在面板最下方，
-    // 与上面的三页内容并列，读起来像第四块没名字的区域；收进「设置」页签
-    // 之后，每一块内容都归属于一个明确的页。
+    // 设置页：四组设置。它们曾排在面板最下方，与上面的几页内容并列，读起来
+    // 像一块没名字的区域；收进「设置」页签之后，每一块都归属于一个明确的页。
+    //
+    // 所有项一律是**开关**：亮＝这一项开着。不做「按一下切换标签」的动作按钮
+    // ——同一个视觉组里混两种语义，读者没法从「亮不亮」判断当前状态。
     const settingsPage = (
       <Box flexDirection="column" gap={1}>
-        {/* 用量条口径是多选：每项一个方块按钮，选中的那块变亮。至少保留一项——
-            全取消会让用量条变成一条空行，看起来像坏了。 */}
+        {/* 用量条口径是多选：每项一个方块，亮着的就是会出现在条子上的。
+            至少保留一项——全取消会让用量条变成一条空行，看起来像坏了。
+            点到最后一项时给一句提示，不要静默吞掉那次点击。 */}
         <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
           <Text dimColor>用量条显示</Text>
           {BAND_METRIC_OPTIONS.map(option => {
@@ -1108,7 +1113,10 @@ export const register: Register = (on, options) => {
               const next = isOn
                 ? metrics.filter(item => item !== option.value)
                 : [...metrics, option.value]
-              if (next.length === 0) return
+              if (next.length === 0) {
+                $.ui.toast('用量条至少要留一项，否则会变成一条空行。')
+                return
+              }
               void (async () => {
                 const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
                 await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
@@ -1121,7 +1129,7 @@ export const register: Register = (on, options) => {
         </Box>
         <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
           <Text dimColor>面板</Text>
-          {chip('whale-turn-cost', '轮次费用提示', prefsNow.isTurnCostOn ?? false, () => {
+          {chip('whale-turn-cost', '轮次费用提示', prefsNow.isTurnCostOn ?? DEFAULT_PREFS.isTurnCostOn, () => {
             void (async () => {
               const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
               const nowPrefs = latest.value ?? DEFAULT_PREFS
@@ -1131,7 +1139,9 @@ export const register: Register = (on, options) => {
               })
             })()
           })}
-          {chip('whale-band-toggle', prefsNow.isBandVisible ? '隐藏用量条' : '显示用量条', false, () => {
+          {/* 这也是开关：亮＝用量条正在显示。点它把用量条收起来或叫回来。
+              之前这里写死 `false`，于是它永远不亮、也读不出当前状态。 */}
+          {chip('whale-band-toggle', '显示用量条', prefsNow.isBandVisible ?? DEFAULT_PREFS.isBandVisible, () => {
             void (async () => {
               const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
               const nowPrefs = latest.value ?? DEFAULT_PREFS
