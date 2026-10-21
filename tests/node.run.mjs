@@ -356,7 +356,7 @@ test('用量条摘要按偏好切换口径', () => {
   assert.equal(bandSummary(view, ['context'], now), '5h 40% · 7d 70%')
   assert.equal(
     bandSummary(toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } }), ['window'], 0),
-    '上下文 33% · 本会话 ≈$0.50',
+    '无额度窗口',
   )
   // 多选：按固定次序拼接，与勾选先后无关；重复项只出现一次。
   // window 已经写了 5h，context 只补 7d——同一条数字不印两遍。
@@ -1333,11 +1333,11 @@ test('人设页的每句台词都放得进气泡椭圆', () => {
   const CY = 112
   const RX = 146 - 11 / 2
   const RY = 90 - 11 / 2
-  // 三行的基线（三行齐全时）：96 / 142 / 180；字号 25 / 46 / 21。
+  // 三行的基线（三行齐全时）：88 / 134 / 172；字号 25 / 46 / 21。
   const rows = [
-    { y: 96, size: 25 },
-    { y: 142, size: 46 },
-    { y: 180, size: 21 },
+    { y: 88, size: 25 },
+    { y: 134, size: 46 },
+    { y: 172, size: 21 },
   ]
 
   // 文字宽度的保守估计：汉字与全角标点按 1em，ASCII 按 0.62em（比常见

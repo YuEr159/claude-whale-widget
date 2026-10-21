@@ -396,13 +396,21 @@ test('只在一边有改动时省略零的那一边', () => {
   expect(bandDiffText({ added: 0, removed: 3 })).toBe('-3')
 })
 
-test('没有额度窗口时用量条退回上下文 + 会话花费', () => {
+test('没有额度窗口时，额度类口径写出实情而不是换别项的数字', () => {
   const view = toUsageView({
     rateLimits: [],
     cost: { usd: 0.5 },
     context: { window: 200_000, percent: 33 },
   })
-  expect(bandSummary(view, ['window'], 0)).toBe('上下文 33% · 本会话 ≈$0.50')
+  // 回归：以前这里退回「上下文 33% · 本会话 ≈$0.50」，于是点「额度窗口」
+  // 得到的是上下文与会话花费的内容——看起来像开关选错了项。
+  expect(bandSummary(view, ['window'], 0)).toBe('无额度窗口')
+  expect(bandSummary(view, ['context'], 0)).toBe('无额度窗口')
+  // 两条都选时，同一句话不印两遍。
+  expect(bandSummary(view, ['window', 'context'], 0)).toBe('无额度窗口')
+  // 有额度的口径照常工作，不受影响。
+  expect(bandSummary(view, ['cost'], 0)).toBe('上下文 33%')
+  expect(bandSummary(view, ['session'], 0)).toBe('本会话 ≈$0.50')
 })
 
 test('用量条口径选项覆盖全部取值', () => {

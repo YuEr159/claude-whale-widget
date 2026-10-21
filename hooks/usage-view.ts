@@ -86,6 +86,9 @@ export function bandDiffText(diff: BandDiff | undefined): string {
   return diffLines(diff.added, diff.removed)
 }
 
+/** 没有订阅额度窗口时，额度类口径在条子上写的唯一一句话。 */
+const NO_LIMITS = '无额度窗口'
+
 /**
  * 用量条那一行摘要，按选中的几类口径拼接。
  *
@@ -119,18 +122,14 @@ export function bandSummary(
       case 'cost':
         return `上下文 ${pct(view.contextPercent)}`
       case 'context':
-        // 没有订阅额度窗口时（第三方网关、API key 计费）两个百分比都是空的，
-        // 与其在条子上挂两个破折号，不如退回上下文 + 花费——那两项在任何
-        // 计费方式下都有读数。
-        if (!hasLimits) {
-          return `上下文 ${pct(view.contextPercent)} · 本会话 ${usdEstimate(view.costUsd)}`
-        }
+        // 没有订阅额度窗口时（第三方网关、API key 计费），这条口径自己
+        // 说出实情。**不能**偷偷换成「上下文 + 花费」——那会让读者点了
+        // 「5h + 7d」却看到「上下文占用」的内容，以为开关坏掉或选错了项。
+        if (!hasLimits) return NO_LIMITS
         return windowShowsFive ? `7d ${seven}` : `5h ${five} · 7d ${seven}`
       default:
-        // `window` 是默认口径，所以也要有这条退路。
-        if (!hasLimits) {
-          return `上下文 ${pct(view.contextPercent)} · 本会话 ${usdEstimate(view.costUsd)}`
-        }
+        // `window` 同理：点了「额度窗口」，条子上就该是额度窗口的消息。
+        if (!hasLimits) return NO_LIMITS
         return view.fiveHour
           ? `5h ${five} · ${countdown(view.fiveHour.resetsAt, now)} 后重置`
           : `5h ${five} · 7d ${seven}`
@@ -138,8 +137,8 @@ export function bandSummary(
   }
 
   const seen = new Set<BandMetric>()
-  // 按**文本**再去一次重：两条口径在没有额度窗口时都会退回
-  // 「上下文 … · 本会话 …」，并排出现就是同一句话写了两遍。
+  // 再按**文本**去一次重：额度类两条口径在没有额度窗口时都会写出
+  // 「无额度窗口」，并排出现就是同一句话写了两遍。
   const seenText = new Set<string>()
   const parts: string[] = []
   for (const option of BAND_METRIC_OPTIONS) {
@@ -182,9 +181,9 @@ export type BubblePage = {
  *
  * **每句话的长度由气泡的几何锁死。** 椭圆是 cx 228 / cy 112 / rx 146 / ry 90，
  * 描边 11px 向外扩，内缘因此是 rx 140.5 / ry 84.5。三行的基线 y 分别是
- * 96 / 142 / 180，按椭圆方程取基线处的净宽，约为 275 / 261 / 167px；再按
- * 25 / 46 / 21px 的字号折算，每行只放得下约 11 / 5 / 7 个汉字。**第三行最窄**
- * ——它的基线靠近椭圆底端。SVG 不会自动折行，写长了就被椭圆描边压住，
+ * 88 / 134 / 172（2026-10 整体上移 8px 后的值），按椭圆方程取基线处的净宽，
+ * 约为 269 / 271 / 198px；再按 25 / 46 / 21px 的字号折算，每行只放得下约
+ * 10 / 5 / 9 个汉字。SVG 不会自动折行，写长了就被椭圆描边压住，
  * 所以这一页的文案不能像别的页那样随手改长。
  * `tests/node.run.mjs` 有一条测试按这个公式锁住每一句的宽度。
  *

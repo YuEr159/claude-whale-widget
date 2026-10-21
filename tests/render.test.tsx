@@ -396,6 +396,49 @@ test('默认偏好只有一处来源：热图默认按轮次着色', async ($, o
 })
 
 /**
+ * 每一次点口径按钮都要回一句「开 / 关」。
+ *
+ * 口径按钮只改变自身的底色与明暗，条目位置一字不动——不开口的读者没法
+ * 从画面判断那一下生效没有，只能反复点来试探。提示里带上项目名，才说得清
+ * 是哪一项被切换了。
+ */
+test('点用量条口径给出开/关提示', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const toasts: string[] = []
+  on('ui.toast', async ($2: any, e: any, next: any) => {
+    toasts.push(e.text)
+    return next(e)
+  })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: PANE_PROPS,
+    viewport: { columns: 100, rows: 40 },
+  })
+  await ui.press({ key: 'whale-tab-settings' })
+
+  // 默认只开着「额度窗口」；再点它会被拒绝（至少留一项），那是另一条提示。
+  await ui.press({ key: 'whale-metric-cost' })
+  expect(toasts.some(text => text.includes('上下文占用') && text.includes('已开启'))).toBe(true)
+
+  // 再点一次关掉它，提示要说「已关闭」而不是又说一遍「已开启」。
+  await ui.press({ key: 'whale-metric-cost' })
+  expect(toasts.some(text => text.includes('上下文占用') && text.includes('已关闭'))).toBe(true)
+
+  // 每个口径都走同一条路：挑一个还没碰过的再验一次。
+  await ui.press({ key: 'whale-metric-session' })
+  expect(toasts.some(text => text.includes('本会话花费') && text.includes('已开启'))).toBe(true)
+
+  await ui.unmount()
+})
+
+/**
  * 最后一个口径不能被取消掉，但那次点击也不能静默消失。
  *
  * 回归：`if (next.length === 0) return` 什么都不做，读者点了一下、界面纹丝

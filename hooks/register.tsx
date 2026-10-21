@@ -1156,6 +1156,10 @@ export const register: Register = (on, options) => {
                   ...(latest.value ?? DEFAULT_PREFS),
                   bandMetrics: BAND_METRIC_OPTIONS.map(o => o.value).filter(v => next.includes(v)),
                 })
+                // 这个按钮只改变底色与明暗，条目本身仍然在同一个位置——不开
+                // 口的读者没法从画面判断这一下到底生效没有。每次点击都回一句
+                // 开/关，配合「项目名」说清是哪一项。
+                $.ui.toast(`${option.label}：${isOn ? '已关闭' : '已开启'}`)
               })()
             })
           })}
