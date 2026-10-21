@@ -652,24 +652,15 @@ export const register: Register = (on, options) => {
     const whaleSize = whaleSizeFor(width)
     const whaleWidth = whaleSize.width
     const whaleHeight = whaleSize.height
-    // 点击区：把整只鲸鱼（含气泡，气泡画在同一张 SVG 里、占画布上方大半）
-    // 铺满。
+    // 点击区的尺寸**不再在这里算**。原来按「一行多少像素」把立绘的 CSS 像素
+    // 反算成字符格，而行高因字体而异——估小了点击区就只到图片中途，下沿
+    // 点不中。现在点击层用 `100% × 100%` 盖住父容器（父容器的高度就是立绘
+    // 布局出来的高度），`Client` 的模块从 `surface.columns` / `surface.rows`
+    // 读区域实际大小。全交给布局引擎，没有像素换算这层误差。
     //
-    // 单位对不上：`Box` 的 `width`/`height` 是字符格，`Svg` 的是 CSS 像素，
-    // 引擎不告诉插件一格是多少像素。只能按等宽字体的经验值反算，两轴取的
-    // 值刻意不同：
-    //
-    //   - **横向按最窄的常见字宽（7px）**。字宽 7.2~8.4px 都常见，按 8 算
-    //     会在 300px 宽的鲸鱼右缘留下十几像素点不中的竖边；宁可多出几格
-    //     溢进左边的空白（看不见），也不能少。
-    //   - **纵向按 16px**。行高常见 17~19px，这个数只会多出几十像素；而鲸鱼
-    //     就在面板最底部，向下溢出的部分是面板底边，压不到别的内容。
-    //
-    // 绝对定位不占流，多出来的部分被站点裁掉，不会撑高面板。
-    const TAP_CELL_PX = 7
-    const TAP_ROW_PX = 16
-    const whaleTapRows = Math.max(1, Math.ceil(whaleHeight / TAP_ROW_PX))
-    const whaleTapCols = Math.max(1, Math.ceil(whaleWidth / TAP_CELL_PX))
+    // 唯一还用到格数的地方是键盘按钮的 children（一串盲文空白）：它只是给
+    // 按钮一个能撑开的内容，宽度由父容器的 `100%` 定。
+    const whaleTapCols = Math.max(1, Math.ceil(whaleWidth / 7))
 
     const whale = Svg ? (
       <Svg
@@ -1347,32 +1338,34 @@ export const register: Register = (on, options) => {
             {/* 指针点击区：整片盖住鲸鱼。
                 `Button` 在桌面端只让出一行文字的高度（实测），多行 children
                 撑不高它——它是个原生按钮，尺寸由绘制端定。`Client` 是引擎为
-                「一整片区域响应指针」给的元素：区域按 `width`/`height` 铺开，
-                `onPointer` 收到区域内的格坐标。
+                「一整片区域响应指针」给的元素。
 
-                **必须绝对定位。** 它和 `Svg` 是兄弟节点，留在流里就会排在
-                鲸鱼旁边各占一块——之前正是这样：点击区跑到鲸鱼上方，而且
-                只剩一行。 */}
+                **尺寸一律用 `100%`，不换算像素。** 立绘是流里的兄弟节点，
+                父 Box 的高度就是它布局出来的高度；点击区用 `top/left 0` +
+                `100%×100%` 正好盖住。以前按「一行多少像素」反算格数，而行高
+                因字体而异——估小了点击区就只到图片中途，下沿点不中。百分比
+                由布局引擎算，没有这层误差。 */}
             {Client ? (
               <Box
                 position="absolute"
                 top={0}
                 left={0}
-                width={whaleTapCols}
-                height={whaleTapRows}
+                width="100%"
+                height="100%"
               >
                 <Client
                   key="whale-tap-area"
                   module="./whale-tap.tsx"
-                  props={{ rows: whaleTapRows, cols: whaleTapCols }}
-                  width={whaleTapCols}
-                  height={whaleTapRows}
+                  props={{}}
+                  width="100%"
+                  height="100%"
                 />
               </Box>
             ) : null}
             {/* 键盘入口：一行高的透明按钮。指针命中由上面的 `Client` 负责，
-                这一层只保证「Tab 能到达、Enter 能按下」。 */}
-            <Box position="absolute" top={0} left={0} width={whaleTapCols} height={1}>
+                这一层只保证「Tab 能到达、Enter 能按下」。宽度同样跟父容器，
+                不按像素反算。 */}
+            <Box position="absolute" top={0} left={0} width="100%" height={1}>
               <Button
                 key="whale-tap"
                 plain
