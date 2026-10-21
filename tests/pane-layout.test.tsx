@@ -117,7 +117,8 @@ test('设置页的立绘档位会改变鲸鱼尺寸', async ($, on) => {
   await ui.unmount()
 })
 
-test('窄面板同样是鲸鱼在最后一行靠右', async ($, on) => {  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+test('窄面板同样是鲸鱼在最后一行靠右', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
   const ui = await $.ui.mount({

@@ -26,7 +26,7 @@ import type {
   TurnSpend,
 } from '../types'
 import { costOf, isEnginePriced } from './pricing.ts'
-import { clip, displayWidth, padCell, pct, tokens, countdown, usd } from './format.ts'
+import { clip, pct, tokens, countdown, usd } from './format.ts'
 import { UNPRICED, usdEstimate } from './provenance.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubblePages, freshnessOf, toUsageView } from './usage-view.ts'
 import {
@@ -45,6 +45,7 @@ import {
   maskModel,
   modelDetailRows,
   detailTableLayout,
+  CHIP_COLUMN,
   modelRows,
   MODEL_STACK_KEEP,
   modelGrainFor,
@@ -1135,35 +1136,47 @@ export const register: Register = (on, options) => {
                   数据行是 `■` + gap + 模型名，表头就用一格空白替色块，
                   后面照常隔一个 gap——两行的格子数必须相同，少一格右边
                   三列会整体错开。
-                  每一列都补到**分区宽度**（`partitions`），不是内容宽度：
-                  内容宽度只决定数字从哪一格开始，分区宽度决定这一列占多远。
-                  不这么做的话，模型名列被夹在 24 格，宽面板下右边三大片空白，
-                  四列挤在左边像没排好。
+
+                  **列宽交给 `Box` 的 `width`，不靠末尾补空格。** 以前每一格
+                  是一个 `<Text>`，宽度全靠 `padCell` 补出来的行尾空格撑开。
+                  那样只要绘制端把行尾空白裁掉（`trimEnd` 是终端渲染的常见
+                  做法），列宽就塌回内容宽度：`qwen3.8-27b` 补 12 格、
+                  `deepseek-v4-flash` 补 7 格，两行画出来一样宽，四列全歪。
+                  现在每个单元格是一个定宽 `Box`，列宽由引擎的布局决定，
+                  与文字长短、与行尾空格是否保留都无关。
+
                   **四列一律左对齐**：数字右对齐时，同一列里的 `8.0万` 与
                   `21.50亿` 位数不同，左边参差不齐，扫读时每一格都要重新找
                   起点；左对齐后四位数字的起始位置固定，纵向扫一眼就对得上。 */}
               <Box flexDirection="row" gap={tableGap}>
-                <Text dimColor>{padCell('', 1)}</Text>
-                <Text dimColor>{padCell(clip('模型', nameWidth), partitions[0])}</Text>
-                <Text dimColor>{padCell(clip('输入', inputWidth), partitions[1])}</Text>
-                <Text dimColor>{padCell(clip('输出', outputWidth), partitions[2])}</Text>
-                <Text dimColor>{padCell(clip('费用', costWidth), partitions[3])}</Text>
+                {/* 色块列用与 `CHIP_COLUMN` 等宽的定宽 Box：`■` 的东亚宽度
+                    属性是 Ambiguous——多数终端按 1 格算，CJK 环境按 2 格算。
+                    不猜它几格：表头用同样的盒子占位，两行第一列一定对齐。 */}
+                <Box width={CHIP_COLUMN} />
+                <Box width={partitions[0]}><Text dimColor>模型</Text></Box>
+                <Box width={partitions[1]}><Text dimColor>输入</Text></Box>
+                <Box width={partitions[2]}><Text dimColor>输出</Text></Box>
+                <Box width={partitions[3]}><Text dimColor>费用</Text></Box>
               </Box>
               {modelDetails.map((row, index) => (
                 <Box key={`whale-mrow-${row.model}-${index}`} flexDirection="row" gap={tableGap}>
-                  <Text color={modelColorOf(row.model)}>■</Text>
-                  <Text>{padCell(clip(row.model, nameWidth), partitions[0])}</Text>
-                  {/* 数字的**内容宽度**仍按最长读数定（截断由 `clip` 兜底），
-                      但这一格补到**分区宽度**，且靠左——见上面表头处的说明。 */}
-                  <Text dimColor>
-                    {padCell(clip(inputTexts[index] ?? '—', inputWidth), partitions[1])}
-                  </Text>
-                  <Text dimColor>
-                    {padCell(clip(outputTexts[index] ?? '—', outputWidth), partitions[2])}
-                  </Text>
-                  <Text dimColor>
-                    {padCell(clip(costTexts[index] ?? '—', costWidth), partitions[3])}
-                  </Text>
+                  <Box width={CHIP_COLUMN}>
+                    <Text color={modelColorOf(row.model)}>■</Text>
+                  </Box>
+                  <Box width={partitions[0]}>
+                    <Text>{clip(row.model, nameWidth)}</Text>
+                  </Box>
+                  {/* 数字的内容宽度仍按最长读数定（截断由 `clip` 兜底），
+                      但单元格盒子占**分区宽度**——见上面表头处的说明。 */}
+                  <Box width={partitions[1]}>
+                    <Text dimColor>{clip(inputTexts[index] ?? '—', inputWidth)}</Text>
+                  </Box>
+                  <Box width={partitions[2]}>
+                    <Text dimColor>{clip(outputTexts[index] ?? '—', outputWidth)}</Text>
+                  </Box>
+                  <Box width={partitions[3]}>
+                    <Text dimColor>{clip(costTexts[index] ?? '—', costWidth)}</Text>
+                  </Box>
                 </Box>
               ))}
             </Box>
