@@ -380,6 +380,12 @@ test('用量条摘要按偏好切换口径', () => {
     bandSummary(toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } }), ['window'], 0),
     '无额度窗口',
   )
+  // 「5h + 7d」没有数据时闭嘴，不重复「额度窗口」那句话——否则关掉
+  // 「额度窗口」条子毫无变化，读者以为开关失灵。
+  assert.equal(
+    bandSummary(toUsageView({ rateLimits: [], cost: { usd: 0.5 }, context: { window: 200_000, percent: 33 } }), ['context'], 0),
+    '',
+  )
   // 多选：按固定次序拼接，与勾选先后无关；重复项只出现一次。
   // window 已经写了 5h，context 只补 7d——同一条数字不印两遍。
   assert.equal(
