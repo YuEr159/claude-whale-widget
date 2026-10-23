@@ -358,41 +358,78 @@ DeepSeek Flash 的型号在网关里写法不统一（`deepseek-flash`、`DeepSe
 
 ## 安装
 
-本插件是 Claude Code 的 **mod**（function hooks 插件），需要 Claude Code **2.1.275 或更新版本**。
+本插件是 Claude Code 的 **mod**（function hooks 插件），需要 Claude Code **2.1.275 或更新版本**
+——更早的版本没有这套 mod 接口。
 
-三条路，任选其一：
+### 一条命令
 
-**1. 本会话热重载（开发时最方便）**
-
-把插件目录放进当前会话的 mods 目录，引擎会在本轮结束时加载，之后改文件自动重载：
-
-```bash
-cp -r . "$HOME/.claude/dev-mods/<会话 id>/whale-usage"
-```
-
-**2. 指定目录启动**
-
-```bash
-claude --plugin-dir "/path/to/whale-usage"
-```
-
-**3. 从插件市场一条命令安装（长期启用）**
-
-本仓库自带 `.claude-plugin/marketplace.json`，直接装即可：
+在 Claude Code 里输入：
 
 ```
 /plugin install whale-usage --marketplace YuEr159/claude-whale-widget
 ```
 
-也可以把目录写进环境变量 `CLAUDE_CODE_PLUGIN_DIRS`。
+仓库是公开的，自带 `.claude-plugin/marketplace.json`，引擎会先把市场加进你的用户设置
+再装插件，不必自己 `git clone`。安装范围默认 `user`，装一次，所有会话都带着。
 
-装好后：
+想分成两步也行：
+
+```
+/plugin marketplace add YuEr159/claude-whale-widget
+```
+
+```
+/plugin install whale-usage
+```
+
+不在 Claude Code 界面里时，用命令行等价写法：
+
+```bash
+claude plugin install whale-usage --marketplace YuEr159/claude-whale-widget -s user
+```
+
+`-s` 可选 `user` / `project` / `local`。本插件挂在输入框上方与侧边面板上，是跟着你
+这个人走的，`user` 最合适；只在某个仓库里用时才选 `project`。
+
+装好之后：
 
 - 输入 `/whale` 打开侧边面板；
 - 输入 `/whale-band` 显示 / 隐藏输入框上方的用量条；
 - 面板里可以多选用量条口径、在模型分布页切换统计范围，开关轮次费用提示与用量条
   （都在「设置」页签里）。
   隐藏用量条后，面板会弹一句 `/whale 可以呼出当前面板哦！`——入口没了，得告诉人怎么叫回来。
+
+### 本地开发
+
+改代码时不必每次都推上去再装，两种方式看目录：
+
+**指定目录启动**——目录里改了什么，下次启动就是什么：
+
+```bash
+claude --plugin-dir "/path/to/claude-whale-widget"
+```
+
+**丢进会话的 mods 目录**——引擎在本轮结束时加载，之后改文件自动重载：
+
+```bash
+cp -r . "$HOME/.claude/dev-mods/<会话 id>/whale-usage"
+```
+
+`<会话 id>` 换成桌面端当前会话的 id，展开 `~/.claude/dev-mods/` 就能看到。
+
+也可以把目录写进环境变量 `CLAUDE_CODE_PLUGIN_DIRS`，一次挂多个插件目录。
+
+### 卸掉
+
+```
+/plugin uninstall whale-usage
+```
+
+市场本身不会跟着删，还在的话用命令行收走：
+
+```bash
+claude plugin marketplace remove whale-usage-marketplace
+```
 
 ## 怎么测
 
