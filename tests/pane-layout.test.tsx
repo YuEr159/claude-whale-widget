@@ -627,3 +627,44 @@ test('视觉纪律：界面文字不出现纯装饰色', async ($, on) => {
 
   await ui.unmount()
 })
+
+/**
+ * 六张卡的框必须**比外层大框暗一档**。
+ *
+ * 早先卡片框和外面那个大框是同一支色、同一档粗细，六张卡就成了六个跟
+ * 容器平级的格子——读者分不清哪个是「这一页」哪个是「格子里的一条」。
+ * 压暗一档之后层级是：外层框（主）> 卡片框（次）> 卡内文字。
+ *
+ * 这条守的是「卡片框真的带了 borderDimColor」，而不是「卡片存在」——
+ * 后者早有别的用例管。
+ */
+test('概览卡片框比外层大框暗一档', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+
+  /** 收集所有带圆角框的 Box。 */
+  function collectBordered(node: any, out: any[] = []): any[] {
+    if (!node || typeof node !== 'object') return out
+    if (node.type === 'Box' && node.props?.borderStyle) out.push(node)
+    for (const kid of node.children ?? []) collectBordered(kid, out)
+    return out
+  }
+
+  const boxes = collectBordered(await ui.drawn())
+  const dimmed = boxes.filter(b => b.props.borderDimColor)
+  // 至少有一批卡片框是压暗的（六张卡），且不是全部——外层大框要保持原亮度。
+  expect(dimmed.length).toBeGreaterThanOrEqual(6)
+  expect(dimmed.length).toBeLessThan(boxes.length)
+
+  await ui.unmount()
+})

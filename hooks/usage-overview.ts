@@ -20,11 +20,25 @@ import { usdEstimate } from './provenance.ts'
 
 /** 概览页的一张指标卡。 */
 export type StatCard = {
+  /** 卡片标题，**必须短**：见 `CARD_LABEL_MAX`。 */
   label: string
   value: string
   /** 值的补充说明，没有就省略。 */
   hint?: string
 }
+
+/**
+ * 卡片标题的宽度上限（列）。
+ *
+ * 这是概览页六张卡最要紧的一条约束。面板 96 列时一行放六张，每张卡算完
+ * 边框与内边距只剩 **10 列**——早先的「活跃天数 / 30」有 13 列宽，标签
+ * 伸出卡片，读者扫一眼看到的是标题而不是数。
+ *
+ * 所以标题一律压到 8 列以内，统计范围从标题里挪到 `hint`（它本来就是
+ * 注解档）。`overviewCards` 会在开发期把超宽的标题写成 `—` 之外的原样，
+ * 但测试会钉住这一条。
+ */
+export const CARD_LABEL_MAX = 8
 
 /** 把小时数写成 `5 PM` / `9 AM` / `12 PM`，与原生用量页一致。 */
 export function hourLabel(hour: number | null): string {
@@ -81,7 +95,15 @@ export function overviewCards(
     { label: '会话', value: String(overview.sessions) },
     { label: '消息', value: overview.totalMessages.toLocaleString('en-US') },
     { label: '总 token', value: tokens(overview.totalTokens) },
-    { label: `活跃天数 / ${windowDays}`, value: String(activeDays) },
+    // **标题只写「活跃天数」，范围挪进 hint。**
+    // 六张卡在 96 列面板上一张只有 10 列内宽，「活跃天数 / 30」光标题就
+    // 13 列——伸出去一截，读者看到的全是标签。范围是注解，`hint` 正是
+    // 注解档（`dimColor` 小字），放那里既省宽度又符合层级。
+    {
+      label: '活跃天数',
+      value: String(activeDays),
+      hint: `/ ${windowDays} 天`,
+    },
     {
       label: '峰值时段',
       value: hourLabel(overview.peakHour),

@@ -30,6 +30,7 @@ import {
   PAGE_FRAME_CHROME,
   modelRows,
   overviewCards,
+  CARD_LABEL_MAX,
   heatLevel,
   isPlaceholderModel,
   contextPartKind,
@@ -702,7 +703,9 @@ test('概览卡片有数据时给出真实读数', () => {
   expect(byLabel['总 token']?.value).toContain('万')
   // **活跃天数按 `days` 重算，不用 `overview.activeDays`。**
   // 那个字段来自 400 天扫描窗口，直接用在 30 天的分母上会显示「/ 30 → 99」。
-  expect(byLabel['活跃天数 / 30']?.value).toBe('2') // 10-21 是空的一天，不算
+  expect(byLabel['活跃天数']?.value).toBe('2') // 10-21 是空的一天，不算
+  // 统计范围挪到了注解档：标题只留「活跃天数」，96 列面板上才放得下。
+  expect(byLabel['活跃天数']?.hint).toBe('/ 30 天')
   expect(byLabel['峰值时段']?.value).toBe('5 PM')
   expect(byLabel['峰值时段']?.hint).toContain('条')
   // 模型名去掉了 `claude-` 前缀。
@@ -1215,4 +1218,44 @@ test('条形鲸鱼的水花落在空白处，不压在身体上', () => {
   expect(xsLeft[1]).toBeGreaterThan(xsLeft[2]!)
   expect(xsRight[0]).toBeGreaterThan(xsRight[1]!)
   expect(xsRight[1]).toBeGreaterThan(xsRight[2]!)
+})
+
+/**
+ * 六张卡的标题必须塞得进**最窄的排法**。
+ *
+ * 这是概览页最实际的审美问题：面板 96 列时一行放六张，每张卡扣掉边框
+ * （2 列）与左右内边距（2 列）只剩 **10 列**可写。早先「活跃天数 / 30」
+ * 这个标题有 13 列——伸出去一截，读者扫一眼先看到的是标签，数被挤到看不见。
+ *
+ * 所以标题一律不超过 `CARD_LABEL_MAX`（8 列，留 2 列余量）。统计范围这类
+ * 补充信息走 `hint`（注解档），不占标题宽度。
+ */
+test('概览卡的标题塞得进最窄的一行六张', () => {
+  const CARD_INNER_MIN = 10 // 96 列面板、6 张一排时的卡内可用列数
+
+  const filled = overviewCards(
+    {
+      sessions: 42, activeDays: 7, peakHour: 17, peakHourMessages: 1234,
+      favoriteModel: 'claude-opus-5-5', favoriteModelMessages: 5678,
+      totalMessages: 12345, totalTokens: 9_870_000,
+    } as never,
+    [{ day: '2026-10-20', input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 1, messages: 3 }] as never,
+    365, 12.3,
+  )
+  const empty = overviewCards(undefined, [], 30, 0)
+
+  for (const card of [...filled, ...empty]) {
+    const w = displayWidth(card.label)
+    expect(w).toBeLessThanOrEqual(CARD_LABEL_MAX)
+    // 即便把 hint 按最坏情况估（它自己会换行/截断），标题本身也要留出
+    // 至少一格给数字。
+    expect(w).toBeLessThanOrEqual(CARD_INNER_MIN - 2)
+  }
+
+  // 三百多天这种最宽的分母也不许把标题撑长——范围必须留在 hint 里。
+  const longWindow = overviewCards(
+    { sessions: 1, activeDays: 1, peakHour: 1, peakHourMessages: 1, favoriteModel: 'm', favoriteModelMessages: 1, totalMessages: 1, totalTokens: 1 } as never,
+    [], 3650, 0,
+  )
+  expect(longWindow.every(card => displayWidth(card.label) <= CARD_LABEL_MAX)).toBe(true)
 })
