@@ -14,72 +14,12 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+// 价目表与 `hooks/pricing.ts` **共用同一份数据**，不再各写一份副本。
+// 早先两份手工复制、靠注释要求「保持一致」，没有任何测试比对。
+import { priceOf } from '../hooks/pricing-data.mjs'
 
 /** 官方模型的前缀；只有以它开头的模型才计价并列进逐模型明细。 */
 const OFFICIAL_PREFIX = 'claude-'
-
-/** 与 hooks/pricing.ts 保持一致的官方价格（美元 / 每百万 token）。 */
-const PRICES = [
-  ['claude-fable-5-1', 10, 50],
-  ['claude-mythos-5-1', 10, 50],
-  ['claude-fable-5', 10, 50],
-  ['claude-mythos-5', 10, 50],
-  ['claude-opus-5-5', 4, 20],
-  ['claude-opus-5', 5, 25],
-  ['claude-opus-4-8', 5, 25],
-  ['claude-opus-4-7', 5, 25],
-  ['claude-opus-4-6', 5, 25],
-  ['claude-opus-4-5', 5, 25],
-  ['claude-opus-4-1', 15, 75],
-  ['claude-opus-4', 15, 75],
-  ['claude-sonnet-5-5', 2, 10],
-  ['claude-sonnet-5', 2, 10],
-  ['claude-sonnet-4-6', 3, 15],
-  ['claude-sonnet-4-5', 3, 15],
-  ['claude-sonnet-4', 3, 15],
-  ['claude-haiku-5-5', 0.1, 0.5],
-  ['claude-haiku-4-5', 1, 5],
-  ['claude-haiku-3-5', 0.8, 4],
-  ['claude-3-7-sonnet', 3, 15],
-  ['claude-3-5-sonnet', 3, 15],
-  ['claude-3-5-haiku', 0.8, 4],
-  ['claude-3-opus', 15, 75],
-  ['claude-3-haiku', 0.25, 1.25],
-]
-
-/**
- * 第三方模型的独立定价规则，与 hooks/pricing.ts 的 `THIRD_PARTY` 一一对应。
- *
- * 这一族模型的缓存折扣比例与 Anthropic 完全不同（DeepSeek 2%、Qwen 45%、
- * Kimi 88%），也都不单独收缓存写入费，所以逐家给数字，不套 1.25x / 0.1x。
- *
- * - DeepSeek Flash：官方非高峰价（高峰翻倍，所以算出来是下限）。型号写法在网关里
- *   不统一（`deepseek-flash` / `DeepSeek-V4.1-Flash-1017` / `deepseek-v4-flash`），
- *   用「含 deepseek 且含 flash」识别。
- * - Qwen3.8 27B、Kimi K3：OpenRouter 的基础价（美元 / 每百万 token）。
- *   本机日志里的这两个名字就是走第三方网关调用的，用它的基础价最接近。
- */
-const THIRD_PARTY_PRICES = [
-  [
-    /deepseek.*flash|flash.*deepseek/i,
-    { input: 0.15, output: 0.6, cacheWrite: 0, cacheRead: 0.003 },
-  ],
-  [/qwen3\.8-27b|qwen-3\.8-27b/, { input: 0.04, output: 1.35, cacheWrite: 0, cacheRead: 0.018 }],
-  [/kimi[-_ ]?k3\b|moonshot.*k3/, { input: 0.239, output: 11.936, cacheWrite: 0, cacheRead: 0.21 }],
-]
-
-function priceOf(model) {
-  const id = model.toLowerCase()
-  for (const [prefix, input, output] of PRICES) {
-    if (id.startsWith(prefix)) {
-      return { input, output, cacheWrite: input * 1.25, cacheRead: input * 0.1 }
-    }
-  }
-  for (const [test, p] of THIRD_PARTY_PRICES) {
-    if (test.test(id)) return p
-  }
-  return undefined
-}
 
 function dayKey(timestamp) {
   // 用本地时区切天：日志里的 timestamp 是 UTC ISO 串。
@@ -593,8 +533,39 @@ export function aggregate(root, days, cache) {
  * 缓存本来是一堆 Map，JSON 存不下 Map，所以逐层摊平成数组。只含
  * 「文件路径 → 指纹 + 该文件的数字增量」，没有任何日志正文。
  */
+/** 缓存里 message.id 列表的总长度上限（字符）。 */
+const SEEN_IDS_BUDGET = 2_000_000
+
+/**
+ * 把缓存压成可 JSON 序列化的数组。
+ *
+ * **`seenIds` 会按预算裁剪。** 它是缓存里最大的一块——每个文件的每一条消息
+ * 的 id 都要留着，因为跨文件去重（resume / fork 会把旧行抄进新文件）靠它。
+ * 实测本机 281 个文件 / 3.7 万条消息时它占 1.24 MB，而宿主 `process.run`
+ * 的 stdout 只能保留前 4 MiB；再积累一年多就会撞线，stdout 变成半截 JSON，
+ * 面板永久停在解析错误上。
+ *
+ * 裁剪策略：总额超预算时，**从最老的文件开始清空**。理由是最新的会话才
+ * 最可能与「刚 fork 出来的文件」撞 id，老文件的 id 重复概率低。被清空的
+ * 文件仍保留它的聚合数字，只是不再参与跨文件去重——代价是极少数老消息
+ * 可能被计两次，远小于「整个面板坏掉」。
+ */
 function packCache(cache) {
   const out = []
+  // 按文件修改时间排序，最老的先被裁。
+  const ordered = [...cache.entries()].sort((a, b) => a[1].fingerprint.localeCompare(b[1].fingerprint))
+  const totalIds = ordered.reduce((sum, [, held]) => sum + held.seenIds.length * 24, 0)
+  let budget = SEEN_IDS_BUDGET
+  const keepIds = new Set()
+  // 从最新往回挑，直到用完预算。
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const [file, held] = ordered[index]
+    const cost = held.seenIds.length * 24
+    if (totalIds > SEEN_IDS_BUDGET && budget - cost < 0) continue
+    budget -= cost
+    keepIds.add(file)
+  }
+
   for (const [file, held] of cache) {
     out.push([
       file,
@@ -607,7 +578,7 @@ function packCache(cache) {
       [...held.part.byDayModel.entries()].map(([day, perDay]) => [day, [...perDay.entries()]]),
       held.part.unparsed,
       held.part.skipped,
-      held.seenIds,
+      keepIds.has(file) ? held.seenIds : [],
     ])
   }
   return out
@@ -660,8 +631,14 @@ if (isMain) {
   // 不写任何缓存文件——PRIVACY.md 的「不落盘」承诺因此照旧成立。
   let cache = new Map()
   try {
-    const input = fs.readFileSync(0, 'utf8')
-    if (input.trim().length > 0) cache = unpackCache(JSON.parse(input))
+    // **只有 stdin 是管道时才读。** `readFileSync(0)` 在终端里会一直等到
+    // EOF——按 README 的方式手动跑 `node scripts/usage-scan.mjs <root> 7`
+    // 调试时，进程会无输出地挂住，看起来像卡死。`isTTY` 为真说明前面坐的是
+    // 人，不是宿主，这时直接走全量扫描。
+    if (!process.stdin.isTTY) {
+      const input = fs.readFileSync(0, 'utf8')
+      if (input.trim().length > 0) cache = unpackCache(JSON.parse(input))
+    }
   } catch {
     /* 没有 stdin 或内容坏了：退回全量扫描，不影响正确性 */
   }

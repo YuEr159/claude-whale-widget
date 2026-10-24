@@ -17,12 +17,6 @@ export function usd(value: number | undefined | null): string {
   return `$${trimTo(value.toFixed(2), 2)}`
 }
 
-/** 人民币，用于本地估算的另一种展示（默认不用，保留给偏好）。 */
-export function cny(value: number | undefined | null, rate = 7.1): string {
-  if (value === undefined || value === null || !Number.isFinite(value)) return '—'
-  return `¥${(value * rate).toFixed(2)}`
-}
-
 /** 百分比：整数为主，小数只在需要时出现。 */
 export function pct(value: number | undefined | null): string {
   if (value === undefined || value === null || !Number.isFinite(value)) return '—'
@@ -117,16 +111,6 @@ export function displayWidth(text: string): number {
 }
 
 /**
- * 把一个单元格补到指定显示宽度。
- *
- * `align: 'right'` 是数字列用的——右对齐时个位对齐，大小一眼可比。
- */
-export function padCell(text: string, width: number, align: 'left' | 'right' = 'left'): string {
-  const gap = Math.max(0, width - displayWidth(text))
-  return align === 'right' ? `${' '.repeat(gap)}${text}` : `${text}${' '.repeat(gap)}`
-}
-
-/**
  * 代码改动行数：`+128 -34`。
  *
  * 两边都是 0 时返回空串——刚开的会话还没有任何 Edit / Write，
@@ -138,9 +122,4 @@ export function diffLines(added: number, removed: number): string {
   if (added > 0) parts.push(`+${added}`)
   if (removed > 0) parts.push(`-${removed}`)
   return parts.join(' ')
-}
-
-/** `YYYY-MM-DD` → `MM-DD`。 */
-export function shortDay(day: string): string {
-  return day.length >= 10 ? day.slice(5) : day
 }

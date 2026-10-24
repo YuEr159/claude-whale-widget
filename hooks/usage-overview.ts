@@ -66,11 +66,22 @@ export function overviewCards(
       { label: '常用模型', value: '—' },
     ]
   }
+  // **活跃天数要按用户选的范围重算，不能用 `overview.activeDays`。**
+  //
+  // 那个字段来自扫描窗口（`register.tsx` 里固定至少 400 天），而分母
+  // `windowDays` 是设置页里的 30 / 60 / 180 / 365。默认 30 天时，若 400 天
+  // 内有 90 个活跃日，卡片会显示「活跃天数 / 30 → 90」——读数超过 100%。
+  // `days` 是这一屏真正要展示的那段，按它数才与分母同口径。
+  const activeDays = days.filter(day => {
+    const total = day.input + day.output + day.cacheRead + day.cacheWrite
+    return total > 0 || day.messages > 0
+  }).length
+
   return [
     { label: '会话', value: String(overview.sessions) },
     { label: '消息', value: overview.totalMessages.toLocaleString('en-US') },
     { label: '总 token', value: tokens(overview.totalTokens) },
-    { label: `活跃天数 / ${windowDays}`, value: String(overview.activeDays) },
+    { label: `活跃天数 / ${windowDays}`, value: String(activeDays) },
     {
       label: '峰值时段',
       value: hourLabel(overview.peakHour),
@@ -122,8 +133,12 @@ export function dayHeat(days: LocalDay[]): { cells: HeatCell[]; max: number } {
 /**
  * 按周汇总的「日历」布局：每列一周、每行一天，和原生用量页的方块图同形。
  *
- * 返回的 `columns` 是若干列，每列 7 格（周日到周六），缺的日期留空。
- * 不足一周的尾巴补空，保证每列一样高。
+ * 返回的 `columns` 是若干列，每列 7 格（周一到周日），缺的日期留空。
+ *
+ * **每个格子按自己的日期定位，不按数组顺序。** 早先每收满 7 个格子就换一列，
+ * 只有第一天做了星期对齐——`days` 里缺一天（扫描脚本给的正是「只有活跃日」
+ * 的形态，周末常常整天没有消息），第二周起每个格子都落在错误的星期行上，
+ * 整张图读到的是错的作息规律。
  */
 export function calendarHeat(days: LocalDay[]): {
   columns: Array<Array<HeatCell | null>>
@@ -132,23 +147,44 @@ export function calendarHeat(days: LocalDay[]): {
   const { cells, max } = dayHeat(days)
   if (cells.length === 0) return { columns: [], max: 0 }
 
-  const columns: Array<Array<HeatCell | null>> = []
-  let column: Array<HeatCell | null> = []
-  let weekday = 0
-
-  // 第一列从第一天的星期几开始，前面补空。
-  const firstDay = new Date(`${days[0]?.day ?? ''}T00:00:00`)
-  if (!Number.isNaN(firstDay.getTime())) {
-    weekday = firstDay.getDay()
-    for (let index = 0; index < weekday; index += 1) column.push(null)
+  /** `YYYY-MM-DD` → 0=周一 … 6=周日。解析不了返回 `undefined`。 */
+  const weekdayOf = (day: string): number | undefined => {
+    const date = new Date(`${day}T00:00:00`)
+    if (Number.isNaN(date.getTime())) return undefined
+    // `getDay()` 是 0=周日；这里换成以周一为一周之始，与标题「每列一周」一致。
+    return (date.getDay() + 6) % 7
   }
 
-  for (const cell of cells) {
-    column.push(cell)
+  /** 把 `YYYY-MM-DD` 往后推一天（按日历日，不涉及时区偏移）。 */
+  const nextDay = (day: string): string => {
+    const date = new Date(`${day}T00:00:00`)
+    date.setDate(date.getDate() + 1)
+    const y = date.getFullYear()
+    const m = String(date.getMonth() + 1).padStart(2, '0')
+    const d = String(date.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+
+  const byDay = new Map(cells.map((cell, index) => [days[index]!.day.slice(0, 10), cell]))
+
+  const first = days[0]!.day.slice(0, 10)
+  const last = days[days.length - 1]!.day.slice(0, 10)
+  const firstWeekday = weekdayOf(first)
+  if (firstWeekday === undefined) return { columns: [], max: 0 }
+
+  const columns: Array<Array<HeatCell | null>> = []
+  let column: Array<HeatCell | null> = new Array(firstWeekday).fill(null)
+
+  // 从第一天走到最后一天，**逐日**推进：没有记录的那天补 null，
+  // 这样列与行的位置永远由日期决定，不会因为缺数据而整体串位。
+  for (let day = first; day <= last; day = nextDay(day)) {
+    column.push(byDay.get(day) ?? null)
     if (column.length === 7) {
       columns.push(column)
       column = []
     }
+    // `nextDay` 一定推进；`day <= last` 在字符串比较下成立，因为格式固定。
+    if (day === last) break
   }
   if (column.length > 0) {
     while (column.length < 7) column.push(null)
@@ -746,11 +782,6 @@ export const CONTEXT_PART_LABELS: ReadonlyArray<{
   { kind: 'messages', label: '对话消息', dark: '#4D6BFE', light: '#3B54D6', auto: '#4A6CD4' },
   { kind: 'other', label: '其他', dark: '#7C8394', light: '#6E7486', auto: '#7C8394' },
 ]
-
-/** 分类的展示名；未列出的键原样返回。 */
-export function contextPartLabel(kind: ContextPartKind): string {
-  return CONTEXT_PART_LABELS.find(item => item.kind === kind)?.label ?? kind
-}
 
 /**
  * 分类的配色；未知键用最淡的那档。

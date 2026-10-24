@@ -106,8 +106,17 @@ export function duration(ms: number): string {
 /**
  * 数一个 unified diff 的增删行数。
  *
- * `lines` 里以 `+` / `-` 开头的是正文，`+++` / `---` 是文件头，要排除。
+ * `lines` 里以 `+` / `-` 开头的是正文，文件头 `--- a/x` / `+++ b/x` 要排除。
  * 只返回两个数字，不保留任何行内容——这是隐私边界。
+ *
+ * **判文件头要连后面的空格一起看，不能只认三个符号。** 早先用
+ * `startsWith('+++')` / `('---')` 一刀切，会误伤正文里本来就以 `++` / `--`
+ * 开头的行：删掉一行 SQL 注释 `-- note` 时，diff 里那一行是 `--- note`，
+ * 被当成文件头跳过；新增 `++i;` 同理。行数越多，少计得越多。
+ *
+ * 真正的文件头格式固定是 `--- <路径>` 与 `+++ <路径>`（三个符号之后一定
+ * 跟一个空格）。而 `--- note` / `++i;` 这类正文，三个符号后面是别的字符，
+ * 按这个区别就能分开，不必依赖文件头在数组里的位置。
  */
 export function countPatchLines(
   patches: ReadonlyArray<{ lines: readonly string[] }>,
@@ -116,7 +125,7 @@ export function countPatchLines(
   let removed = 0
   for (const patch of patches) {
     for (const line of patch.lines) {
-      if (line.startsWith('+++') || line.startsWith('---')) continue
+      if (line.startsWith('--- ') || line.startsWith('+++ ')) continue
       if (line.startsWith('+')) added += 1
       else if (line.startsWith('-')) removed += 1
     }
@@ -155,6 +164,44 @@ export function addModelSpend(list: ModelSpend[], entry: ModelSpend): ModelSpend
     turns: prev.turns + entry.turns,
   }
   return next
+}
+
+/**
+ * 本会话花费，按**插件自己的价目表**逐模型累加。
+ *
+ * **三条显示路径共用这一个函数**（面板顶部、输入框上方的用量条、鲸鱼气泡），
+ * 因为它是同一条口径：只要有一款模型未收录价格，就返回 `undefined`，
+ * 让调用方退回引擎读数。早先这段「every + reduce + 回退」在面板与用量条
+ * 各写一遍，气泡再取一次——三份代码各自演化，同一个会话可能显示三个数。
+ *
+ * 为什么需要回退：`turn.complete` 写入的 `cost` 已经是按价目表算过的，
+ * 未收录价格的是 `null`。少算一笔（当成 0）比显示引擎那套按默认模型估出的
+ * 偏高数字更糟，所以只要有一款没价就整笔退回引擎读数，并在能说明的地方
+ * 标注「按默认模型价估」。
+ *
+ * @returns 全部有价时的累加值；任何一款为 `null`、或列表为空时返回 `undefined`。
+ */
+export function sessionCostOf(models: readonly ModelSpend[]): number | undefined {
+  if (models.length === 0) return undefined
+  if (!models.every(entry => entry.cost !== null)) return undefined
+  return models.reduce((sum, entry) => sum + (entry.cost ?? 0), 0)
+}
+
+/**
+ * 用量条口径：老状态里没有这个字段、或是空数组时，退回默认值。
+ *
+ * 「空数组按默认处理」是刻意的——一条空白用量条比显示得多更糟。
+ * 面板与用量条两侧共用，避免一处放开了空数组而另一处没有。
+ *
+ * 泛型让调用方拿回自己的字面量类型，不必再写一次断言。
+ */
+export function bandMetricsOf<T extends string>(
+  prefs: { bandMetrics?: readonly string[] },
+  fallback: readonly T[],
+): readonly T[] {
+  return Array.isArray(prefs.bandMetrics) && prefs.bandMetrics.length > 0
+    ? (prefs.bandMetrics as readonly T[])
+    : fallback
 }
 
 // ---------------- /context：分项 ----------------

@@ -384,7 +384,7 @@ DeepSeek Flash 的型号在网关里写法不统一（`deepseek-flash`、`DeepSe
 
 其余第三方模型（GLM、DeepSeek 的非 Flash 型号等）的 token 照常统计、照常出现在
 模型分布页，但金额记一个 `—`——拿别家的价去套只会给出错误数字。要再收录一个模型，
-把定价加进 `hooks/pricing.ts` 与 `scripts/usage-scan.mjs` 的对应表（两处保持一致）。
+把定价加进 `hooks/pricing-data.mjs`（只有这一处——面板与扫描脚本都从它读）。
 
 ## 安装
 
@@ -523,7 +523,8 @@ hooks/panel-fill.ts          面板跟随主题的一组界面色
 hooks/provenance.ts          数据来源分级：读数 / 估算 / 未收录
 hooks/whale-art.ts           小鲸鱼画面（内嵌原图 + 代码绘制的气泡）
 hooks/whale-asset.ts         原图的两档 base64 资产
-hooks/pricing.ts             官方模型价格表
+hooks/pricing-data.mjs       价格数据（唯一一份，TS 与扫描脚本共用）
+hooks/pricing.ts             价格查询（薄封装）
 hooks/format.ts              金额 / 百分比 / 倒计时格式化
 scripts/usage-scan.mjs       本地日志聚合（由 node 执行）
 scripts/make-preview.mjs     生成 assets/ 下的静态预览（从 whaleSvg 直接产出）
