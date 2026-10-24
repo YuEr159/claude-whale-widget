@@ -522,3 +522,32 @@ test('窄面板（40 列）余量不足一步，鲸鱼恒贴右端', async ($, o
 
   await ui.unmount()
 })
+
+/**
+ * 终端面板不画 Svg，退化成一个字符。
+ *
+ * 这条守的是一个真实缺陷：终端元素表在**测试宿主**里带着 `Svg`，靠
+ * `'Svg' in table` 探测会走进 Svg 分支、渲染成空——真人终端上整幅图消失。
+ * 判断必须按 `e.surface`，不按元素表。
+ */
+test('终端面板不画 Svg，退化成字符', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 100, rows: 40 },
+  })
+
+  const tree = await ui.drawn() as any
+  const svgs = findSvgs(tree)
+  expect(svgs.length).toBe(0)
+  // 鲸鱼槽仍在（只是退化成字符），不是整块空掉。
+  expect(JSON.stringify(tree)).toMatch(/🐳|🐋|💤/)
+
+  await ui.unmount()
+})
