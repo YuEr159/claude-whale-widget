@@ -1574,3 +1574,90 @@ test('气泡没有尾巴，两颗小泡朝右下指向鲸鱼且不压到它身�
     assert.ok(onEdge > 1.05, `${name} 应在气泡椭圆之外，实际椭圆参数 ${onEdge.toFixed(2)}`)
   }
 })
+
+/**
+ * 同一条消息的流式增量必须取**最后**那个快照。
+ *
+ * 一条 assistant 消息在 JSONL 里写成多行：第一行是「请求已发出、回复还没来」
+ * ——`output_tokens` 是 0、`cache_read_input_tokens` 是 0，只有 `input_tokens`
+ * 有值；最后一行才是这一轮的真实读数。
+ *
+ * 早先按「先到先得」去重，等于每条消息都取第一行。实测本机 30 天窗口：
+ * output 少算 55%、cacheRead 少算 22%，而 input 反而多算 81%。扫描脚本此前
+ * 零测试，所以这个偏差一直没被发现。
+ */
+test('扫描：同一条消息的多个流式快照取最后一个', async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { aggregate } = await import('../scripts/usage-scan.mjs')
+
+  const root = mkdtempSync(join(tmpdir(), 'whale-scan-'))
+  try {
+    const project = join(root, 'proj')
+    mkdirSync(project)
+    const now = new Date().toISOString()
+    const line = (id, input, output, cacheRead) => JSON.stringify({
+      type: 'assistant',
+      timestamp: now,
+      message: { id, model: 'claude-opus-5-5', usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: 0 } },
+    })
+    // 同一个 id 的三行：首行 output / cacheRead 都是 0，末行才是真读数。
+    writeFileSync(join(project, 'a.jsonl'), [
+      line('msg_1', 1000, 0, 0),
+      line('msg_1', 1000, 0, 0),
+      line('msg_1', 3000, 250, 4000),
+    ].join('\n'))
+    // 另一个 id，只有一行，用来确认没有把正常消息算丢。
+    writeFileSync(join(project, 'b.jsonl'), line('msg_2', 500, 60, 0))
+
+    const result = aggregate(root, 1)
+    const row = result.byModel.find(entry => entry.model === 'claude-opus-5-5')
+    assert.ok(row, 'byModel 里应有这款模型')
+    assert.equal(row.output, 310, 'output 应取末行的 250 + 60')
+    assert.equal(row.cacheRead, 4000, 'cacheRead 应取末行的 4000')
+    assert.equal(row.input, 3500, 'input 应是末行的 3000 + 500')
+    assert.equal(row.messages, 2, '两条消息各算一次，不是三次')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+/**
+ * 子代理日志里的 `tool_result` 行不能被算成「轮次」。
+ *
+ * 工具结果回填的行也标 `type: "user"`。主会话里的老写法带 `toolUseResult`
+ * 或没有 `promptId`，好认；但 `subagents/agent-*.jsonl` 里那种**带**
+ * `promptId`、`content` 是 `tool_result` 数组——前两条判据都拦不住。
+ * 实测本机被判成轮次的 1665 行里有 683 行（41%）其实是工具结果。
+ */
+test('扫描：工具结果回填不算轮次', async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { aggregate } = await import('../scripts/usage-scan.mjs')
+
+  const root = mkdtempSync(join(tmpdir(), 'whale-turns-'))
+  try {
+    const project = join(root, 'proj')
+    mkdirSync(project)
+    const now = new Date().toISOString()
+    const userLine = (extra) => JSON.stringify({ type: 'user', timestamp: now, promptId: 'p1', ...extra })
+    writeFileSync(join(project, 'a.jsonl'), [
+      // 用户真实输入：有 promptId，content 是字符串。
+      userLine({ message: { content: '帮我看下这个' } }),
+      // 子代理里的工具回填：带 promptId，但 content 是 tool_result 数组。
+      userLine({ message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
+      // 老写法：带 toolUseResult。
+      userLine({ toolUseResult: { ok: true }, message: { content: 'x' } }),
+      // 老写法：没有 promptId。
+      JSON.stringify({ type: 'user', timestamp: now, message: { content: 'y' } }),
+    ].join('\n'))
+
+    const result = aggregate(root, 1)
+    const total = (result.turnsDaily ?? []).reduce((sum, d) => sum + d.turns, 0)
+    assert.equal(total, 1, '只有第一条是用户真实输入')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
