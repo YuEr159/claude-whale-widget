@@ -461,3 +461,64 @@ function findSvgs(node: any, out: any[] = []): any[] {
   for (const kid of node.children ?? []) findSvgs(kid, out)
   return out
 }
+
+/** 找到包鲸鱼的那个巡游 Box（最后一行里的第一个孩子）。 */
+function findSwimBox(tree: any): any {
+  const kids = tree.children ?? []
+  const row = kids[kids.length - 1]
+  return row?.children?.find?.((kid: any) => kid?.type === 'Box')
+}
+
+/**
+ * 低频巡游在树里的落点：鲸鱼那一行包一个 `Box`，`marginRight` 按三角波走。
+ *
+ * 起点（整点 12:00:00.000）相位恰为 0——`floor(now / 6000)` 落在换页边界上，
+ * 所以第一条断言是「贴右端，与没有巡游时完全一致」：巡游不该改变静止状态
+ * 下的画面，老测试钉的 `justifyContent: flex-end` 也还成立。
+ */
+test('巡游：起点贴右端，推进时钟逐步左移，余量不足时不游', async ($, on) => {
+  const clock = mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    // 140 列：余量 = 140 − ceil(380/8) = 92 列，单程 30 步，足够走两步。
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+
+  expect(findSwimBox(await ui.drawn())?.props?.marginRight).toBe(0)
+
+  await clock.advance(6_000)
+  await ui.redraw()
+  expect(findSwimBox(await ui.drawn())?.props?.marginRight).toBe(3)
+
+  await clock.advance(6_000)
+  await ui.redraw()
+  expect(findSwimBox(await ui.drawn())?.props?.marginRight).toBe(6)
+
+  await ui.unmount()
+})
+
+test('窄面板（40 列）余量不足一步，鲸鱼恒贴右端', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    // 40 列：立绘占 48 列 > 面板，夹取后没有余量。
+    props: props(40),
+    viewport: { columns: 60, rows: 40 },
+  })
+
+  const swim = findSwimBox(await ui.drawn())
+  expect(swim?.props?.marginRight).toBe(0)
+
+  await ui.unmount()
+})
