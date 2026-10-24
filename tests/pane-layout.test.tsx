@@ -117,6 +117,45 @@ test('设置页的立绘档位会改变鲸鱼尺寸', async ($, on) => {
   await ui.unmount()
 })
 
+/**
+ * 200% 档在**窄面板**上必须收住，不能溢出被裁掉。
+ *
+ * `whaleSizeFor` 只把基准尺寸收在可用宽度以内（≤380px），乘上档位之后就
+ * 不管了。80 列面板只有约 632px 可用，200% 是 760px——多出的 128px 会被
+ * 引擎直接裁掉（`overflow` 只有 visible / hidden，没有滚动），鲸鱼只剩
+ * 左半边。这条测试守「缩放之后再夹一次」。
+ */
+test('窄面板上的 200% 立绘不会溢出可用宽度', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const columns = 60
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(columns),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  await ui.press({ key: 'whale-tab-settings' })
+  await ui.press({ key: 'whale-scale-2' })
+  await ui.redraw()
+
+  const svg = findLastSvg(await ui.drawn())
+  const w = Number(svg?.props?.width ?? 0)
+  // 一列约 8px，留一格余量——与 `whaleSizeFor` 的可用宽度算法一致。
+  const available = (columns - 1) * 8
+  expect(w).toBeGreaterThan(0)
+  expect(w).toBeLessThanOrEqual(available + 0.5)
+  // 高度必须严格按画布比例，否则 `preserveAspectRatio` 会留白抖动。
+  expect(Math.abs(Number(svg?.props?.height) - w * (320 / 620))).toBeLessThan(0.5)
+
+  await ui.unmount()
+})
+
 test('窄面板同样是鲸鱼在最后一行靠右', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })

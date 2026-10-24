@@ -1365,7 +1365,7 @@ test('气泡里的本会话花费优先用插件价格表，而不是引擎 /cos
   assert.equal(withoutPrices.find(p => p.id === 'session').lines[1], '≈$258.98')
 })
 
-test('泡泡轮播：每页三行，主角在第二行；没有数据的页整页不出现', () => {
+test('泡泡轮播：每页三行，主角行放得下；没有数据的页整页不出现', () => {
   const now = Date.parse('2026-10-20T12:00:00Z')
   const view = toUsageView({
     rateLimits: [
@@ -1393,12 +1393,40 @@ test('泡泡轮播：每页三行，主角在第二行；没有数据的页整�
     assert.ok(page.lines.length <= 3, `${page.id} 至多三行`)
   }
 
-  // 第二行是这一页的主角：额度页的第二行是 5 小时窗口，上下文页是百分比，
-  // 本会话页是金额，本地页是今日金额。
-  assert.equal(pages[0].lines[1], '5 小时窗口 23%')
+  // 主角行由页面自己指定，不必是第二行。额度页与上下文页的主角是百分比：
+  // 早先按「第二行永远是主角」硬排，把「5 小时窗口 23%」八个字塞进 46px
+  // 那行，需要 355px 而可用只有 271px，超出的部分被椭圆描边压住。
+  assert.deepEqual(pages.map(p => p.hero ?? 1), [1, 1, 1, 1, 1])
+  assert.equal(pages[0].lines[1], '23%', '额度页主角是百分比本身')
   assert.equal(pages[1].lines[1], '42%')
   assert.equal(pages[2].lines[1], '≈$2.50')
   assert.equal(pages[3].lines[1], '≈$0.42')
+
+  // **每一页的每一行都要放得进气泡椭圆。** 这条是上面那次溢出的回归测试：
+  // 几何与 `bubbleSvg` 保持一致，字号按主角行 46px、其余 25 / 21px 折算。
+  // 宽度估计取汉字 1em、ASCII 0.62em（比常见无衬线体的 .55em 更宽）。
+  const CY = 112
+  const RX = 146 - 11 / 2
+  const RY = 90 - 11 / 2
+  const BASELINE = [88, 134, 172]
+  const widthOf = (text, size) => {
+    let em = 0
+    for (const ch of text) em += /[　-鿿＀-￯]/.test(ch) ? 1 : 0.62
+    return em * size
+  }
+  for (const page of pages) {
+    const hero = Math.min(page.hero ?? 1, page.lines.length - 1)
+    page.lines.forEach((line, index) => {
+      const size = index === hero && page.lines.length > 1 ? 46 : index === 0 ? 25 : 21
+      const y = page.lines.length === 1 ? 110 : page.lines.length === 2 ? 100 + index * 44 : BASELINE[index]
+      const available = 2 * RX * Math.sqrt(Math.max(0, 1 - ((y - CY) / RY) ** 2))
+      const needed = widthOf(line, size)
+      assert.ok(
+        needed <= available,
+        `${page.id} 第 ${index + 1} 行「${line}」需要 ${needed.toFixed(0)}px，可用 ${available.toFixed(0)}px`,
+      )
+    })
+  }
 
   // 没有本地扫描结果时，那一页整页不出现——不画一行「—」占位。
   // 人设页与数据无关，永远在。
@@ -1497,9 +1525,29 @@ test('气泡没有尾巴，两颗小泡朝右下指向鲸鱼且不压到它身�
   assert.equal(ellipseCenters.length, 3)
   const [big, small1, small2] = ellipseCenters
 
-  // 鲸鱼画在 translate(318 16)，原图 300×300 按 xMaxYMax 对齐，实际占
-  // x [378, 620]。保守取左边界 378 就够判断「有没有压上去」。
-  const WHALE_LEFT = 378
+  // 2. 两颗小泡都留在鲸鱼左侧，别压到脸上。
+  //
+  // **不能只看圆心那一行，也不能用固定左边界。** 鲸鱼是不规则的：小泡 1
+  // 圆心在 y=226，那里鲸鱼左缘还有 356.7，看起来放得下；但它自己的上沿
+  // （y≈212）正对着鲸鱼最窄的一处——**340.3**，于是压上去 61 平方像素。
+  // 早先代码与测试都用「鲸鱼占 x 378~620」这个错值，两种判据都放过了它。
+  //
+  // 下面这张表是逐像素解析内嵌 PNG 不透明区域得到的（画布坐标，每 5px
+  // 一行）。判据取该小泡**整个纵向跨度**内的最小左缘。
+  const WHALE_LEFT_TABLE = [
+    [205, 350.8], [210, 340.3], [215, 340.3], [220, 345.0], [225, 356.7],
+    [230, 380.1], [235, 383.6], [240, 381.3], [245, 378.9], [250, 376.6],
+    [255, 374.3], [260, 371.9], [265, 370.7], [270, 368.4], [275, 367.2],
+    [280, 367.2], [285, 367.2],
+  ]
+  /** 小泡纵向跨度内，鲸鱼最靠左的那一行的左缘。 */
+  const narrowestWhaleUnder = (cy, ry) => {
+    let worst = Infinity
+    for (const [y, left] of WHALE_LEFT_TABLE) {
+      if (y >= cy - ry && y <= cy + ry) worst = Math.min(worst, left)
+    }
+    return worst
+  }
 
   // 1. 小泡一个比一个小，一个比一个靠右下。
   assert.ok(small1.x > big.x, '小泡 1 在大泡右侧')
@@ -1507,9 +1555,18 @@ test('气泡没有尾巴，两颗小泡朝右下指向鲸鱼且不压到它身�
   assert.ok(small2.x > small1.x, '小泡 2 在小泡 1 右侧')
   assert.ok(small2.y > small1.y, '小泡 2 在小泡 1 下方')
 
-  // 2. 两颗小泡都留在鲸鱼左侧，别压到脸上（算上各自半径）。
-  assert.ok(small1.x + 15 < WHALE_LEFT, `小泡 1 的右缘 ${small1.x + 15} 不该越过鲸鱼左边界`)
-  assert.ok(small2.x + 9 < WHALE_LEFT, `小泡 2 的右缘 ${small2.x + 9} 不该越过鲸鱼左边界`)
+  // 2. 两颗小泡的右缘（含描边）都不越过该高度上鲸鱼的左缘。
+  for (const [name, p, rx, ry, stroke] of [
+    ['小泡 1', small1, 15, 10, 3.5],
+    ['小泡 2', small2, 9, 6, 3],
+  ]) {
+    const edge = narrowestWhaleUnder(p.y, ry + stroke)
+    assert.ok(Number.isFinite(edge), `${name} 的高度上要有鲸鱼左缘读数`)
+    assert.ok(
+      p.x + rx + stroke <= edge,
+      `${name} 的右缘 ${p.x + rx + stroke} 越过了鲸鱼在该高度的最左缘 ${edge}`,
+    )
+  }
 
   // 3. 两颗小泡朝右下延伸，且都在大泡之外（不压在大泡身上）。
   for (const [name, p] of [['小泡 1', small1], ['小泡 2', small2]]) {

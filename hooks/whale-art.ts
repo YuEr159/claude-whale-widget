@@ -137,19 +137,29 @@ function escapeXml(text: string): string {
  *
  * 两颗小泡从大泡右下沿同一条射线（方向约 (0.506, 0.862)）依次变小，指向
  * 鲸鱼——「越来越远、越来越小」才读得出是同一句话的余音。小泡都留在鲸鱼
- * **左侧**（鲸鱼占 x 378~620），否则会压到它脸上。
+ * **左侧**（鲸鱼不透明区域从 x≈339 起，见下方 `BUBBLE_SPILL_LIMIT`）。
  *
  * 几何以椭圆中心 (228,112)、rx 146、ry 90 为准。三行文字的基线是
  * 88 / 134 / 172：整体比椭圆中线略高，第三行离下缘留出余量，不再贴着
  * 收窄的口子。
+ *
+ * @param hero 主角行的下标。那一行用 46px 字号，其余两行用 25px / 21px。
+ *   不传时按 1 处理（三行齐全时中间那行天生是视觉重心）。
  */
-function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
+function bubbleSvg(
+  lines: readonly string[],
+  mood: WhaleMood,
+  hero: 0 | 1 | 2 = 1,
+): string {
   const tone = TONE[mood]
   const shown = lines.slice(0, 3)
+  // 下标越界时退回中间位——数据页的 `hero` 是枚举，但调用方可能传了
+  // 一个已经不存在第三行的页（两行页），夹一次比画错字号好。
+  const heroIndex = Math.min(hero, Math.max(0, shown.length - 1))
 
   const texts = shown
     .map((line, index) => {
-      const isAmount = index === 1 && shown.length > 1
+      const isAmount = index === heroIndex && shown.length > 1
       const size = isAmount ? 46 : index === 0 ? 25 : 21
       const weight = isAmount ? 800 : 600
       const color = isAmount ? tone.amount : index === 2 ? tone.hint : tone.ink
@@ -171,10 +181,17 @@ function bubbleSvg(lines: readonly string[], mood: WhaleMood): string {
     // 就足以说明「这是谁在说话」。
     `<ellipse cx="228" cy="112" rx="146" ry="90" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="11"/>` +
     // 两颗小泡：从大泡右下沿同一条射线（方向约 (0.506, 0.862)，即朝右下）
-    // 依次变小，指向鲸鱼。位置都留在鲸鱼**左侧**（鲸鱼占 x 378~620），
-    // 否则会压到它脸上。
-    `<ellipse cx="335" cy="226" rx="15" ry="10" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="7"/>` +
-    `<ellipse cx="359" cy="265" rx="9" ry="6" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="6"/>` +
+    // 依次变小，指向鲸鱼。
+    //
+    // **左移过 12px。** 原位置 (335,226) / (359,265) 是按注释里那个
+    // 「鲸鱼占 x 378~620」摆的，而那是个错误估计——逐像素解析内嵌 PNG
+    // 的不透明区域后，鲸鱼实际从 **x≈339** 就开始有像素（显示框从 318
+    // 起，图里左边约 18/256 是透明的）。按旧位置摆，第一颗小泡与鲸鱼
+    // 重叠 61 平方像素、第二颗 4 平方像素，正好压在脸上。
+    // 现在 (323,226) / (347,265)：第一颗右缘 341.5 < 339 附近的最左像素，
+    // 第二颗右缘 359 落在鲸鱼中段（那一带鲸鱼左缘在 370 开外）。
+    `<ellipse cx="321" cy="226" rx="15" ry="10" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="7"/>` +
+    `<ellipse cx="347" cy="265" rx="9" ry="6" fill="${tone.bubble}" stroke="${tone.stroke}" stroke-width="6"/>` +
     texts +
     `</g>`
   )
@@ -208,11 +225,12 @@ export const WHALE_FLOAT_AMPLITUDE = 4
  * 方固定住（模块加载时记一次），不能每帧重算——否则相位会跟着墙钟乱跳。
  *
  * @param mood 情绪，决定气泡配色
- * @param lines 气泡里最多三行文字（第一行标签、第二行金额、第三行提示）
+ * @param lines 气泡里最多三行文字
  * @param options `isAnimating` 为真时鲸鱼轻微上下浮动（SMIL，无需脚本）；
  *   `isBubbleOpen` 为假时整块气泡（含小泡）不画，只留鲸鱼。
  *   泡泡现在是常驻的，这个开关只为「画一张没有气泡的图」保留（导出、测试）。
  *   `now` 与 `epoch` 用来算负 `begin`：不传就按「刚好从头开始」处理。
+ *   `hero` 是主角行的下标，那一行用 46px，其余用 25 / 21px。
  */
 export function whaleSvg(
   mood: WhaleMood,
@@ -221,6 +239,8 @@ export function whaleSvg(
     isAnimating?: boolean
     isCompact?: boolean
     isBubbleOpen?: boolean
+    /** 主角行的下标（0/1/2）。不传按 1 处理。 */
+    hero?: 0 | 1 | 2
     /** 当前时刻（毫秒）。与 `epoch` 一起决定动画相位。 */
     now?: number
     /** 动画的零点（毫秒）。应当固定，不随重绘变化。 */
@@ -261,7 +281,7 @@ export function whaleSvg(
     // 的 `<image>` 位图，鲸鱼会整个消失（只剩矢量气泡）。详见 `register.tsx`
     // 里 `<Svg>` 那一处的说明。
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" preserveAspectRatio="xMidYMid meet" role="img">` +
-    (isBubbleOpen ? bubbleSvg(lines, mood) : '') +
+    (isBubbleOpen ? bubbleSvg(lines, mood, options.hero ?? 1) : '') +
     // 鲸鱼：原图右下角贴边，尺寸 300×300。位置与气泡是否展开无关。
     `<g transform="translate(318 16)">` +
     float +

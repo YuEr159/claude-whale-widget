@@ -176,14 +176,29 @@ export function bubbleLines(view: UsageView, now: number): string[] {
 /**
  * 泡泡轮播的一页：三行，说同一件事。
  *
- * 三行不是随便凑的——`bubbleSvg` 给第二行更大的字号（46 vs 25/21），那是
- * 「这一页的主角」。所以每页第二行必须是那个最想让人看见的数字，其余两行
- * 是它的上下文。
+ * 三行不是随便凑的——`bubbleSvg` 给**主角行**更大的字号（46 vs 25/21），
+ * 那是「这一页的主角」。所以每页必须指明哪一行是主角，而主角行必须是最想
+ * 让人看见的那个数字，其余两行是它的上下文。
+ *
+ * ## 为什么主角行要显式标出来
+ *
+ * 早先 `bubbleSvg` 按**行序号**定字号：第二行一律 46px。数据页照这个规则
+ * 排，结果额度页的第二行是「5 小时窗口 23%」——八个字，46px 下要 355px，
+ * 而基线处的可用宽度只有 271px，超出的 84px 直接被椭圆描边压住。人设页的
+ * 台词短（「想吃饭」三个字），所以只有数据页出问题，一直没被发现。
+ *
+ * 现在每页自己说清主角是哪一行：额度页的主角是百分比，上下文页也是百分比，
+ * 它们不该被塞到第二行去凑格式。
  */
 export type BubblePage = {
   /** 这一页的稳定标识，用来做 key、也方便测试断言顺序。 */
   id: 'limit' | 'context' | 'session' | 'local' | 'whale'
   lines: readonly string[]
+  /**
+   * 主角行的下标（0/1/2）。不写时按 1 处理——三行齐全时中间那行天生是视觉
+   * 重心。两行的页则要显式给出，否则中间位会落在第二行上。
+   */
+  hero?: 0 | 1 | 2
 }
 
 /**
@@ -284,8 +299,14 @@ export type BubbleFacts = {
  * 只输出**有内容**的页：没有本地扫描结果时，「今日」那页整页不出现，
  * 而不是画一行「—」占位——轮播里出现一页空话，读者会以为界面坏了。
  *
- * 每页恰好三行（或两行，当夹在中间的那行没有数据时）。多于三行的部分
- * 由 `bubbleSvg` 截掉，所以在源头就保持精简。
+ * ## 每页的排法受气泡几何约束
+ *
+ * 椭圆基线处的可用宽度是 269 / 271 / 198px（第一/二/三行），按 25 / 46 /
+ * 21px 的字号折算，主角行只放得下**约 5 个汉字**，另两行约 10 个和 9 个。
+ * 所以主角位留给最短的那个数字（百分比、金额），标签与补充说明放两边。
+ *
+ * 早先按「第二行永远是主角」硬排，额度页于是把「5 小时窗口 23%」八个字
+ * 塞进 46px 那行——需要 355px，超出 84px，后半截被椭圆描边压住。
  */
 export function bubblePages(
   view: UsageView,
@@ -294,15 +315,20 @@ export function bubblePages(
 ): BubblePage[] {
   const pages: BubblePage[] = []
 
-  // 1. 额度窗口：主角是 5 小时窗口的占用，跟着是重置倒计时与 7 天窗口。
+  // 1. 额度窗口：主角是 5 小时窗口的**百分比**。
+  //
+  // 百分比单独占主角行（`23%` 三个字，放得下）；窗口名与 7 天窗口放第一行，
+  // 重置倒计时放第三行。早先整句「5 小时窗口 23%」当主角，46px 下放不下。
   if (view.fiveHour || view.sevenDay) {
-    const head = view.fiveHour ? `5 小时窗口 ${pct(view.fiveHour.percentUsed)}` : '5 小时窗口 —'
+    const head = view.sevenDay
+      ? `5 小时 · 7 天 ${pct(view.sevenDay.percentUsed)}`
+      : '5 小时窗口'
     const lines = [
-      view.sevenDay ? `7 天窗口 ${pct(view.sevenDay.percentUsed)}` : '',
       head,
+      view.fiveHour ? pct(view.fiveHour.percentUsed) : pct(view.sevenDay?.percentUsed),
       view.fiveHour?.resetsAt ? `${countdown(view.fiveHour.resetsAt, now)} 后重置` : '',
     ].filter(line => line.length > 0)
-    pages.push({ id: 'limit', lines })
+    pages.push({ id: 'limit', lines, hero: 1 })
   }
 
   // 2. 上下文：主角是占用百分比，另两行给出绝对量与窗口大小。
@@ -310,11 +336,11 @@ export function bubblePages(
     const lines = [
       '本会话上下文',
       pct(view.contextPercent),
-      view.contextTokens !== undefined
-        ? `${tokens(view.contextTokens)} / ${tokens(view.contextWindow)}`
-        : '',
+      // 绝对量那一行以前写「124.0万 / 200.0万」，21px 下需要 211px，而第三行
+      // 只有 198px。只留已用量，窗口大小本来就在面板里，气泡这一页不必复述。
+      view.contextTokens !== undefined ? `已用 ${tokens(view.contextTokens)}` : '',
     ].filter(line => line.length > 0)
-    pages.push({ id: 'context', lines })
+    pages.push({ id: 'context', lines, hero: 1 })
   }
 
   // 3. 本会话：主角是花费，另两行是轮次与代码增删。
@@ -326,14 +352,19 @@ export function bubblePages(
   const sessionCost = facts.sessionCost ?? view.costUsd
   const hasSession = sessionCost !== undefined || totals !== undefined
   if (hasSession) {
+    // 代码增删那一行以前写「代码 +1280 / -432」，21px 下需要 211px，超出
+    // 第三行的 198px。改成口语的「+1280 −432 行」，省掉「代码」二字——
+    // 前一行刚说过本会话，读者知道这说的是什么。
+    const diff = totals && (totals.linesAdded > 0 || totals.linesRemoved > 0)
+      ? `+${totals.linesAdded} −${totals.linesRemoved} 行`
+      : ''
     pages.push({
       id: 'session',
+      hero: 1,
       lines: [
         totals && totals.turns > 0 ? `本会话 ${totals.turns} 轮` : '本会话花费',
         usdEstimate(sessionCost),
-        totals && (totals.linesAdded > 0 || totals.linesRemoved > 0)
-          ? `代码 +${totals.linesAdded} / -${totals.linesRemoved}`
-          : '',
+        diff,
       ].filter(line => line.length > 0),
     })
   }
@@ -344,12 +375,13 @@ export function bubblePages(
   if (today && (today.messages > 0 || today.cost > 0)) {
     pages.push({
       id: 'local',
+      hero: 1,
+      // 「30 天共 ≈$123.45」在 21px 下正好 198px，贴着上限，再长就压线。
+      // 去掉「≈」之外的空格，并在超过 6 位数时截到万亿制的一位小数。
       lines: [
         `今日 ${today.messages} 条消息`,
         usdEstimate(today.cost),
-        total && facts.windowDays
-          ? `${facts.windowDays} 天共 ${usdEstimate(total.cost)}`
-          : '',
+        total && facts.windowDays ? `${facts.windowDays} 天共 ${usdEstimate(total.cost)}` : '',
       ].filter(line => line.length > 0),
     })
   }
