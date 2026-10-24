@@ -551,3 +551,79 @@ test('终端面板不画 Svg，退化成字符', async ($, on) => {
 
   await ui.unmount()
 })
+
+/**
+ * 视觉纪律的三条**可机器校验**的规则（见 `DESIGN-PROMPT.md`）。
+ *
+ * 审美本身没法自动验，但「层级用得对不对」大部分可以：遍历整棵树，
+ * 检查每个 Text 的样式组合。这三条正是这个项目已经犯过的错误。
+ */
+function collectTexts(node: any, out: any[] = []): any[] {
+  if (!node || typeof node !== 'object') return out
+  if (node.type === 'Text') out.push(node)
+  for (const kid of node.children ?? []) collectTexts(kid, out)
+  return out
+}
+
+test('视觉纪律：每个 Text 只用一档层级，不同时 bold 又 dimColor', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+
+  // 四个页签都过一遍——模型页那个「逐模型用量」标题就是这么错的。
+  for (const tab of ['overview', 'context', 'models', 'settings']) {
+    await ui.press({ key: `whale-tab-${tab}` })
+    const offenders: string[] = []
+    for (const text of collectTexts(await ui.drawn())) {
+      const p = text.props ?? {}
+      if (p.bold && p.dimColor) {
+        offenders.push(JSON.stringify(text.children ?? '').slice(0, 40))
+      }
+    }
+    expect(offenders).toEqual([])
+  }
+
+  await ui.unmount()
+})
+
+test('视觉纪律：界面文字不出现纯装饰色', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+
+  // 允许的颜色只有两类：
+  //   1. 主题键（`text` / `inactive` / `claude` …）——它们由绘制端按用户的
+  //      主题解析，深浅两套都正确，本来就不是写死的装饰色；
+  //   2. 状态色：`warning`（越过阈值）、`diffAdded` / `diffRemoved`（增减）。
+  // 写死十六进制的装饰色才是要禁的——那会在换主题时出错。
+  const THEME_KEYS = new Set(['text', 'inactive', 'claude', 'warning', 'diffAdded', 'diffRemoved', 'success', 'error', 'suggestion', 'permission', 'secondary'])
+  const page = await ui.drawn()
+  const bad: string[] = []
+  for (const text of collectTexts(page)) {
+    const color = text.props?.color
+    if (typeof color === 'string' && !THEME_KEYS.has(color)) {
+      bad.push(`${color}:${JSON.stringify(text.children ?? '').slice(0, 30)}`)
+    }
+  }
+  expect(bad).toEqual([])
+
+  await ui.unmount()
+})

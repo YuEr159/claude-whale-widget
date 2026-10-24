@@ -759,8 +759,12 @@ export const register: Register = (on, options) => {
         <Text dimColor>无额度窗口（API key 或网关）</Text>
       )
 
-    // 本会话：花费与上下文压成一行，上一轮单独一行，再补上原生 /usage 的会话总量：
-    // 时长、代码增删、轮次数。
+    // 本会话：三档层次，每行只有一个粗体。
+    //
+    // 早先压成一行「花费 $3.05 · 上下文 42% 84k/200k」——整行都是正文，读者
+    // 最想先看的那个数和单位、口径挤在同一档里，没有落点。现在：**花费**与
+    // **上下文占比**各占一行、各用一个 `bold`（读者每次打开先要的两个数），
+    // token 明细退成 `dimColor` 注解，上一轮与总量再退一档。
     //
     // **「花费」这一格按插件价目表算**，与用量条、气泡同一个数。
     //
@@ -786,12 +790,14 @@ export const register: Register = (on, options) => {
     const session = (
       <Box flexDirection="column">
         <Text>
-          花费 {usdEstimate(sessionCostOfPrices ?? view.costUsd)}
-          {sessionCostOfPrices === undefined && hasNonEngineModel ? '（含引擎未收录的模型，按默认模型价估）' : ''} · 上下文{' '}
-          {pct(view.contextPercent)}
+          花费 <Text bold>{usdEstimate(sessionCostOfPrices ?? view.costUsd)}</Text>
+          {sessionCostOfPrices === undefined && hasNonEngineModel ? '（含引擎未收录的模型，按默认模型价估）' : ''}
+        </Text>
+        <Text>
+          上下文 <Text bold>{pct(view.contextPercent)}</Text>
           {view.contextTokens !== undefined
-            ? ` ${tokens(view.contextTokens)}/${tokens(view.contextWindow)}`
-            : ''}
+            ? <Text dimColor>{` ${tokens(view.contextTokens)}/${tokens(view.contextWindow)}`}</Text>
+            : null}
         </Text>
         {turn && (
           <Text dimColor>
@@ -1160,9 +1166,11 @@ export const register: Register = (on, options) => {
         ) : (
           <Box flexDirection="column">
             <Box flexDirection="row" gap={1} alignItems="center" justifyContent="space-between">
-              <Text bold dimColor>
-                逐模型用量
-              </Text>
+              {/* **不要 `bold dimColor` 同时用。** 那是两档层级叠在一个元素上：
+                  `bold` 说「这是主体」，`dimColor` 说「这是注解」，读者无从判断。
+                  这一行是页内小标题，属于「正文」档——不加粗、不压暗，靠它下面
+                  那张带底色的框把它与内容分开就够了。 */}
+              <Text>逐模型用量</Text>
               {modelRange}
             </Box>
             {/* 图、图例、图注一起装进一块圆角：它们说的是同一件事（这一段
