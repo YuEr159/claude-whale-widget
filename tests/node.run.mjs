@@ -38,6 +38,7 @@ import {
   modelRows,
   modelStackBars,
   modelStackCaption,
+  overviewCards,
   contextPartKind,
   contextPartColor,
   contextParts,
@@ -505,6 +506,42 @@ test('概览与模型页的整形', () => {
   assert.equal(two[0].share, 1, '最大的一项是 1')
   assert.ok(Math.abs(two[1].share - 1 / 3) < 1e-9, '第二项按 100/300 算出 1/3')
   assert.equal(barText(1 / 3, 6), '██░░░░', '条形按比例填充')
+})
+
+test('概览卡片：无数据显示占位，有数据按窗口重算活跃天数', () => {
+  const empty = overviewCards(undefined, [], 30, 0)
+  assert.deepEqual(empty.map(c => c.label), ['会话', '消息', '总 token', '活跃天数', '峰值时段', '常用模型'])
+  assert.ok(empty.every(c => c.value === '—'), '没数据时六个值全是占位符')
+
+  // `activeDays` 给 99（超过 30 天窗口），卡片必须按 days 重算成 2——直接
+  // 用 overview 里那个来自 400 天扫描的字段，会显示出「99 / 30」这种读数。
+  const cards = overviewCards(
+    {
+      sessions: 42,
+      activeDays: 99,
+      peakHour: 17,
+      peakHourMessages: 1234,
+      favoriteModel: 'claude-opus-5-5',
+      favoriteModelMessages: 5678,
+      totalMessages: 12345,
+      totalTokens: 9_870_000,
+    },
+    [
+      { day: '2026-10-20', input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 1, messages: 3 },
+      { day: '2026-10-21', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 0 },
+      { day: '2026-10-22', input: 200, output: 0, cacheRead: 0, cacheWrite: 0, cost: 2, messages: 5 },
+    ],
+    30,
+    12.3,
+  )
+  const byLabel = Object.fromEntries(cards.map(c => [c.label, c]))
+  assert.equal(byLabel['会话'].value, '42')
+  assert.equal(byLabel['消息'].value, '12,345')
+  assert.ok(byLabel['总 token'].value.includes('万'))
+  assert.equal(byLabel['活跃天数 / 30'].value, '2', '10-21 是空的一天，不算活跃')
+  assert.equal(byLabel['峰值时段'].value, '5 PM')
+  assert.ok(byLabel['峰值时段'].hint.includes('条'))
+  assert.equal(byLabel['常用模型'].value, 'opus-5-5', '展示名去掉 claude- 前缀')
 })
 
 test('模型名归并：同一款模型的几种写法合成一行', () => {
