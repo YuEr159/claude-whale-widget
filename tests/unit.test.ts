@@ -1169,23 +1169,50 @@ test('条形鲸鱼：朝右时镜像，且不使用根元素 transform', () => {
   }
 })
 
-test('条形鲸鱼的水花不参与镜像，跟着朝向换边', () => {
+/**
+ * 水花必须落在**空白的那一半**，不能压在鲸鱼身上。
+ *
+ * 这条是拿浏览器实际渲染的像素发现的：先写成「镜像时把 x 也按 620−x 翻」，
+ * 结果 620−236=384 正好落在她身上（取样点 alpha 全是 255、底色是肤色），
+ * 气泡被盖住，肉眼看不见。字符串层面的断言看不出来，只能按坐标算。
+ *
+ * 鲸鱼的像素占位：不镜像时是 403–603（实测肤色 span），镜像后是 332–532。
+ * 水花的 x 必须整体落在身体区间**之外**。
+ */
+test('条形鲸鱼的水花落在空白处，不压在身体上', () => {
   const now = Date.parse('2026-10-20T12:00:00Z')
-  /** 取三颗水泡的 cx。 */
-  const bubbleX = (svg: string): number[] =>
-    [...svg.matchAll(/<circle cx="(\d+(?:\.\d+)?)"/g)].map(m => Number(m[1]))
+  /** 取三颗水泡的 (cx, r)。 */
+  const bubbles = (svg: string): Array<{ x: number; r: number }> =>
+    [...svg.matchAll(/<circle cx="(\d+(?:\.\d+)?)"[^>]*r="(\d+)"/g)].map(m => ({ x: Number(m[1]), r: Number(m[2]) }))
 
-  const right = bubbleX(bandWhaleSvg('idle', now, 0, true))
-  const left = bubbleX(bandWhaleSvg('idle', now, 0, false))
+  const right = bubbles(bandWhaleSvg('idle', now, 0, true))
+  const left = bubbles(bandWhaleSvg('idle', now, 0, false))
   expect(right).toHaveLength(3)
   expect(left).toHaveLength(3)
 
-  // 朝右游时她在画布右半边，水花要在她左边（靠画布中间）——所以朝右的
-  // 水泡 x 一定大于朝左的。若水泡跟着一起镜像，两边会相同。
-  for (let i = 0; i < 3; i++) {
-    expect(right[i]).toBeGreaterThan(left[i]!)
-  }
-  // 三颗从下往上依次靠后（x 递减），不是一坨叠在一起。
-  expect(left[0]).toBeGreaterThan(left[1]!)
-  expect(left[1]).toBeGreaterThan(left[2]!)
+  // 实测的肤色占据区间（浏览器 canvas 逐像素扫出来的）。
+  const BODY_LEFT = { from: 403, to: 603 } // 朝左（不镜像）
+  const BODY_RIGHT = { from: 332, to: 532 } // 朝右（镜像后）
+
+  // **含半径，并且留 4px 余量。** 只比圆心太松（旧坐标 540/566/596 也能过），
+  // 只比「圆心±半径」又太紧：x=540、r=7 的气泡左缘 533 距身体 532 只差 1px，
+  // 浏览器采样时抗锯齿会混进肤色，看着像压上去了。留一点余量，别贴着边。
+  const MARGIN = 4
+  const isOutside = (
+    list: Array<{ x: number; r: number }>,
+    body: { from: number; to: number },
+    side: 'left' | 'right',
+  ) => list.every(b => (side === 'left' ? b.x + b.r + MARGIN < body.from : b.x - b.r - MARGIN > body.to))
+
+  // 朝左时她在右半边，水花在**左边**那片空白；朝右时反过来。
+  expect(isOutside(left, BODY_LEFT, 'left')).toBe(true)
+  expect(isOutside(right, BODY_RIGHT, 'right')).toBe(true)
+
+  // 三颗从下往上依次靠后（x 朝远离身体的方向递减/递增），不是一坨叠在一起。
+  const xsLeft = left.map(b => b.x)
+  const xsRight = right.map(b => b.x)
+  expect(xsLeft[0]).toBeGreaterThan(xsLeft[1]!)
+  expect(xsLeft[1]).toBeGreaterThan(xsLeft[2]!)
+  expect(xsRight[0]).toBeGreaterThan(xsRight[1]!)
+  expect(xsRight[1]).toBeGreaterThan(xsRight[2]!)
 })
