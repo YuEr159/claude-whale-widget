@@ -220,13 +220,21 @@ export const SWIM_STEP_COLS = 3
  *
  * 条子里的小鲸鱼只有 6 列宽：按面板的 3 列一步，等于每步挪掉自身宽度的
  * 一半，在窗口顶边看着像闪烁而不是游。挪小一点更像滑行。
- *
- * **步频不单独加时钟**：条子本来就跟着面板那条 6 秒 `clock.every` 重绘
- * （匹配器没写 `requestId`，同组件的每个实例都被 invalidate）。为动画再挂
- * 一条 2 秒时钟，代价是每分钟多 30 次 `$.session.usage()` ——那条不是免费的
- * IPC。用现成的拍子，零额外开销。
  */
 export const BAND_SWIM_STEP_COLS = 2
+
+/**
+ * 用量条的巡游时钟：一步 1.2 秒。
+ *
+ * 比面板快五倍，因为条子里的位移本来就小（一步 16px）：跟面板同拍时
+ * 每分钟只挪 20 列，看久了像静止。1.2 秒一步 ≈ 每秒 13px，是真在游。
+ *
+ * 代价：面板那条 6 秒时钟之外多一条 1.2 秒的。`$.ui.invalidate` 桌面端
+ * 上限每秒十次，1.2 秒一步远在限内；重绘的是**一行高的小树**，且
+ * `session.usage()` 在引擎侧有缓存（`session.measure` 事件才推新值），
+ * 不会每次重绘都打一次 IPC。
+ */
+export const BAND_SWIM_STEP_MS = 1_200
 
 /**
  * 巡游轨迹：等步长的三角波，右端出发、触左端折返。
@@ -267,14 +275,87 @@ export function swimOffsetFor(
  * `isBubbleOpen: false` 走的是 `whaleSvg` 里为「无气泡导出图」保留的分支，
  * 配 `isCompact` 用小图（约 48k 字符，够 6×2 字符格的框里显示清楚）。
  */
-export function bandWhaleSvg(mood: WhaleMood, now: number, epoch: number): string {
-  return whaleSvg(mood, [], {
+/**
+ * 条形鲸鱼的朝向：向右游时镜像，向左游时保持原样（原素材头朝左）。
+ *
+ * 逐像素扫过 `WHALE_ASSETS.small` 的 alpha 轮廓：头顶与喷水在左上
+ * （y≈5–20）、尾鳍在左下（y≈100–110 处向左伸出），所以原图头朝左。
+ * 向右游不镜像就是倒着游。
+ */
+export function bandWhaleFacingRight(now: number, freeCols: number): boolean {
+  const steps = Math.floor(freeCols / BAND_SWIM_STEP_COLS)
+  if (steps < 1) return false // 不游的时候按原素材朝左站着
+  const t = Math.floor(now / BAND_SWIM_STEP_MS) % (steps * 2)
+  return t < steps // 前半程向右，后半程向左
+}
+
+export function bandWhaleSvg(mood: WhaleMood, now: number, epoch: number, isFacingRight: boolean): string {
+  const svg = whaleSvg(mood, [], {
     isCompact: true,
     isBubbleOpen: false,
     isAnimating: false,
     now,
     epoch,
   })
+  // **镜像要包一层 `<g>`，不能写成根 `<svg transform=...>`。**
+  // 实测：把 `transform` 加在根元素上，整份文档渲染出来是**全透明**的
+  // （浏览器 canvas 取样 opaque = 0）——SVG 根的 `transform` 不在规范里，
+  // 各家处理不一致。包一层 `<g transform>` 则是标准做法。
+  //
+  // body 取根元素开标签之后、`</svg>` 之前的那一段，气泡插在 `</g>` 之前。
+  const open = svg.indexOf('>') + 1
+  const body = svg.slice(open, svg.lastIndexOf('</svg>'))
+  // **气泡不参与镜像。** 它在鲸鱼前进方向上；整份内容一起翻的话，气泡会
+  // 跑到她身后去。所以分两层：外层 `<g>` 只翻鲸鱼本体，气泡单独一层、
+  // 坐标按当前朝向换算。
+  const bubbles = trailBubblesSvg(now, isFacingRight)
+  const whale = isFacingRight
+    ? `<g transform="translate(${WHALE_CANVAS.width} 0) scale(-1 1)">${body}</g>`
+    : `<g>${body}</g>`
+  return svg.slice(0, open) + bubbles + whale + '</svg>'
+}
+
+/**
+ * 鲸鱼身后的三颗小水泡。
+ *
+ * 颜色取素材自带的蓝紫 `rgb(86,108,174)`（逐像素统计里除肤色外的第一主色）：
+ * 白点在浅色主题下看不见，而这是原图自己的水色，深浅两种主题都读得出「水」。
+ *
+ * 位置在画布**左半**（无气泡模式下那一整片是空的：鲸鱼钉在 x 318–618）。
+ * 这里是她的**前方**而不是身后——她永远贴着画布一侧，身后没有空间画尾迹；
+ * 反正整幅图会随朝向一起镜像，水泡总落在她前进的方向上，读起来像水花。
+ *
+ * **不要在这里手动翻 x。** 镜像由根元素的 `scale(-1 1)` 一次性完成，气泡
+ * 是同一份文档的一部分，会跟着一起翻；再翻一次就翻回去了，水泡反而压到她
+ * 身上。
+ *
+ * 三颗泡从下往上冒、依次变小变淡。全部由 `now` 算出，不依赖 SMIL——
+ * 桌面端不传 `isInteractive` 时动画不跑。
+ */
+function trailBubblesSvg(now: number, isFacingRight: boolean): string {
+  const phase = (Math.floor(now / BAND_SWIM_STEP_MS) % 3) / 3
+  // (x, y, r)：越靠上一颗越小（离她越远、越淡）。
+  // 半径按画布 620 宽的尺度给：显示到 52px 时缩 12 倍，8 只能显示成不到 1px。
+  const base = [
+    { x: 236, y: 252, r: 15 },
+    { x: 186, y: 206, r: 11 },
+    { x: 142, y: 166, r: 7 },
+  ]
+  const fill = '#566CAE'
+  const bubbles = base
+    .map((b, i) => {
+      // 每颗泡错开 1/3 周期：依次上浮、渐隐、回到起点。
+      const local = (phase + i / 3) % 1
+      // 淡一些：50% 不透明已经能在深浅两种底色上都看出来，再浓就成了色块。
+      const opacity = (0.32 * (1 - local)).toFixed(2)
+      const rise = local * 34
+      // 朝右游时她在画布右半边，气泡要在她**左前方**——也就是往画布中间靠；
+      // 朝左游时反过来。x 按朝向换算，不参与鲸鱼那层的镜像。
+      const x = isFacingRight ? WHALE_CANVAS.width - b.x : b.x
+      return `<circle cx="${x.toFixed(0)}" cy="${(b.y - rise).toFixed(1)}" r="${b.r}" fill="${fill}" opacity="${opacity}"/>`
+    })
+    .join('')
+  return `<g>${bubbles}</g>`
 }
 
 /**

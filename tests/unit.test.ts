@@ -17,7 +17,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { SWIM_STEP_COLS, WHALE_MAX_WIDTH, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
+import { SWIM_STEP_COLS, WHALE_MAX_WIDTH, bandWhaleSvg, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
 import {
   barText,
   calendarHeat,
@@ -1134,4 +1134,58 @@ test('面板底色是三档同一份：深浅交给绘制端，图表才分档',
     'userMessageBackground',
   )
   expect(panelFillFor(undefined).backgroundColor).toBe('userMessageBackground')
+})
+
+/**
+ * 条形鲸鱼的朝向与水花。
+ *
+ * 两条都是**看得到的**东西，所以断在 SVG 字符串上而不是纯函数返回值：
+ * 素材头朝左，向右游必须镜像；镜像要用一层 `<g transform>`，**不能**把
+ * `transform` 写在根 `<svg>` 上——实测那样渲染出来全透明（浏览器 canvas
+ * 取样 opaque = 0）。
+ */
+test('条形鲸鱼：朝右时镜像，且不使用根元素 transform', () => {
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  const right = bandWhaleSvg('idle', now, 0, true)
+  const left = bandWhaleSvg('idle', now, 0, false)
+
+  // 朝右：内容包在镜像的 `<g>` 里。
+  expect(right).toContain('scale(-1 1)')
+  // 朝左：不镜像。
+  expect(left).not.toContain('scale(-1 1)')
+
+  // **根元素上绝不能有 transform。** 有的话整份文档渲染为空。
+  for (const svg of [right, left]) {
+    const rootTag = svg.slice(0, svg.indexOf('>') + 1)
+    expect(rootTag).not.toContain('transform=')
+  }
+
+  // 两者都画得出鲸鱼本体与水花。
+  for (const svg of [right, left]) {
+    expect(svg).toContain('<image')
+    expect(svg).toContain('#566CAE')
+    expect(svg.startsWith('<svg')).toBe(true)
+    expect(svg.endsWith('</svg>')).toBe(true)
+  }
+})
+
+test('条形鲸鱼的水花不参与镜像，跟着朝向换边', () => {
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  /** 取三颗水泡的 cx。 */
+  const bubbleX = (svg: string): number[] =>
+    [...svg.matchAll(/<circle cx="(\d+(?:\.\d+)?)"/g)].map(m => Number(m[1]))
+
+  const right = bubbleX(bandWhaleSvg('idle', now, 0, true))
+  const left = bubbleX(bandWhaleSvg('idle', now, 0, false))
+  expect(right).toHaveLength(3)
+  expect(left).toHaveLength(3)
+
+  // 朝右游时她在画布右半边，水花要在她左边（靠画布中间）——所以朝右的
+  // 水泡 x 一定大于朝左的。若水泡跟着一起镜像，两边会相同。
+  for (let i = 0; i < 3; i++) {
+    expect(right[i]).toBeGreaterThan(left[i]!)
+  }
+  // 三颗从下往上依次靠后（x 递减），不是一坨叠在一起。
+  expect(left[0]).toBeGreaterThan(left[1]!)
+  expect(left[1]).toBeGreaterThan(left[2]!)
 })

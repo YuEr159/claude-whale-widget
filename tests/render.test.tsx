@@ -565,12 +565,13 @@ test('输入框上方用量条：摘要在右，小鲸鱼在左侧跑道里', as
   const svg = await ui.find({ type: 'Svg' })
   expect(svg).toBeDefined()
   const source = String(svg?.props?.source ?? '')
-  expect(source).not.toContain('<ellipse') // 气泡的大椭圆
-  // 但鲸鱼位图在。
+  expect(source).not.toContain('<ellipse') // 对话气泡的大椭圆
+  // 但鲸鱼位图在，且身后有水花。
   expect(source).toContain('<image')
-  // 尺寸：宽 44px、高严格按画布比例（否则 preserveAspectRatio 留白，条子被撑高）。
-  expect(Number(svg?.props?.width)).toBe(44)
-  expect(Math.abs(Number(svg?.props?.height) - 44 * (320 / 620))).toBeLessThan(0.5)
+  expect(source).toContain('#566CAE') // 水泡：素材自带的蓝紫水色
+  // 尺寸：宽 52px、高严格按画布比例（否则 preserveAspectRatio 留白，条子被撑高）。
+  expect(Number(svg?.props?.width)).toBe(52)
+  expect(Math.abs(Number(svg?.props?.height) - 52 * (320 / 620))).toBeLessThan(0.5)
 
   // 跑道存在，鲸鱼在跑道里，不在外面。
   const swim = await ui.find({ key: 'whale-band-swim' })
