@@ -68,7 +68,7 @@ import {
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { BAND_SWIM_STEP_COLS, WHALE_ASPECT, bandWhaleSvg, emblemOf, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from './whale-art.ts'
+import { BAND_SWIM_STEP_COLS, BAND_SWIM_STEP_MS, WHALE_ASPECT, bandWhaleFacingRight, bandWhaleSvg, emblemOf, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from './whale-art.ts'
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
@@ -291,6 +291,16 @@ export const register: Register = (on, options) => {
     // 面板关着时重绘是空转（引擎会缓存），但 `every` 无法知道面板开没开；
     // 6 秒一次的空转代价远小于「打开面板半天不翻页」的观感损失。
     $.clock.every(BUBBLE_PAGE_MS, () => {
+      $.ui.invalidate('ui.render')
+    })
+
+    // 用量条的巡游比面板快：条子里一步只有 16px，跟 6 秒的拍子走每分钟
+    // 才挪 20 列，看久了像静止。1.2 秒一条独立时钟，约每秒 13px，是真在游。
+    //
+    // 这条只驱动**一行高的小树**；`session.usage()` 在引擎侧是缓存值
+    // （新数字由 `session.measure` 推），所以多出来的重绘很便宜。桌面端
+    // `$.ui.invalidate` 上限每秒十次，1.2 秒一次远在限内。
+    $.clock.every(BAND_SWIM_STEP_MS, () => {
       $.ui.invalidate('ui.render')
     })
 
@@ -523,12 +533,15 @@ export const register: Register = (on, options) => {
      * 收窄后 `swimOffsetFor` 拿到更小的余量，自己就不游了。
      */
     const BAND_SWIM_COLS = 24
-    // 小鲸鱼显示尺寸：宽度取 44px（约 5.5 列），高按画布比例 ≈ 23px，
-    // 接近一行字的高度，不会把条子撑成两行。
-    const BAND_WHALE_PX = 44
+    // 小鲸鱼显示尺寸：素材的不透明区几乎铺满画布（小图实测 x 11–159 / y 2–159，
+    // 占宽 93%、占高 99%），所以框宽基本就是她本人的宽度。取 52px（约 6.5 列）、
+    // 高按画布比例 ≈ 27px，略高于一行字但仍在条子的行高内。
+    const BAND_WHALE_PX = 52
     const bandMood = moodOf(now)
     // 跑道里还要容下鲸鱼自身，「可挪动列数」要减掉它，否则到最右端会被裁。
-    const bandSwimCols = swimOffsetFor(now, BAND_SWIM_COLS - 6, BAND_SWIM_STEP_COLS)
+    const bandSwimCols = swimOffsetFor(now, BAND_SWIM_COLS - 6, BAND_SWIM_STEP_COLS, BAND_SWIM_STEP_MS)
+    // 朝向跟着相位走：向右游时镜像（原素材头朝左），折返后翻回来。
+    const bandFacingRight = bandWhaleFacingRight(now, BAND_SWIM_COLS - 6)
 
     // 注意：这里不能在 Text 里用 `<>` 或嵌套 Text。
     // 引擎的 `Fragment` 实现是「一个纵向 Box」，塞进 Text 就是
@@ -553,23 +566,21 @@ export const register: Register = (on, options) => {
             不是 `justifyContent`，是因为后者只有 4 个档位、做不出连续位移。
             跑道本身 `flexShrink` 默认允许收窄，窄窗口里自动让位给摘要。
 
-            **鲸鱼两个分支必须各自内联写 JSX**，不能先算成变量再 `{bandWhale}`：
-            预先构造的元素对象（或 `cond ? <A/> : <B/>` 整体）会被 JSX 运行时
-            当成 fragment 包成纵向 Box，`Text` 在 Box 里渲染为空——实测终端上
-            整个位置是空的。内联写成 `<Box>{cond ? <X/> : <Y/>}</Box>` 也有同样
-            问题，所以拆成两个完整分支。 */}
+            **不要写成 `cond ? <A/> : <B/>`。** 引擎的 JSX 运行时会把三元
+            整体包成一个 fragment（空纵向 Box），`Text` 在 Box 里渲染为空——
+            实测终端上整个位置是空的。两个分支各自内联、用 `&&` 分开写，就
+            不会出现那个占位 fragment。 */}
         <Box key="whale-band-swim" flexDirection="row" width={BAND_SWIM_COLS}>
           <Box marginLeft={bandSwimCols}>
-            {Svg ? (
+            {Svg && (
               <Svg
-                source={bandWhaleSvg(bandMood, now, WHALE_FLOAT_EPOCH)}
+                source={bandWhaleSvg(bandMood, now, WHALE_FLOAT_EPOCH, bandFacingRight)}
                 alt={`小鲸鱼：${bandMood}`}
                 width={BAND_WHALE_PX}
                 height={BAND_WHALE_PX * WHALE_ASPECT}
               />
-            ) : (
-              <Text>{emblemOf(bandMood)}</Text>
             )}
+            {!Svg && <Text>{emblemOf(bandMood)}</Text>}
           </Box>
         </Box>
         <Box key="whale-band-spacer" flexGrow={1} />
