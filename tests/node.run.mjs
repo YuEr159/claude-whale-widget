@@ -236,9 +236,11 @@ test('情绪随一天里的时间变化，与额度无关', () => {
   assert.equal(moodOf(at(20, 59)), 'busy')
   assert.equal(moodOf(at(21)), 'tired')
   assert.equal(moodOf(at(23, 59)), 'tired')
-  // 一天转一圈，五个情绪都出现。
+  // 一天转一圈，五个情绪都出现——且具体是哪五档也要钉住，否则把两档对调
+  // 仍然会过。
   const moods = new Set([...Array(24).keys()].map(hour => moodOf(at(hour))))
   assert.equal(moods.size, 5)
+  assert.deepEqual([...moods].sort(), ['busy', 'idle', 'sleep', 'tired', 'working'])
 })
 
 test('usage 视图挑窗口', () => {
@@ -493,6 +495,16 @@ test('概览与模型页的整形', () => {
   assert.equal(rows[0].cost, null)
   assert.equal(rows[0].share, 1)
   assert.equal(barText(1, 4), '████')
+
+  // `share` 是「相对最大值」——过滤后只剩一行时它恒为 1，断言 1 没有信息量。
+  // 这里用两个都有效的模型，验证它真的按 token 比例算。
+  const two = modelRows([
+    { model: 'a', isPriced: true, input: 300, output: 0, cacheWrite: 0, cacheRead: 0, cost: 1, messages: 1 },
+    { model: 'b', isPriced: true, input: 100, output: 0, cacheWrite: 0, cacheRead: 0, cost: 1, messages: 1 },
+  ])
+  assert.equal(two[0].share, 1, '最大的一项是 1')
+  assert.ok(Math.abs(two[1].share - 1 / 3) < 1e-9, '第二项按 100/300 算出 1/3')
+  assert.equal(barText(1 / 3, 6), '██░░░░', '条形按比例填充')
 })
 
 test('模型名归并：同一款模型的几种写法合成一行', () => {

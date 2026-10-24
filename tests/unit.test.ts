@@ -187,11 +187,13 @@ test('情绪随一天里的时间变化，与额度无关', () => {
   expect(moodOf(at(23, 59))).toBe('tired')
 
   // 一整天转一圈，五个情绪都该出现——否则某几段写成了同一个。
-  const seen = new Set<number>()
-  for (let hour = 0; hour < 24; hour++) seen.add(new Date(2026, 9, 22, hour).getHours())
-  expect(seen.size).toBe(24)
+  //
+  // 早先这里还有一句 `new Set([...Array(24)].map(h => new Date(...).getHours())).size === 24`，
+  // 那是在断言 `Date` 有 24 个小时，完全不碰产品代码，恒真。
   const moods = new Set([...Array(24).keys()].map(hour => moodOf(at(hour))))
   expect(moods.size).toBe(5)
+  // 五档具体是哪五档，也一并钉住——只数个数的话，把两档对调仍然会过。
+  expect([...moods].sort()).toEqual(['busy', 'idle', 'sleep', 'tired', 'working'])
 })
 
 test('usage 视图挑出 5h/7d 两个窗口', () => {
@@ -412,7 +414,27 @@ test('形状不对的 breakdown 返回 undefined', () => {
   expect(toContextDetail(undefined)).toBeUndefined()
   expect(toContextDetail({})).toBeUndefined()
   expect(toContextDetail({ categories: [] })).toBeUndefined()
-  expect(toContextDetail({ categories: [], rawMaxTokens: 100 })).toBeDefined()
+})
+
+test('最小可用的 breakdown 给出确定的默认值，不是任意对象', () => {
+  // 只给 `categories` 与 `rawMaxTokens` 两个必需字段，其余都该落到默认值上。
+  // 早先这里只断言 `toBeDefined()`——返回一个空对象、字段全错都能过。
+  const detail = toContextDetail({ categories: [], rawMaxTokens: 100 })
+  expect(detail).toBeDefined()
+  expect(detail).toEqual({
+    totalTokens: 0,
+    rawMaxTokens: 100,
+    percentage: 0,
+    source: 'auto',
+    isAutoCompactEnabled: false,
+    autoCompactThreshold: undefined,
+    rows: [],
+    model: '',
+    memoryFiles: [],
+    mcpTools: [],
+    agents: [],
+    slashCommands: undefined,
+  })
 })
 
 
@@ -643,13 +665,48 @@ test('模型排行按 token 排，不看金额', () => {
   // 第三方模型没有价格，但 token 多，应排在前面
   expect(rows[0]?.model).toBe('third-party')
   expect(rows[0]?.cost).toBe(null)
+  // `share` 是「相对最大值的比例」，最大那一项恒为 1——单看它等于 1 没有
+  // 任何信息量。要断的是**第二项**：它按 token 比例算出来，不是随便一个数。
   expect(rows[0]?.share).toBe(1)
+  expect(Math.abs((rows[1]?.share ?? 0) - 10 / 1000)).toBeLessThan(1e-9)
 })
 
 test('概览卡片六张，缺数据时全为占位', () => {
   const cards = overviewCards(undefined, [], 30, 0)
   expect(cards.map(c => c.label)).toEqual(['会话', '消息', '总 token', '活跃天数', '峰值时段', '常用模型'])
   expect(cards.every(c => c.value === '—')).toBe(true)
+})
+
+test('概览卡片有数据时给出真实读数', () => {
+  // 有数据分支此前零覆盖——只测了 `undefined` 那一支。
+  const overview = {
+    sessions: 42,
+    activeDays: 99, // 刻意给一个超过窗口的天数，验证卡片不直接用它
+    peakHour: 17,
+    peakHourMessages: 1234,
+    favoriteModel: 'claude-opus-5-5',
+    favoriteModelMessages: 5678,
+    totalMessages: 12345,
+    totalTokens: 9_870_000,
+  }
+  const days = [
+    { day: '2026-10-20', input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 1, messages: 3 },
+    { day: '2026-10-21', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 0 },
+    { day: '2026-10-22', input: 200, output: 0, cacheRead: 0, cacheWrite: 0, cost: 2, messages: 5 },
+  ]
+  const cards = overviewCards(overview as never, days as never, 30, 12.3)
+  const byLabel = Object.fromEntries(cards.map(c => [c.label, c]))
+
+  expect(byLabel['会话']?.value).toBe('42')
+  expect(byLabel['消息']?.value).toBe('12,345') // toLocaleString 带千分位
+  expect(byLabel['总 token']?.value).toContain('万')
+  // **活跃天数按 `days` 重算，不用 `overview.activeDays`。**
+  // 那个字段来自 400 天扫描窗口，直接用在 30 天的分母上会显示「/ 30 → 99」。
+  expect(byLabel['活跃天数 / 30']?.value).toBe('2') // 10-21 是空的一天，不算
+  expect(byLabel['峰值时段']?.value).toBe('5 PM')
+  expect(byLabel['峰值时段']?.hint).toContain('条')
+  // 模型名去掉了 `claude-` 前缀。
+  expect(byLabel['常用模型']?.value).toBe('opus-5-5')
 })
 
 test('模型页过滤引擎内部标识', () => {
@@ -909,6 +966,10 @@ test('两张图在空数据时也给出合法 SVG', () => {
     expect(svg.startsWith('<svg')).toBe(true)
     expect(svg.endsWith('</svg>')).toBe(true)
     expect(svg.includes('NaN')).toBe(false)
+    // **空数据也要画出东西来**：只断言「是合法 SVG」的话，返回一个空的
+    // `<svg></svg>` 也能过，而读者看到的是一块白板。至少要有一条线/一块底。
+    const shapes = (svg.match(/<(rect|line|path|circle|text)\b/g) ?? []).length
+    expect(shapes).toBeGreaterThan(0)
   }
 })
 
