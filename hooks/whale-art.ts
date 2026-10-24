@@ -216,26 +216,65 @@ export const SWIM_STEP_MS = 6_000
 export const SWIM_STEP_COLS = 3
 
 /**
- * 巡游轨迹：一步 `SWIM_STEP_COLS` 列的三角波，右端出发、触左端折返。
+ * 用量条上的巡游一步只用 2 列（16px）。
+ *
+ * 条子里的小鲸鱼只有 6 列宽：按面板的 3 列一步，等于每步挪掉自身宽度的
+ * 一半，在窗口顶边看着像闪烁而不是游。挪小一点更像滑行。
+ *
+ * **步频不单独加时钟**：条子本来就跟着面板那条 6 秒 `clock.every` 重绘
+ * （匹配器没写 `requestId`，同组件的每个实例都被 invalidate）。为动画再挂
+ * 一条 2 秒时钟，代价是每分钟多 30 次 `$.session.usage()` ——那条不是免费的
+ * IPC。用现成的拍子，零额外开销。
+ */
+export const BAND_SWIM_STEP_COLS = 2
+
+/**
+ * 巡游轨迹：等步长的三角波，右端出发、触左端折返。
  *
  * @param now 当前时刻（毫秒，epoch）
- * @param freeCols 鲸鱼可以挪动的列数 = 面板列数 − 立绘占的列数。
- *   不满一步（< 3 列）就不游——挪不动的地方硬摆，看着像抖动不像巡游。
+ * @param freeCols 鲸鱼可以挪动的列数 = 可用列数 − 立绘占的列数。
+ *   不满一步（`freeCols < stepCols`）就不游——挪不动的地方硬摆，像抖动不像巡游。
+ * @param stepCols 一步几列：面板用 3，用量条用 `BAND_SWIM_STEP_COLS`。
+ * @param stepMs 一步几毫秒：默认 6 秒（与泡泡翻页同拍）。
  * @returns 立绘这一行要向左让出的列数（0 = 贴右端，即没有巡游时的样子）。
  *
  * 相位直接由墙钟取模，不记任何状态：面板开在哪一刻，就从轨迹的哪一刻接着
- * 走；关掉再开不会跳回起点。单程步数取 `floor(freeCols / 步长)`，左端点
- * 因此可能比最左余量少走不到一步——余量留在左边，两个折返点各只停留一步，
- * 相邻两步的位移恒等，没有「到头愣一下」的顿挫。
+ * 走；关掉再开不会跳回起点。单程步数取 `floor(freeCols / stepCols)`，右端
+ * 可能留不出整步的余量——两个折返点各只停留一步，相邻两步的位移恒等，没有
+ * 「到头愣一下」的顿挫。
  *
  * 100 列面板余量约 48 列：单程 16 步 ≈ 1.6 分钟，一趟来回约 3.2 分钟；越宽游得越久。
  */
-export function swimOffsetFor(now: number, freeCols: number): number {
-  const steps = Math.floor(freeCols / SWIM_STEP_COLS)
+export function swimOffsetFor(
+  now: number,
+  freeCols: number,
+  stepCols: number = SWIM_STEP_COLS,
+  stepMs: number = SWIM_STEP_MS,
+): number {
+  const steps = Math.floor(freeCols / stepCols)
   if (steps < 1) return 0
-  const t = Math.floor(now / SWIM_STEP_MS) % (steps * 2)
+  const t = Math.floor(now / stepMs) % (steps * 2)
   const step = t <= steps ? t : steps * 2 - t
-  return step * SWIM_STEP_COLS
+  return step * stepCols
+}
+
+/**
+ * 用量条的小鲸鱼：只画鲸鱼本体，不画气泡。
+ *
+ * 气泡是三行 21–46px 字号的文字，最小可读尺寸就顶到 150px 高——塞进
+ * 一行高的条子里只会糊成一团色块。条子的职责是「一眼知道有没有活、点得开
+ * 面板」，数字本来就在那行的摘要文字里，鲸鱼只负责证明挂件活着。
+ * `isBubbleOpen: false` 走的是 `whaleSvg` 里为「无气泡导出图」保留的分支，
+ * 配 `isCompact` 用小图（约 48k 字符，够 6×2 字符格的框里显示清楚）。
+ */
+export function bandWhaleSvg(mood: WhaleMood, now: number, epoch: number): string {
+  return whaleSvg(mood, [], {
+    isCompact: true,
+    isBubbleOpen: false,
+    isAnimating: false,
+    now,
+    epoch,
+  })
 }
 
 /**

@@ -68,7 +68,7 @@ import {
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { WHALE_ASPECT, emblemOf, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from './whale-art.ts'
+import { BAND_SWIM_STEP_COLS, WHALE_ASPECT, bandWhaleSvg, emblemOf, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from './whale-art.ts'
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
@@ -474,8 +474,9 @@ export const register: Register = (on, options) => {
   ).catch(async ($, e, next) => next(e))
 
   // ---------------- 输入框上方的用量条 ----------------
-  // 只放摘要与面板入口，不放任何形象：不占额外列宽，也不与输入区的
-  // 原生元素争位置。
+  // 摘要与面板入口靠右；**左侧的空白留给小鲸鱼巡游**（用户要的「在用量条
+  // 空白处来回游」）。条子只有一行高，所以只画鲸鱼本体、不画气泡——气泡是
+  // 三行 21–46px 的字，最小可读尺寸就顶到 150px。数字本来就在摘要里。
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
     const prefsNow = heldPrefs.value ?? DEFAULT_PREFS
@@ -505,6 +506,30 @@ export const register: Register = (on, options) => {
     const summary = bandSummary(view, metrics, now, bandSessionCost)
 
     const { Box, Text, Button } = $.ui.resolve(e)
+    // **按 surface 判断，不靠元素表探测。** 终端的元素表里没有 `Svg`（引擎
+    // 文档：terminal 只有 `Raster` 与 `Image`），但真人终端与测试宿主给出的
+    // 表并不一致：`'Svg' in table` 在后者里为真，于是走进 Svg 分支、渲染成
+    // 空。真实终端上 Svg 也画不出内嵌位图，直接不看它。
+    const table = $.ui.resolve(e)
+    const Svg = e.surface === 'terminal' || !('Svg' in table) ? undefined : table.Svg
+
+    /**
+     * 鲸鱼的巡游跑道（列）。左上角这一整段在本挂件出现前就一直是空的：
+     * 摘要与「面板」按钮靠右，`flex-end` 把内容全推到右边去。
+     *
+     * **跑道宽度固定**，不跟着摘要长度算——`summary` 随额度、倒计时、
+     * 花费随时变长变短，算剩余宽度的代码估错一个字符就会换行、把条子
+     * 变成两行高。固定的跑道只在极窄的窗口里被引擎按 flexShrink 收窄，
+     * 收窄后 `swimOffsetFor` 拿到更小的余量，自己就不游了。
+     */
+    const BAND_SWIM_COLS = 24
+    // 小鲸鱼显示尺寸：宽度取 44px（约 5.5 列），高按画布比例 ≈ 23px，
+    // 接近一行字的高度，不会把条子撑成两行。
+    const BAND_WHALE_PX = 44
+    const bandMood = moodOf(now)
+    // 跑道里还要容下鲸鱼自身，「可挪动列数」要减掉它，否则到最右端会被裁。
+    const bandSwimCols = swimOffsetFor(now, BAND_SWIM_COLS - 6, BAND_SWIM_STEP_COLS)
+
     // 注意：这里不能在 Text 里用 `<>` 或嵌套 Text。
     // 引擎的 `Fragment` 实现是「一个纵向 Box」，塞进 Text 就是
     // `Box inside an inline element`，整棵树被拒、引擎改画它自己的，
@@ -524,6 +549,30 @@ export const register: Register = (on, options) => {
         width={e.props.bodyColumns}
         gap={1}
       >
+        {/* 跑道：宽度固定，里面的鲸鱼用 `marginLeft` 左右挪。用 margin 而
+            不是 `justifyContent`，是因为后者只有 4 个档位、做不出连续位移。
+            跑道本身 `flexShrink` 默认允许收窄，窄窗口里自动让位给摘要。
+
+            **鲸鱼两个分支必须各自内联写 JSX**，不能先算成变量再 `{bandWhale}`：
+            预先构造的元素对象（或 `cond ? <A/> : <B/>` 整体）会被 JSX 运行时
+            当成 fragment 包成纵向 Box，`Text` 在 Box 里渲染为空——实测终端上
+            整个位置是空的。内联写成 `<Box>{cond ? <X/> : <Y/>}</Box>` 也有同样
+            问题，所以拆成两个完整分支。 */}
+        <Box key="whale-band-swim" flexDirection="row" width={BAND_SWIM_COLS}>
+          <Box marginLeft={bandSwimCols}>
+            {Svg ? (
+              <Svg
+                source={bandWhaleSvg(bandMood, now, WHALE_FLOAT_EPOCH)}
+                alt={`小鲸鱼：${bandMood}`}
+                width={BAND_WHALE_PX}
+                height={BAND_WHALE_PX * WHALE_ASPECT}
+              />
+            ) : (
+              <Text>{emblemOf(bandMood)}</Text>
+            )}
+          </Box>
+        </Box>
+        <Box key="whale-band-spacer" flexGrow={1} />
         <Text dimColor>{summary}</Text>
         {/* 选上「代码改动」但还没改过：明说，不留空。 */}
         {showsDiff && !hasDiff && <Text dimColor>本会话还没有代码改动</Text>}
@@ -550,7 +599,9 @@ export const register: Register = (on, options) => {
     // Pane 可能画在终端或桌面：终端没有 Svg，缺 Svg 时退化成文字版。
     const table = $.ui.resolve(e)
     const { Box, Text, Button } = table
-    const Svg = 'Svg' in table ? table.Svg : undefined
+    // 按 surface 判断而不是探测元素表——理由同用量条那处：测试宿主的终端
+    // 表里带着 `Svg`，探测会得出「能画图」，实际渲染为空。
+    const Svg = e.surface === 'terminal' || !('Svg' in table) ? undefined : table.Svg
     const Select = 'Select' in table ? table.Select : undefined
 
     const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)

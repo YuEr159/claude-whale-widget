@@ -531,7 +531,15 @@ test('取消最后一个口径时给出提示，而不是静默无视', async ($
   await ui.unmount()
 })
 
-test('输入框上方有用量条：摘要 + 面板入口，但没有形象', async ($, on) => {
+/**
+ * 用量条：摘要 + 面板入口 + **左侧巡游的小鲸鱼**。
+ *
+ * 早先这里断言「不画任何形象」（`expect(find({type:'Svg'})).toBeUndefined()`），
+ * 那是旧设计——条子当时只做摘要。现在用户要的是「在用量条界面空白处来回
+ * 游」，左侧那片空白正是它的跑道。断言因此反过来：**桌面端必须有 Svg**，
+ * 且它落在跑道里（`whale-band-swim`），不是挤在摘要边上。
+ */
+test('输入框上方用量条：摘要在右，小鲸鱼在左侧跑道里', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -550,19 +558,82 @@ test('输入框上方有用量条：摘要 + 面板入口，但没有形象', as
     viewport: { columns: 120, rows: 40 },
   })
 
-  // 用量条本身与入口都在
-  const band = await ui.find({ key: 'whale-band' })
-  expect(band).toBeDefined()
+  expect(await ui.find({ key: 'whale-band' })).toBeDefined()
   expect(await ui.find({ key: 'whale-open' })).toBeDefined()
-  // 但不再画任何形象：既没有 Svg，也没有 emoji 格
-  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
-  const kids = (await ui.drawn() as any).children ?? []
-  expect(kids.every((kid: any) => kid?.type !== 'Svg')).toBe(true)
+
+  // 鲸鱼真的画了，而且只画鲸鱼本体——不画气泡（一行高的条子放不下气泡文字）。
+  const svg = await ui.find({ type: 'Svg' })
+  expect(svg).toBeDefined()
+  const source = String(svg?.props?.source ?? '')
+  expect(source).not.toContain('<ellipse') // 气泡的大椭圆
+  // 但鲸鱼位图在。
+  expect(source).toContain('<image')
+  // 尺寸：宽 44px、高严格按画布比例（否则 preserveAspectRatio 留白，条子被撑高）。
+  expect(Number(svg?.props?.width)).toBe(44)
+  expect(Math.abs(Number(svg?.props?.height) - 44 * (320 / 620))).toBeLessThan(0.5)
+
+  // 跑道存在，鲸鱼在跑道里，不在外面。
+  const swim = await ui.find({ key: 'whale-band-swim' })
+  expect(swim).toBeDefined()
+  expect(await ui.find({ key: 'whale-band-spacer' })).toBeDefined()
 
   await ui.unmount()
 })
 
-test('终端上用量条同样只有文字与入口', async ($, on) => {
+/**
+ * 巡游：推进时钟，跑道里的鲸鱼 `marginLeft` 变大（向右挪）。
+ *
+ * **不断言「推 6 秒正好走 3 步」。** `mock.clock.advance` 只是把时钟拨到
+ * 未来，**不会逐拍触发** `clock.every`——真实会话里那 6 秒内有 3 次定时
+ * 重绘，测试里只有测试自己调的那几次 `redraw()`。断言「拨过去之后位置
+ * 变大了、且越拨越大」就够：这守的是「位移由时钟驱动」这一点，而不是
+ * 时钟推进的实现细节。
+ */
+test('用量条的鲸鱼会随时间向右挪动', async ($, on) => {
+  const clock = mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: {
+      hasSurvey: false,
+      isWorking: false,
+      maxRows: 10,
+      bodyColumns: 100,
+      scroll: { offset: 0, bodyRows: 10 },
+      view: {},
+    },
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  /** 跑道里包着鲸鱼的那个 Box 的 `marginLeft`。 */
+  const offsetOf = async (): Promise<number> => {
+    const swim = await ui.find({ key: 'whale-band-swim' }) as any
+    const inner = swim?.children?.[0]
+    return Number(inner?.props?.marginLeft ?? 0)
+  }
+
+  const start = await offsetOf()
+  expect(start).toBe(0) // 整点相位 0：贴左端起步
+
+  await clock.advance(6_000)
+  await ui.redraw()
+  const later = await offsetOf()
+  expect(later).toBeGreaterThan(start)
+
+  await clock.advance(6_000)
+  await ui.redraw()
+  expect(await offsetOf()).toBeGreaterThan(later)
+
+  // 位移是 2 列的整数倍（`BAND_SWIM_STEP_COLS`），不是随便一个数。
+  expect(later % 2).toBe(0)
+
+  await ui.unmount()
+})
+
+test('终端上用量条没有 Svg，退化成字符鲸鱼', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -583,9 +654,9 @@ test('终端上用量条同样只有文字与入口', async ($, on) => {
 
   expect(await ui.find({ key: 'whale-band' })).toBeDefined()
   expect(await ui.find({ key: 'whale-open' })).toBeDefined()
-  const kids = (await ui.drawn() as any).children ?? []
-  // 第一个子元素是摘要文字，不是 emoji
-  expect(kids[0]?.type).toBe('Text')
+  // 终端元素表里没有 Svg，鲸鱼退化成文字。
+  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  expect(JSON.stringify(await ui.drawn())).toMatch(/🐳|🐋|✦|·|鲸/)
 
   await ui.unmount()
 })
