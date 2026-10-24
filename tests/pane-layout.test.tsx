@@ -387,3 +387,77 @@ test('同一天的不同钟点画出不同的人设台词', async ($, on) => {
 
   await ui.unmount()
 })
+
+/**
+ * 各档面板宽度下，鲸鱼都画得出来、比例正确、数据区不是空的。
+ *
+ * 桌面端 3.x 把右侧栏重新排过，停靠宽度随窗口变化。鲸鱼宽度是固定的
+ * 380px，不随面板变；早期测试只覆盖了 100 列和 60 列两档，中间这一段
+ * 「宽到能放下、又不算极窄」的区间没有覆盖——而它正是新版侧栏最常落到的
+ * 范围。这里把 110 / 140 / 180 三档钉住，任何一档画不出内容、比例算错
+ * 或鲸鱼超宽都会变红。
+ */
+for (const cols of [110, 140, 180]) {
+  test(`停靠面板 ${cols} 列：鲸鱼 380px、比例正确、数据区非空`, async ($, on) => {
+    mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+    mock.env(on, { HOME: 'C:/Users/test' })
+
+    const ui = await $.ui.mount({
+      plugin: 'whale-usage',
+      surface: 'desktop',
+      component: 'Pane',
+      requestId: 'whale',
+      props: props(cols),
+      viewport: { columns: cols + 80, rows: 50 },
+    })
+
+    const tree = await ui.drawn() as any
+    const svgs = findSvgs(tree)
+    const whale = svgs[svgs.length - 1]
+    expect(Number(whale?.props?.width)).toBe(380)
+    expect(Math.abs(Number(whale?.props?.height) - 380 * (320 / 620))).toBeLessThan(0.5)
+
+    // 数据区真的画了字，不是一张只有鲸鱼的空白页。
+    expect(JSON.stringify(tree).length).toBeGreaterThan(2000)
+
+    await ui.unmount()
+  })
+}
+
+/**
+ * 内联面板不撑满高度，鲸鱼按可用宽度收窄。
+ *
+ * `minHeight` 只对停靠面板给（内联面板的高度由内容决定），这条守的是
+ * 「判断条件别写反」——写反了内联面板会多出一条空白，鲸鱼被推到看不见的地方。
+ */
+test('内联面板不撑高，鲸鱼按可用宽度收窄', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: { ...props(40), placement: 'inline' as const },
+    viewport: { columns: 60, rows: 50 },
+  })
+
+  const tree = await ui.drawn() as any
+  expect(tree.props.minHeight).toBeUndefined()
+
+  const svgs = findSvgs(tree)
+  const width = Number(svgs[svgs.length - 1]?.props?.width ?? 0)
+  expect(width).toBeGreaterThan(0)
+  expect(width).toBeLessThanOrEqual((40 - 1) * 8 + 0.5)
+
+  await ui.unmount()
+})
+
+/** 收集树里所有 Svg，鲸鱼是最后一个。 */
+function findSvgs(node: any, out: any[] = []): any[] {
+  if (!node || typeof node !== 'object') return out
+  if (node.type === 'Svg') out.push(node)
+  for (const kid of node.children ?? []) findSvgs(kid, out)
+  return out
+}
