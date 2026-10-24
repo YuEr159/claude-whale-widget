@@ -18,6 +18,16 @@ export const WHALE_CANVAS = { width: 620, height: 320 } as const
 export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
 
 /**
+ * 鲸鱼位图在画布里的位置与边长。
+ *
+ * 单独提出来是为了**镜像**：`bandWhaleSvg` 要绕鲸鱼自己的中线翻，得知道
+ * 她占哪一段；写死两份迟早对不上。改这里，绘制与镜像一起跟着变。
+ */
+const WHALE_GROUP_X = 318
+const WHALE_GROUP_Y = 16
+const WHALE_IMAGE_W = 300
+
+/**
  * 立绘的最大显示宽度，也是**默认尺寸**（设置页 100% 档）。
  *
  * 从 300 提到 380：停靠面板常见 100~140 列（约 800~1120px），300px 的立绘
@@ -302,15 +312,21 @@ export function bandWhaleSvg(mood: WhaleMood, now: number, epoch: number, isFaci
   // （浏览器 canvas 取样 opaque = 0）——SVG 根的 `transform` 不在规范里，
   // 各家处理不一致。包一层 `<g transform>` 则是标准做法。
   //
-  // body 取根元素开标签之后、`</svg>` 之前的那一段，气泡插在 `</g>` 之前。
+  // ## 为什么绕鲸鱼自己的中线翻，而不是绕画布中线
+  //
+  // 鲸鱼钉在画布**右半边**（`translate(318 16)`，占 x 318–618）。绕画布中线
+  // 翻（`translate(620 0) scale(-1 1)`）会把她整条搬到**左半边**——实测
+  // 肤色像素的 span 从 318–618 变成 2–302，看着像换了个位置，不是换了个朝向。
+  //
+  // 正确做法是绕她自己包围盒的中线翻：先把 x 移到 0，翻，再移回去。
+  // `translate(2a) scale(-1 1)` = 关于 x=a 的镜像，这里 a 取鲸鱼框内中线。
   const open = svg.indexOf('>') + 1
   const body = svg.slice(open, svg.lastIndexOf('</svg>'))
-  // **气泡不参与镜像。** 它在鲸鱼前进方向上；整份内容一起翻的话，气泡会
-  // 跑到她身后去。所以分两层：外层 `<g>` 只翻鲸鱼本体，气泡单独一层、
-  // 坐标按当前朝向换算。
   const bubbles = trailBubblesSvg(now, isFacingRight)
+  // 鲸鱼框的中线：`translate` 的 318 加上 image 宽 300 的一半。
+  const whaleMidX = WHALE_GROUP_X + WHALE_IMAGE_W / 2
   const whale = isFacingRight
-    ? `<g transform="translate(${WHALE_CANVAS.width} 0) scale(-1 1)">${body}</g>`
+    ? `<g transform="translate(${whaleMidX * 2} 0) scale(-1 1)">${body}</g>`
     : `<g>${body}</g>`
   return svg.slice(0, open) + bubbles + whale + '</svg>'
 }
@@ -321,26 +337,40 @@ export function bandWhaleSvg(mood: WhaleMood, now: number, epoch: number, isFaci
  * 颜色取素材自带的蓝紫 `rgb(86,108,174)`（逐像素统计里除肤色外的第一主色）：
  * 白点在浅色主题下看不见，而这是原图自己的水色，深浅两种主题都读得出「水」。
  *
- * 位置在画布**左半**（无气泡模式下那一整片是空的：鲸鱼钉在 x 318–618）。
- * 这里是她的**前方**而不是身后——她永远贴着画布一侧，身后没有空间画尾迹；
- * 反正整幅图会随朝向一起镜像，水泡总落在她前进的方向上，读起来像水花。
+ * ## 位置：永远在**空着的那一半**
  *
- * **不要在这里手动翻 x。** 镜像由根元素的 `scale(-1 1)` 一次性完成，气泡
- * 是同一份文档的一部分，会跟着一起翻；再翻一次就翻回去了，水泡反而压到她
- * 身上。
+ * 鲸鱼钉在画布右半边（x 318–618），左半边是空的。所以：
+ * - 朝左游（不镜像）→ 她朝左，前方是左边那片空白，气泡放 x 142–236；
+ * - 朝右游（镜像，她仍占据 318–618 那段像素位置）→ 气泡放她**右边**
+ *   那片空的 532–620 一侧。
+ *
+ * **踩过的坑**：先写成「镜像时把 x 也按 620−x 翻」，结果 620−236=384 正好
+ * 落在她身上（实测取样点的 alpha 全是 255、底色是肤色，气泡被盖住）。
+ * 镜像只翻鲸鱼那一层，气泡层不翻，所以它的坐标要按「空白在哪边」直接给。
  *
  * 三颗泡从下往上冒、依次变小变淡。全部由 `now` 算出，不依赖 SMIL——
  * 桌面端不传 `isInteractive` 时动画不跑。
  */
 function trailBubblesSvg(now: number, isFacingRight: boolean): string {
   const phase = (Math.floor(now / BAND_SWIM_STEP_MS) % 3) / 3
-  // (x, y, r)：越靠上一颗越小（离她越远、越淡）。
+  // 朝左站时的 (x, y, r)：越靠上一颗越小（离她越远、越淡）。
   // 半径按画布 620 宽的尺度给：显示到 52px 时缩 12 倍，8 只能显示成不到 1px。
-  const base = [
+  const whenLeft = [
     { x: 236, y: 252, r: 15 },
     { x: 186, y: 206, r: 11 },
     { x: 142, y: 166, r: 7 },
   ]
+  // 朝右时整体挪到画布右侧那段空白里：`620 − x` 会落回她身上，所以是
+  // 关于画布中线之外的一个偏移——直接把左半边的三个 x 平移 `560` 太大，
+  // 用「贴右侧边、由下往上收」的一组独立坐标。
+  // 朝右（镜像后）时她仍占据 332–532 这段像素位置（实测肤色 span），
+  // 空白只有 532–620 那一窄条。三颗泡都要落在里面：x 取 545 / 580 / 605。
+  const whenRight = [
+    { x: 600, y: 252, r: 13 },
+    { x: 572, y: 206, r: 9 },
+    { x: 548, y: 166, r: 6 },
+  ]
+  const base = isFacingRight ? whenRight : whenLeft
   const fill = '#566CAE'
   const bubbles = base
     .map((b, i) => {
@@ -349,10 +379,7 @@ function trailBubblesSvg(now: number, isFacingRight: boolean): string {
       // 淡一些：50% 不透明已经能在深浅两种底色上都看出来，再浓就成了色块。
       const opacity = (0.32 * (1 - local)).toFixed(2)
       const rise = local * 34
-      // 朝右游时她在画布右半边，气泡要在她**左前方**——也就是往画布中间靠；
-      // 朝左游时反过来。x 按朝向换算，不参与鲸鱼那层的镜像。
-      const x = isFacingRight ? WHALE_CANVAS.width - b.x : b.x
-      return `<circle cx="${x.toFixed(0)}" cy="${(b.y - rise).toFixed(1)}" r="${b.r}" fill="${fill}" opacity="${opacity}"/>`
+      return `<circle cx="${b.x}" cy="${(b.y - rise).toFixed(1)}" r="${b.r}" fill="${fill}" opacity="${opacity}"/>`
     })
     .join('')
   return `<g>${bubbles}</g>`
@@ -440,9 +467,9 @@ export function whaleSvg(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WHALE_CANVAS.width} ${WHALE_CANVAS.height}" width="${WHALE_CANVAS.width}" height="${WHALE_CANVAS.height}" preserveAspectRatio="xMidYMid meet" role="img">` +
     (isBubbleOpen ? bubbleSvg(lines, mood, options.hero ?? 1) : '') +
     // 鲸鱼：原图右下角贴边，尺寸 300×300。位置与气泡是否展开无关。
-    `<g transform="translate(318 16)">` +
+    `<g transform="translate(${WHALE_GROUP_X} ${WHALE_GROUP_Y})">` +
     float +
-    `<image x="0" y="0" width="300" height="300" preserveAspectRatio="xMaxYMax meet" href="data:image/png;base64,${asset}"/>` +
+    `<image x="0" y="0" width="${WHALE_IMAGE_W}" height="${WHALE_IMAGE_W}" preserveAspectRatio="xMaxYMax meet" href="data:image/png;base64,${asset}"/>` +
     `</g>` +
     `</svg>`
   )
