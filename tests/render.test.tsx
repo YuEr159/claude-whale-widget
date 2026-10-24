@@ -190,7 +190,15 @@ test('选中的页签与未选中的都有底色，只是明暗不同', async ($
   // 三块都有底色（未选中的不是「没有框」），选中的那一块底色不同、且加粗。
   expect(active.backgroundColor).toBeDefined()
   expect(nowIdle.backgroundColor).toBeDefined()
+
+  // **选中的底色必须与未选中的不同。** 早先这里只断言「两次选中态相等」，
+  // 测试名叫「明暗不同」却从没比较过选中与未选中——两个都取同一个错误值
+  // 也能全绿。真正的判据在这一行。
+  expect(nowActive.backgroundColor).not.toBe(nowIdle.backgroundColor)
+
+  // 来回切换后，同一位置的选中态应当稳定（换的是「谁被选中」，不是配色本身）。
   expect(nowActive.backgroundColor).toBe(active.backgroundColor)
+
   expect(nowActive.bold).toBe(true)
   expect(nowIdle.bold).toBe(false)
   expect(nowIdle.dimColor).toBe(true)

@@ -64,8 +64,11 @@ test('面板里鲸鱼固定在右下角，且在控制行之后', async ($, on) 
 
   const svg = findSvg(last)
   expect(svg).toBeDefined()
-  const w = Number(svg?.props?.width)
-  expect(w).toBeGreaterThanOrEqual(150)
+  // **固定 380px，不随面板宽度变化。** 早先这里只断言 `>= 150`——尺寸算错到
+  // 160 也能过。默认档位 100%，面板 100 列足够宽，就该是基准值本身。
+  expect(Number(svg?.props?.width)).toBe(380)
+  // 高度严格按画布比例，否则 `preserveAspectRatio` 会留白并上下居中。
+  expect(Math.abs(Number(svg?.props?.height) - 380 * (320 / 620))).toBeLessThan(0.01)
 
   await ui.unmount()
 })
