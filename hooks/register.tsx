@@ -1020,15 +1020,23 @@ export const register: Register = (on, options) => {
                 // 贴在一起，看起来像一整块被切开。
                 // 宽度不给 flexGrow：那会让「值」长短不同的卡片算出的宽度有零头，
                 // 六张卡右边缘就参差不齐。改成按列数算出同一个整数宽度。
+                //
+                // **边框压暗一档（`borderDimColor`）。** 卡片和外面那个大框
+                // 原本是同一支色、同一档粗细，六张卡就变成六个跟容器平级的
+                // 格子——读者分不清哪个是「页面」哪个是「格子里的一条」。
+                // 压暗之后层级是：外层框（主）> 卡片框（次）> 卡内文字。
                 <Box
                   key={`whale-card-${rowIndex}-${index}`}
                   flexDirection="column"
                   width={cardWidth}
                   borderStyle="round"
                   borderColor={fill.borderColor}
+                  borderDimColor
                   backgroundColor={fill.backgroundColor}
                   paddingX={1}
                 >
+                  {/* 三档层级，从上到下依次退后：标题（注解）→ 数字（主体）
+                      → 补充（注解）。卡里只有一个 `bold`，就是那个数。 */}
                   <Text dimColor>{card.label}</Text>
                   <Text bold>{card.value}</Text>
                   {card.hint && <Text dimColor>{card.hint}</Text>}
