@@ -157,6 +157,27 @@ function scanFile(file, cutoff, seen) {
     return out
   }
 
+  /**
+   * 本文件里**同一条消息的最后一个快照**，按 message.id 索引。
+   *
+   * 为什么必须取最后一个：一条 assistant 消息在 JSONL 里会被写成多行流式
+   * 增量。第一行是「请求已发出、回复还没来」的状态——`output_tokens` 是 0、
+   * `cache_read_input_tokens` 是 0，只有 `input_tokens` 是有值的。最后一行
+   * 才是这一轮的真实读数。
+   *
+   * 早先按「先到先得」去重，等于**每一条消息都取第一行**。实测本机 30 天
+   * 窗口：output 按首行是 15,951,781、按末行 24,671,912（少算 55%），
+   * cacheRead 少算 22%；而 input 反而多算 81%，因为首行的 input 是完整
+   * prompt、末行的 input 变成「新增部分」——两边口径根本不同。
+   *
+   * 先在本文件内归并，再走跨文件的 `seen` 去重：跨文件那份仍然是先到先得
+   * （resume / fork 会把旧行抄进新文件，重复计一次没有问题），但文件内
+   * 一定取到完整的那个快照。
+   */
+  const latestById = new Map()
+  /** 没有 id 的行（老格式）直接按出现顺序累加，无法去重。 */
+  const noIdRows = []
+
   let start = 0
   while (start < text.length) {
     let end = text.indexOf('\n', start)
@@ -177,9 +198,24 @@ function scanFile(file, cutoff, seen) {
       continue
     }
     // 轮次：一条用户真正输入的消息算一轮。
-    // 工具结果回填的行也标成 user，靠 promptId / toolUseResult 区分。
+    //
+    // 工具结果回填的行也标成 `type: "user"`，必须排除。三种形态都要认：
+    //   1. 带 `toolUseResult` 字段（主会话里的老写法）；
+    //   2. 没有 `promptId`（同样是老写法）；
+    //   3. **`message.content` 是 `tool_result` 数组**——子代理日志里就是这样，
+    //      而且它**带** `promptId`，前两条都拦不住。
+    //
+    // 第 3 条是后补的：实测本机被判成轮次的 1665 行里有 683 行（41%）其实
+    // 是工具结果，全在 `subagents/agent-*.jsonl` 里。轮次因此几乎翻倍，
+    // 热图的「轮次」口径比「消息数」还高。
     if (row?.type === 'user') {
-      const isToolResult = row.toolUseResult !== undefined || row.promptId === undefined
+      const content = row.message?.content
+      const hasToolResultContent =
+        Array.isArray(content) && content.some(part => part?.type === 'tool_result')
+      const isToolResult =
+        row.toolUseResult !== undefined ||
+        row.promptId === undefined ||
+        hasToolResultContent
       if (!isToolResult) {
         const day = dayKey(row.timestamp)
         const stamp = Date.parse(row.timestamp)
@@ -199,8 +235,22 @@ function scanFile(file, cutoff, seen) {
     const stamp = Date.parse(row.timestamp)
     if (stamp < cutoff) continue
 
+    const record = { row, message, usage, day }
     const id = message.id
     if (typeof id === 'string' && id.length > 0) {
+      // 后写覆盖先写：同一个 id 在文件里出现多次时，留下的是最后那个快照。
+      latestById.set(id, record)
+    } else {
+      noIdRows.push(record)
+    }
+  }
+
+  for (const record of [...noIdRows, ...latestById.values()]) {
+    const { row, message, usage, day } = record
+    const id = message.id
+    if (typeof id === 'string' && id.length > 0) {
+      // 跨文件去重仍然先到先得：resume / fork 会把旧会话的行抄进新文件，
+      // 那些是同一个 message.id，只该计一次。
       if (seen.has(id)) {
         out.skipped += 1
         continue
@@ -484,7 +534,15 @@ export function aggregate(root, days, cache) {
     /** 概览：有消息的会话数、有消息的天数、峰值小时（0–23）、常用模型。 */
     overview: {
       // 一个日志文件对应一个会话（文件名就是 sessionId）；同名的只算一次。
-      sessions: new Set(files.map(file => path.basename(file.path, '.jsonl'))).size,
+      //
+      // **排除子代理日志。** 一次 `Task` 调用会产出 `subagents/agent-*.jsonl`，
+      // 文件名各不相同，照文件名数就会把它们各算成一个会话。实测本机 281 个
+      // 日志文件里 171 个是子代理的，会话数因此虚高 2.55 倍。
+      sessions: new Set(
+        files
+          .filter(file => !file.path.includes('subagents'))
+          .map(file => path.basename(file.path, '.jsonl')),
+      ).size,
       activeDays: daysSorted.length,
       peakHour,
       peakHourMessages: peakCount,
