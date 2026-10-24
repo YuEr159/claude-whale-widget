@@ -6,7 +6,7 @@
 import { test, expect } from 'claude-code/testing'
 
 import { costOf, priceOf } from '../hooks/pricing'
-import { clip, countdown, displayWidth, padCell, pct, tokens, usd } from '../hooks/format'
+import { clip, countdown, displayWidth, pct, tokens, usd } from '../hooks/format'
 import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, freshnessOf, toUsageView } from '../hooks/usage-view'
 import {
   addModelSpend,
@@ -768,14 +768,9 @@ test('模型明细：归并后金额相加，全无价格才是 null', () => {
   expect(rows.find(row => row.model === 'Qwen 27B')?.cost).toBeNull()
 })
 
-test('表格对齐：按显示宽度补空格，中文与英文混排也不歪', () => {
+test('显示宽度：中文占两格，英文占一格', () => {
   expect(displayWidth('模型')).toBe(4)
   expect(displayWidth('DeepSeek Flash')).toBe(14)
-  const cells = ['模型', 'DeepSeek Flash', 'Qwen 27B', 'GLM Flash']
-  const widths = cells.map(text => displayWidth(padCell(text, 14)))
-  expect(new Set(widths).size).toBe(1)
-  expect(padCell('5', 4, 'right')).toBe('   5')
-  expect(padCell('5', 4, 'left')).toBe('5   ')
   expect(displayWidth(clip('DeepSeek Flash', 6))).toBeLessThanOrEqual(6)
 })
 

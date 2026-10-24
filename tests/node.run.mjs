@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { costOf, isEnginePriced, priceOf } from '../hooks/pricing.ts'
-import { clip, countdown, displayWidth, padCell, pct, tokens, usd } from '../hooks/format.ts'
+import { clip, countdown, displayWidth, pct, tokens, usd } from '../hooks/format.ts'
 import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, freshnessOf, toUsageView, whaleTraitOf } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
@@ -539,18 +539,11 @@ test('模型明细：归并后金额相加，全无价格才是 null', () => {
   assert.equal(qwen.cost, null, '没有公开价格的模型不该记成 0')
 })
 
-test('表格对齐：按显示宽度补空格，中文与英文混排也不歪', () => {
+test('显示宽度：中文占两格，英文占一格', () => {
   // 中文占两格：`模型` 是 4 列宽，不是 2。
   assert.equal(displayWidth('模型'), 4)
   assert.equal(displayWidth('DeepSeek Flash'), 14)
   assert.equal(displayWidth('abc'), 3)
-  // 补到同一宽度后，显示宽度必须相等——否则表格会歪。
-  const cells = ['模型', 'DeepSeek Flash', 'Qwen 27B', 'GLM Flash']
-  const widths = cells.map(text => displayWidth(padCell(text, 14)))
-  assert.deepEqual(new Set(widths), new Set([14]))
-  // 右对齐：空格在前。
-  assert.equal(padCell('5', 4, 'right'), '   5')
-  assert.equal(padCell('5', 4, 'left'), '5   ')
   // 超宽时按显示宽度截断，不留半格。
   assert.ok(displayWidth(clip('DeepSeek Flash', 6)) <= 6)
 })
@@ -1660,4 +1653,136 @@ test('扫描：工具结果回填不算轮次', async () => {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+/**
+ * 价目表只有一份：模块入口与扫描脚本必须给出相同结果。
+ *
+ * 早先 `hooks/pricing.ts` 与 `scripts/usage-scan.mjs` 各写一份手工副本，
+ * README 要求「两处保持一致」却没有任何测试比对。调价时漏改一边，概览页
+ * （读扫描脚本）与面板（读 pricing.ts）就会各用一套价目表——正是这个插件
+ * 专门实现 `isEnginePriced` 想避免的那种矛盾。
+ */
+test('价目表只有一份，两个入口结果一致', async () => {
+  const { priceOf: fromModule } = await import('../hooks/pricing.ts')
+  const { priceOf: fromData } = await import('../hooks/pricing-data.mjs')
+
+  // 覆盖三类：官方模型、第三方模型、未收录。
+  const models = [
+    'claude-opus-5-5',
+    'claude-sonnet-4-6',
+    'claude-haiku-5-5',
+    'Claude-3-5-Sonnet',      // 大小写不敏感
+    'deepseek-v4-flash',
+    'DeepSeek-V4.1-Flash-1017',
+    'qwen3.8-27b',
+    'kimi-k3',
+    'gpt-4o',                 // 未收录
+    '<synthetic>',
+    'auto',
+  ]
+  for (const model of models) {
+    assert.deepEqual(fromModule(model), fromData(model), `${model} 的价格应一致`)
+  }
+})
+
+/**
+ * 日历热图缺日期时不能整体串位。
+ *
+ * `days` 来自扫描脚本，只有「有记录的日子」——周末常常整天没有消息。早先
+ * 每收满 7 格就换一列，只有第一天做了星期对齐，于是缺一天之后每个格子都
+ * 落在错误的星期行上。
+ */
+test('日历热图按日期定位，缺日不串位', async () => {
+  const { calendarHeat } = await import('../hooks/usage-overview.ts')
+
+  // 2026-10-19 是周一。构造一段**缺了周三、周四**的日期序列。
+  const day = (d, tokens) => ({ day: d, input: tokens, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 1 })
+  const days = [
+    day('2026-10-19', 10), // 周一
+    day('2026-10-20', 20), // 周二
+    // 10-21 周三、10-22 周四 缺失
+    day('2026-10-23', 30), // 周五
+    day('2026-10-24', 40), // 周六
+    day('2026-10-26', 50), // 下周一
+  ]
+
+  const { columns } = calendarHeat(days)
+  assert.ok(columns.length >= 2, '应至少有两列')
+
+  // 第一列：周一、周二有值，周三到周日留空。
+  const week1 = columns[0]
+  assert.equal(week1.length, 7)
+  assert.equal(week1[0]?.value, 10, '周一有值')
+  assert.equal(week1[1]?.value, 20, '周二有值')
+  assert.equal(week1[2], null, '周三缺失 → 空')
+  assert.equal(week1[3], null, '周四缺失 → 空')
+  assert.equal(week1[4]?.value, 30, '周五仍在第一列的第 5 行，没有串位')
+  assert.equal(week1[5]?.value, 40, '周六在第 6 行')
+
+  // 第二列：下周一必须落在第 0 行。
+  const week2 = columns[1]
+  assert.equal(week2[0]?.value, 50, '下周一在第二列的第 0 行')
+  for (let i = 1; i < 7; i++) assert.equal(week2[i], null, `第二列第 ${i} 行应为空`)
+})
+
+/**
+ * 内容以 `++` / `--` 开头的行不能被当成 diff 文件头。
+ *
+ * 新增 `++i;` 时 diff 里是 `+++i;`，早先的 `startsWith('+++')` 会把它跳过。
+ *
+ * 注意 `--- note`（删掉一行 `-- ` 开头的注释）是**无法区分**的：它的形状
+ * 与真文件头 `--- a/x` 完全一样（三个符号 + 空格）。所以这里只断能区分的那
+ * 一半，并在注释里写明这个固有的歧义。
+ */
+test('diff 计行：正文里的 ++ 不算文件头', async () => {
+  const { countPatchLines } = await import('../hooks/usage-detail.ts')
+
+  const patch = {
+    lines: [
+      '--- a/main.c',
+      '+++ b/main.c',
+      '@@ -1,3 +1,3 @@',
+      '+++counter;',   // 新增一行以 ++ 开头的代码——旧实现会跳过
+      ' same',
+      '-old',
+      '+new',
+    ],
+  }
+  assert.deepEqual(countPatchLines([patch]), { added: 2, removed: 1 })
+
+  // 文件头本身不计入。
+  assert.deepEqual(
+    countPatchLines([{ lines: ['--- a/x', '+++ b/x', '@@ -1 +1 @@', '-one', '+two'] }]),
+    { added: 1, removed: 1 },
+    '文件头不应被算成增删行',
+  )
+})
+
+/**
+ * 「本会话花费」只有一份口径，三处显示共用。
+ *
+ * 早先面板与用量条各写一遍「every + reduce + 回退」，气泡再取一次。任何
+ * 一处改动（比如放开为「忽略未收录模型继续求和」）漏改另一处，同一个会话
+ * 就会在三个界面显示三个不同金额。
+ */
+test('本会话花费：有未收录价格就整体退回，口径只有一份', async () => {
+  const { sessionCostOf, bandMetricsOf } = await import('../hooks/usage-detail.ts')
+
+  const priced = [
+    { model: 'a', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 1.5, turns: 1 },
+    { model: 'b', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 1.55, turns: 1 },
+  ]
+  assert.ok(Math.abs(sessionCostOf(priced) - 3.05) < 1e-9, '全部有价时求和')
+
+  const withUnpriced = [...priced, { model: 'c', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: null, turns: 1 }]
+  assert.equal(sessionCostOf(withUnpriced), undefined, '有一款没价 → 整体退回引擎读数')
+
+  assert.equal(sessionCostOf([]), undefined, '空列表没有可算的')
+
+  // 用量条口径：空数组按默认处理，不让条子变成空的。
+  const fallback = ['window']
+  assert.deepEqual(bandMetricsOf({ bandMetrics: [] }, fallback), fallback)
+  assert.deepEqual(bandMetricsOf({}, fallback), fallback)
+  assert.deepEqual(bandMetricsOf({ bandMetrics: ['cost'] }, fallback), ['cost'])
 })

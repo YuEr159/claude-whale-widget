@@ -146,31 +146,24 @@ export function bandSummary(
     }
   }
 
-  const seen = new Set<BandMetric>()
-  // 再按**文本**去一次重：额度类两条口径在没有额度窗口时都会写出
-  // 「无额度窗口」，并排出现就是同一句话写了两遍。
-  const seenText = new Set<string>()
+  // 按 `BAND_METRIC_OPTIONS` 的固定次序拼。**不需要去重**：
+  //
+  //   - `BAND_METRIC_OPTIONS` 里每一项只出现一次，按它遍历不可能重复；
+  //   - 「两条口径都说无额度窗口」那个老问题已在 `one()` 里修掉——
+  //     `context` 没有数据时返回空串，不再是同一句话写两遍。
+  //
+  // 曾经这里挂着两个 `Set` 做按值 / 按文本去重，各自对应一个已经修复的问题。
+  // 留着它们会让人以为还存在会重复输出的路径。
   const parts: string[] = []
   for (const option of BAND_METRIC_OPTIONS) {
     // `diff` 由渲染层分色追加，这里跳过。
     if (option.value === 'diff') continue
-    if (!metrics.includes(option.value) || seen.has(option.value)) continue
-    seen.add(option.value)
+    if (!metrics.includes(option.value)) continue
     const text = one(option.value)
-    if (text.length === 0 || seenText.has(text)) continue
-    seenText.add(text)
+    if (text.length === 0) continue
     parts.push(text)
   }
   return parts.join(' · ')
-}
-
-/** 面板气泡里的三行。 */
-export function bubbleLines(view: UsageView, now: number): string[] {
-  return [
-    view.fiveHour ? `5 小时窗口 ${pct(view.fiveHour.percentUsed)}` : '额度窗口 —',
-    usdEstimate(view.costUsd),
-    view.fiveHour?.resetsAt ? `${countdown(view.fiveHour.resetsAt, now)} 后重置` : '',
-  ].filter(line => line.length > 0)
 }
 
 /**

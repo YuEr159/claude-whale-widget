@@ -26,12 +26,11 @@ import type {
   TurnSpend,
 } from '../types'
 import { costOf, isEnginePriced } from './pricing.ts'
-import { clip, pct, tokens, countdown, usd } from './format.ts'
+import { clip, pct, tokens, countdown } from './format.ts'
 import { UNPRICED, usdEstimate } from './provenance.ts'
 import { BAND_METRIC_OPTIONS, bandSummary, bubblePages, freshnessOf, toUsageView } from './usage-view.ts'
 import {
   contextChartSvg,
-  contextVisibleCount,
   heatWindowDays,
   modelFill,
   modelStackSvg,
@@ -39,14 +38,11 @@ import {
   turnHeatSvg,
 } from './chart-art.ts'
 import {
-  barText,
   contextParts,
   contextView,
-  maskModel,
   modelDetailRows,
   detailTableLayout,
   CHIP_COLUMN,
-  modelRows,
   MODEL_STACK_KEEP,
   modelGrainFor,
   modelGrainLabel,
@@ -63,10 +59,12 @@ import {
 import type { StatCard } from './usage-overview.ts'
 import {
   addModelSpend,
+  bandMetricsOf,
   countPatchLines,
   duration,
   limitRows,
   meterText,
+  sessionCostOf,
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
@@ -122,9 +120,6 @@ const EMPTY_SCAN: ScanRecord = {
 /** 定时器多久检查一次「该不该扫描」；真正的判断在间隔比较里。 */
 const SCAN_TICK_MS = 15_000
 
-/** 面板打开时，多久请求一次重绘，让倒计时与额度跟着走。 */
-const PANEL_REFRESH_MS = 30_000
-
 /**
  * 鲸鱼泡泡轮播的换页间隔。
  *
@@ -161,7 +156,10 @@ let isCompactPending = false
  * 圆角框的底色，第一次读 `/config` 后缓存。
  *
  * 主题在一次会话里基本不变，而面板重绘很频繁；`null` 表示「还没读过」。
- * 换主题要重开面板才生效——这点误差换来的是每次重绘都不必再发一次 IPC。
+ *
+ * **换了主题由 `config.set` 事件把它清空**，下一次重绘自然重读——模块级变量
+ * 不会因为关掉再打开面板就归零，早先那句「换主题要重开面板才生效」其实
+ * 根本不成立，整场会话都会停在旧主题。
  */
 let themeCache: ThemeColors | null = null
 
@@ -246,6 +244,13 @@ export const register: Register = (on, options) => {
         if (result.exitCode !== 0) {
           throw new Error(result.stderr.trim().slice(0, 300) || `退出码 ${result.exitCode}`)
         }
+        // **stdout 超过 4 MiB 会被引擎截断。** 截断后的半截 JSON 解析必然
+        // 失败，而每一轮都从同一份旧缓存重试，本地用量会永久停在报错上。
+        // 这里明确认出来、丢掉缓存、下一轮从全量扫描重来。
+        if (result.isStdoutTruncated) {
+          scanCache = []
+          throw new Error('扫描输出超过 4 MiB，已丢弃增量缓存，下一轮将全量重扫')
+        }
         const parsed = JSON.parse(result.stdout.trim()) as
           | (LocalUsage & { cache?: unknown[] })
           | { error?: string }
@@ -274,14 +279,14 @@ export const register: Register = (on, options) => {
       }
     })
 
-    // 面板打开时定期请求重绘：倒计时、额度百分比、数据新鲜度都是渲染时算的，
-    // 不重绘就是一张冻结的截图。关闭的面板由引擎缓存，不会被重绘。
-    $.clock.every(PANEL_REFRESH_MS, () => {
-      $.ui.invalidate('ui.render')
-    })
-
-    // 泡泡轮播的换页节奏。`PANEL_REFRESH_MS` 是 30 秒，靠它翻页太慢——
-    // 读者整个会话都停在第一页。这里单独走一条更快的时钟，只为翻页。
+    // 定期请求重绘：倒计时、额度百分比、数据新鲜度都是渲染时算的，不重绘
+    // 就是一张冻结的截图。关闭的面板由引擎缓存，不会被重绘。
+    //
+    // **一条 6 秒的时钟就够，不必再挂 30 秒那条。** 6 秒的周期整除 30 秒，
+    // 「每 30 秒刷新一次倒计时」的需求已经被它完全覆盖；多挂一条只会让
+    // 每 30 秒有两个 `invalidate` 落在同一时刻，引擎可能对着同一份 props
+    // 连画两遍。而这个频率同时也是泡泡轮播的换页节奏——靠 30 秒那条翻页
+    // 太慢，读者整个会话都停在第一页。
     //
     // 面板关着时重绘是空转（引擎会缓存），但 `every` 无法知道面板开没开；
     // 6 秒一次的空转代价远小于「打开面板半天不翻页」的观感损失。
@@ -322,6 +327,16 @@ export const register: Register = (on, options) => {
     if (!e.agentId) isCompactPending = true
     return next(e)
   }).catch(async ($, e, next) => next(e))
+
+  // 主题换了：把缓存清掉，下一次重绘自然重读 `/config`。
+  //
+  // 模块级变量不会因为关掉再打开面板就归零（只有插件重载才会），所以早先
+  // 「换主题要重开面板才生效」那句其实不成立——整场会话都停在旧主题，
+  // 浅色界面配深色图表，对比度问题被静默保留。
+  on('config.set', async ($, e, next) => {
+    if (e.key === 'theme') themeCache = null
+    return next(e)
+  })
 
   on('turn.complete', async ($, e, next) => {
     const usage = e.usage
@@ -428,35 +443,14 @@ export const register: Register = (on, options) => {
   // 代码行数：只从 Edit / Write 的结构化结果里数增删行，不保留任何行内容。
   // 子代理的编辑计入它自己的循环，不汇总到主线程——与原生 /cost 的口径一致。
   //
+  // **Edit 与 Write 共用一个 handler。** matcher 的数组写法是「任一命中」
+  // （引擎类型声明原话：`{ tool: ['Bash', 'Read'] }`）。早先注册了两遍逐字
+  // 相同的 24 行，任何一次修改漏改一侧，两种工具的计数就会悄悄分叉。
+  //
   // `catch` 显式放行：本 hook 只观察、不改写结果，统计失败时不该拦住工具调用。
   on(
     'tool.call',
-    { tool: 'Edit' },
-    async ($, e, next) => {
-      const result = await next(e)
-      if (!e.agentId && 'result' in result && result.result) {
-        const patch = (result.result as { structuredPatch?: Array<{ lines: string[] }> })
-          .structuredPatch
-        if (Array.isArray(patch)) {
-          const counted = countPatchLines(patch)
-          if (counted.added > 0 || counted.removed > 0) {
-            const held = await $.state.get({ plugin: 'whale-usage', key: 'totals' } as const)
-            const totals = held.value ?? EMPTY_TOTALS
-            await $.state.set({ plugin: 'whale-usage', key: 'totals' } as const, {
-              ...totals,
-              linesAdded: totals.linesAdded + counted.added,
-              linesRemoved: totals.linesRemoved + counted.removed,
-            })
-          }
-        }
-      }
-      return result
-    },
-  ).catch(async ($, e, next) => next(e))
-
-  on(
-    'tool.call',
-    { tool: 'Write' },
+    { tool: ['Edit', 'Write'] },
     async ($, e, next) => {
       const result = await next(e)
       if (!e.agentId && 'result' in result && result.result) {
@@ -503,16 +497,11 @@ export const register: Register = (on, options) => {
     // 条子随即重绘。
     const heldBandByModel = await $.state.get({ plugin: 'whale-usage', key: 'byModel' } as const)
     const bandByModel = heldBandByModel.value ?? []
-    const bandSessionCost =
-      bandByModel.length > 0 && bandByModel.every(entry => entry.cost !== null)
-        ? bandByModel.reduce((sum, entry) => sum + (entry.cost ?? 0), 0)
-        : undefined
-    // 空数组按默认处理：一条空白用量条比显示得多更糟。面板侧同一份判断
-    // 写在 `metrics` 那段，两处口径必须一致。
-    const metrics =
-      Array.isArray(prefsNow.bandMetrics) && prefsNow.bandMetrics.length > 0
-        ? prefsNow.bandMetrics
-        : DEFAULT_PREFS.bandMetrics
+    // 口径收在 `sessionCostOf` 一处：任何一款未收录价格就退回引擎读数。
+    const bandSessionCost = sessionCostOf(bandByModel)
+    // 老状态里没有这个字段、或是空数组时退回默认——与面板侧共用同一个函数，
+    // 避免一处放开了空数组而另一处没有。
+    const metrics = bandMetricsOf(prefsNow, DEFAULT_PREFS.bandMetrics)
     const summary = bandSummary(view, metrics, now, bandSessionCost)
 
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -593,18 +582,12 @@ export const register: Register = (on, options) => {
      * 模型都有价时才算得出；有一款未收录就返回 `undefined`，让气泡退回
      * 引擎读数（至少不会少算一笔）。
      */
-    const sessionCostOfPrices =
-      byModel.length > 0 && byModel.every(entry => entry.cost !== null)
-        ? byModel.reduce((sum, entry) => sum + (entry.cost ?? 0), 0)
-        : undefined
+    // 与用量条、气泡共用同一个口径函数。
+    const sessionCostOfPrices = sessionCostOf(byModel)
     const heldContextTurns = await $.state.get({ plugin: 'whale-usage', key: 'contextTurns' } as const)
     const contextTurns = heldContextTurns.value ?? []
-    // 用量条口径：老状态里没有这个字段时退回默认，空数组按默认处理——
-    // 一条空白用量条比显示得多更糟。
-    const metrics =
-      Array.isArray(prefsNow.bandMetrics) && prefsNow.bandMetrics.length > 0
-        ? prefsNow.bandMetrics
-        : DEFAULT_PREFS.bandMetrics
+    // 用量条口径：与用量条那一侧共用 `bandMetricsOf`，两处不会再分叉。
+    const metrics = bandMetricsOf(prefsNow, DEFAULT_PREFS.bandMetrics)
     // 圆角框的底色跟着主题走。主题在一次会话里基本不变，而面板打开时会
     // 每 30 秒重绘一次——每次都问一遍 `/config` 只是白花一次 IPC，所以
     // 第一次读到后就记在模块里。`$` 不能传进辅助函数（校验器的约束），
@@ -626,8 +609,7 @@ export const register: Register = (on, options) => {
     // 泡泡轮播：每页三行说一件事，几秒换一页。页号由**时钟**算出，不存状态
     // ——写状态会额外触发一次重绘，而这里只需要「现在是第几页」。
     //
-    // 换页靠 `PANEL_REFRESH_MS` 那次重绘推进太慢（30 秒），所以在面板打开时
-    // 另挂一个专用的 `clock.every`（见 `ui.render` 之外的重绘定时器）。
+    // 换页由 `BUBBLE_PAGE_MS` 那条 `clock.every` 推动（见 `session.start`）。
     const bubblePagesNow = bubblePages(view, now, {
       totals,
       today: data?.today,
