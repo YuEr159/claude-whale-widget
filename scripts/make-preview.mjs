@@ -14,13 +14,23 @@ import { whaleTraitOf } from '../hooks/usage-view.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** 五种状态在预览里展示的内容；台词取自气泡轮播的人设页。 */
+/**
+ * 五种情绪在预览里展示的内容与标签。
+ *
+ * **标签按钟点写，不按额度。** 情绪早就改成随本地钟点走了（见
+ * `whale-art.ts` 的 `DAY_SCHEDULE`），这里却还挂着「忙碌 50%+」「额度满
+ * 95%+」——那是旧模型的触发条件。预览图是对外的门面，展示的必须是读者
+ * 真会看到的那一套。
+ *
+ * `lines` 用**数据页**的样子（额度页），不是人设页：面板里大多数时候翻到的
+ * 就是它。人设台词在下面单独列一张表。
+ */
 const STATES = [
-  { mood: 'idle', label: '正常', lines: ['5h 23%', '≈$1.24', '2h13m 后重置'] },
-  { mood: 'working', label: '工作中', lines: ['5h 45%', '≈$3.80', '1h02m 后重置'] },
-  { mood: 'busy', label: '忙碌 50%+', lines: ['5h 66%', '≈$8.15', '38m 后重置'] },
-  { mood: 'tired', label: '疲惫 80%+', lines: ['5h 88%', '≈$14.20', '12m 后重置'] },
-  { mood: 'sleep', label: '额度满 95%+', lines: ['5h 99%', '≈$21.60', '3m 后重置'] },
+  { mood: 'idle', label: '06:00–08:59 早晨', lines: ['5 小时 · 7 天 61%', '23%', '2h13m 后重置'] },
+  { mood: 'working', label: '09:00–11:59 上午', lines: ['5 小时 · 7 天 61%', '45%', '1h02m 后重置'] },
+  { mood: 'busy', label: '12:00–13:59 午饭', lines: ['5 小时 · 7 天 61%', '66%', '38m 后重置'] },
+  { mood: 'tired', label: '21:00–23:59 夜里', lines: ['5 小时 · 7 天 61%', '88%', '12m 后重置'] },
+  { mood: 'sleep', label: '00:00–05:59 深夜', lines: ['5 小时 · 7 天 61%', '99%', '3m 后重置'] },
 ]
 
 /**

@@ -70,7 +70,7 @@ import {
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
+import { WHALE_ASPECT, emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
@@ -638,6 +638,8 @@ export const register: Register = (on, options) => {
     })
     const bubblePage = bubblePagesNow[Math.floor(now / BUBBLE_PAGE_MS) % bubblePagesNow.length]!
     const lines = bubblePage.lines
+    // 主角行由页面自己指定——额度页与上下文页的主角是百分比，不在第二行。
+    const hero = bubblePage.hero ?? 1
 
     // 面板尺寸：鲸鱼固定在右下角。
     // Svg 的 width/height 是 CSS 像素，bodyColumns 是字符列；等宽字体一列约 8px。
@@ -653,12 +655,18 @@ export const register: Register = (on, options) => {
     // 字段（`undefined`），也可能存了一个不在档位表里的值。
     const scale = clampScale(prefsNow.whaleScale ?? DEFAULT_PREFS.whaleScale)
     const whaleSize = whaleSizeFor(width)
-    const whaleWidth = whaleSize.width * scale
-    const whaleHeight = whaleSize.height * scale
+    // **缩放后还要再夹一次。** `whaleSizeFor` 只把**基准**尺寸收在可用宽度
+    // 以内（≤380px），乘上档位就不管了：80 列面板只有 632px 可用，
+    // 200% 档是 760px，多出的 128px 会被引擎直接裁掉（`overflow` 只有
+    // visible / hidden，没有滚动），鲸鱼只剩左半边。高度跟着宽度重算，
+    // 保持画布比例——否则 `preserveAspectRatio` 会留白并上下居中。
+    const availablePx = Math.max(0, width - 1) * 8
+    const whaleWidth = Math.min(whaleSize.width * scale, availablePx)
+    const whaleHeight = whaleWidth * WHALE_ASPECT
 
     const whale = Svg ? (
       <Svg
-        source={whaleSvg(mood, lines, { isBubbleOpen: true, now, epoch: WHALE_FLOAT_EPOCH })}
+        source={whaleSvg(mood, lines, { isBubbleOpen: true, hero, now, epoch: WHALE_FLOAT_EPOCH })}
         alt={`小鲸鱼：${lines.join('，')}`}
         width={whaleWidth}
         // 高度：显示尺寸 = 宽度 × 画布比例。盒子由这两个数决定。
