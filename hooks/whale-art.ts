@@ -202,6 +202,43 @@ export const WHALE_FLOAT_PERIOD_MS = 3_600
 export const WHALE_FLOAT_AMPLITUDE = 4
 
 /**
+ * 巡游一步的时长（毫秒）——与泡泡换页共用同一个 6 秒节奏。
+ *
+ * 为什么一步是 6 秒而不是更快：桌面端 `$.ui.invalidate` 的上限是每秒十次，
+ * 而重绘才是位移的唯一来源（`Svg` 不传 `isInteractive` 时 SMIL 不跑，
+ * 传了又画不出内嵌位图——见 `register.tsx`）。6 秒一步换来的是**零新增
+ * 定时器、零额外重绘**：鲸鱼每挪一步恰好和翻页落在同一帧里。
+ * 「低频巡游」就是对这个物理限制的顺势利用——快不起来，那就慢得有节奏。
+ */
+export const SWIM_STEP_MS = 6_000
+
+/** 一步游多少列（一列约 8px）。3 列 = 每步 24px，肉眼一定看得见。 */
+export const SWIM_STEP_COLS = 3
+
+/**
+ * 巡游轨迹：一步 `SWIM_STEP_COLS` 列的三角波，右端出发、触左端折返。
+ *
+ * @param now 当前时刻（毫秒，epoch）
+ * @param freeCols 鲸鱼可以挪动的列数 = 面板列数 − 立绘占的列数。
+ *   不满一步（< 3 列）就不游——挪不动的地方硬摆，看着像抖动不像巡游。
+ * @returns 立绘这一行要向左让出的列数（0 = 贴右端，即没有巡游时的样子）。
+ *
+ * 相位直接由墙钟取模，不记任何状态：面板开在哪一刻，就从轨迹的哪一刻接着
+ * 走；关掉再开不会跳回起点。单程步数取 `floor(freeCols / 步长)`，左端点
+ * 因此可能比最左余量少走不到一步——余量留在左边，两个折返点各只停留一步，
+ * 相邻两步的位移恒等，没有「到头愣一下」的顿挫。
+ *
+ * 100 列面板余量约 48 列：单程 16 步 ≈ 1.6 分钟，一趟来回约 3.2 分钟；越宽游得越久。
+ */
+export function swimOffsetFor(now: number, freeCols: number): number {
+  const steps = Math.floor(freeCols / SWIM_STEP_COLS)
+  if (steps < 1) return 0
+  const t = Math.floor(now / SWIM_STEP_MS) % (steps * 2)
+  const step = t <= steps ? t : steps * 2 - t
+  return step * SWIM_STEP_COLS
+}
+
+/**
  * 生成整幅 SVG：左边气泡 + 右下原图鲸鱼。
  *
  * 鲸鱼以 256px 的内嵌 PNG 呈现，`preserveAspectRatio` 保持比例；画布

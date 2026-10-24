@@ -17,7 +17,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { WHALE_MAX_WIDTH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
+import { SWIM_STEP_COLS, WHALE_MAX_WIDTH, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
 import {
   barText,
   calendarHeat,
@@ -1077,6 +1077,32 @@ test('鲸鱼 SVG 的根元素用像素尺寸，不用百分比', () => {
   expect(svg).not.toContain('width="100%"')
   expect(svg).not.toContain('height="100%"')
   expect(svg).toContain('viewBox="0 0 620 320"')
+})
+
+test('巡游轨迹是三角波：出发即右端、逐步等距、到头折返', () => {
+  const STEP = 6_000 // 与 SWIM_STEP_MS 同步
+  const free = 52 // 100 列面板、48 列立绘时的余量
+  const steps = Math.floor(free / SWIM_STEP_COLS)
+
+  // 单程：每步恰好 3 列，从 0 递增到 steps×3，不会超出余量。
+  for (let i = 0; i <= steps; i++) {
+    expect(swimOffsetFor(i * STEP, free)).toBe(i * SWIM_STEP_COLS)
+  }
+  // 折返：到最远点（多走一步）后逐步递减。
+  expect(swimOffsetFor((steps + 1) * STEP, free)).toBe((steps - 1) * SWIM_STEP_COLS)
+  expect(swimOffsetFor((steps + 2) * STEP, free)).toBe((steps - 2) * SWIM_STEP_COLS)
+  // 一个完整周期回到右端：周期是 2×steps 步。
+  expect(swimOffsetFor(steps * 2 * STEP, free)).toBe(0)
+
+  // 全程不越界——`marginRight` 一旦超过余量，立绘就会被左边缘裁掉。
+  let max = 0
+  for (let i = 0; i < steps * 2; i++) max = Math.max(max, swimOffsetFor(i * STEP, free))
+  expect(max).toBeLessThanOrEqual(free)
+
+  // 余量不足一步就不游（恒 0），窄面板保持原样贴右。
+  for (const tooNarrow of [0, 1, 2, -5]) {
+    expect(swimOffsetFor(123_456, tooNarrow)).toBe(0)
+  }
 })
 
 test('气泡里的本会话花费优先用插件价格表，而不是引擎 /cost 的估算', () => {

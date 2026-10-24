@@ -68,7 +68,7 @@ import {
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { WHALE_ASPECT, emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
+import { WHALE_ASPECT, emblemOf, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from './whale-art.ts'
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
@@ -645,6 +645,12 @@ export const register: Register = (on, options) => {
     const availablePx = Math.max(0, width - 1) * 8
     const whaleWidth = Math.min(whaleSize.width * scale, availablePx)
     const whaleHeight = whaleWidth * WHALE_ASPECT
+    // 巡游的余量 = 面板列数 − 立绘实际占的列数。用**夹取后**的显示宽度换算，
+    // 而不是 `whaleSizeFor` 的基准值：窄面板上立绘已被收到可用宽度，基准列数
+    // 会高估占用。余量不足一步时 `swimOffsetFor` 恒返回 0（贴右端，与巡游前
+    // 一致），负余量同样落进这一支，不需要额外夹取。
+    const swimFreeCols = width - Math.ceil(whaleWidth / 8)
+    const swimCols = swimOffsetFor(now, swimFreeCols)
 
     const whale = Svg ? (
       <Svg
@@ -1364,13 +1370,20 @@ export const register: Register = (on, options) => {
         {/* 数据新鲜度贴在最底下：它是「上面那些数字有多可信」的脚注，
             放在开场反而挡在真正要看的数字前面。 */}
         {historyHead}
-        {/* 鲸鱼独占最后一行、靠右。泡泡**常驻**，内容每 `BUBBLE_PAGE_MS`
-            换一页：常驻是因为点击区没法精确对齐立绘——`Svg` 按 CSS 像素
+        {/* 鲸鱼独占最后一行、靠右起步。泡泡**常驻**，内容每 `BUBBLE_PAGE_MS`
+            换一页；常驻是因为点击区没法精确对齐立绘——`Svg` 按 CSS 像素
             布局、`Box` 按字符格布局，两者之间引擎不给换算，只能猜行高；
             猜小了「点鲸鱼底部没反应」，猜大了又会盖住别的内容。不如直接
-            把要看的数字画出来，读者连点都不用点。 */}
+            把要看的数字画出来，读者连点都不用点。
+            **低频巡游**：立绘整体沿底边来回游，一步三列（24px）、一步 6 秒
+            （三角波，见 `whale-art.ts` 的 `swimOffsetFor`），到左端折返。步频
+            就是泡泡翻页的节奏——同一拍重绘里翻页又挪步，零新增定时器。
+            窄到余量不足一步时恒贴右端不游。鲸鱼不翻转：素材朝左，镜像会让
+            气泡的指向关系失效，碰撞测试也全部重算——已知取舍。 */}
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
-          {whale}
+          <Box marginRight={swimCols} key="whale-swim">
+            {whale}
+          </Box>
         </Box>
       </Box>
     )
