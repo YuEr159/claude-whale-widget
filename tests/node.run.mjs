@@ -2063,3 +2063,58 @@ test('上下文接线：接缝不断档，整条曲线覆盖到会话开头', ()
     assert.ok(merged[i].at > merged[i - 1].at, `第 ${i} 条的时刻没有递增`)
   }
 })
+
+/**
+ * 缓存里只留**当前会话**的上下文序列。
+ *
+ * 早先每个文件的缓存条目都带一份完整的 `contextTurns`，而上下文序列是
+ * 会话级的东西——面板只画当前这一场，别的会话存了也永远用不上。实测
+ * 400 天窗口下它单独占 3.06 MB，加上 `seenIds` 直接把 `process.run` 的
+ * stdout 顶过 4 MiB，扫描永久报「输出超过 4 MiB」，整个本地用量栏坏掉。
+ */
+test('扫描：缓存只保留当前会话的上下文序列，其余清空', async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { aggregate } = await import('../scripts/usage-scan.mjs')
+
+  const root = mkdtempSync(join(tmpdir(), 'whale-ctx-'))
+  try {
+    const project = join(root, 'proj')
+    mkdirSync(project)
+    const now = new Date().toISOString()
+    // 两个会话，各自若干轮：上下文序列都不为空。
+    const line = (sid, i) => JSON.stringify({
+      type: 'assistant',
+      timestamp: now,
+      message: {
+        id: `${sid}_${i}`,
+        model: 'claude-opus-5-5',
+        usage: { input_tokens: 1000 * (i + 1), output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    })
+    writeFileSync(join(project, 'sess-a.jsonl'), [line('a', 0), line('a', 1), line('a', 2)].join('\n'))
+    writeFileSync(join(project, 'sess-b.jsonl'), [line('b', 0), line('b', 1)].join('\n'))
+
+    const cache = new Map()
+    const result = aggregate(root, 1, cache, 'sess-a')
+
+    // 当前会话拿到完整序列。
+    assert.equal(result.contextTurns.length, 3, '当前会话应有 3 轮')
+
+    // 缓存里：当前会话有序列，另一个会话是空的。
+    const a = cache.get(join(project, 'sess-a.jsonl'))
+    const b = cache.get(join(project, 'sess-b.jsonl'))
+    assert.ok(a && b, '两个文件的缓存条目都该在')
+    assert.equal(a.part.contextTurns.length, 3, '当前会话的序列该留在缓存里')
+    assert.equal(b.part.contextTurns.length, 0, '别的会话的序列不该占缓存')
+
+    // 第二轮带缓存：当前会话**重读**，序列不会因为缓存而被清空。
+    const again = aggregate(root, 1, cache, 'sess-a')
+    assert.equal(again.contextTurns.length, 3, '带缓存重扫时当前会话序列不能丢')
+    // 数字也不能因为重读而翻倍。
+    assert.equal(again.total.messages, 5, '重读当前会话不该把消息数算两遍')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

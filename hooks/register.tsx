@@ -564,7 +564,19 @@ export const register: Register = (on, options) => {
     const bandSessionCost = sessionCostOf(bandByModel)
     // 老状态里没有这个字段、或是空数组时退回默认——与面板侧共用同一个函数，
     // 避免一处放开了空数组而另一处没有。
-    const metrics = bandMetricsOf(prefsNow, DEFAULT_PREFS.bandMetrics)
+    //
+    // **默认口径要跟着环境走。** 默认原本固定是 `window`（额度窗口），但第三方
+    // 网关（DeepSeek、Qwen 之类）没有订阅额度，`fiveHour` / `sevenDay` 都是
+    // 空的，条子上就只剩一句「无额度窗口」——读者看到的是一条什么都没说的
+    // 条子，以为插件坏了。这时默认换成 `cost`（上下文占用）：那个数在任何
+    // 环境下都有值，且是读者最想知道的那一个。
+    //
+    // 只改**默认**：读者自己点过口径，`prefsNow.bandMetrics` 就非空，此时
+    // 一律照他选的来，不该因为环境变了就悄悄换掉。
+    const metrics = bandMetricsOf(
+      prefsNow,
+      view.fiveHour || view.sevenDay ? DEFAULT_PREFS.bandMetrics : ['cost'],
+    )
     const summary = bandSummary(view, metrics, now, bandSessionCost)
 
     const { Box, Text, Button } = $.ui.resolve(e)
