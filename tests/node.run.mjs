@@ -1951,11 +1951,14 @@ test('设置页：口径芯片整行宽度守住 70 列预算', () => {
 })
 
 /**
- * 用量条字符画：空闲静止，运行中两幅轮换，三种状态等宽。
+ * 用量条字符画：空闲打呼噜，运行中两幅轮换，三种状态等宽。
  *
  * 「把鲸鱼和会话是否运行中联系起来」那条需求的落点。状态机是纯函数：
  * `turn.start` 置真、`turn.complete` / `turn.abort` 置假（register.tsx 的
  * 模块变量 `isSessionRunning`），这里只验「给定运行状态与时刻，画出哪一幅」。
+ *
+ * 睡觉一档按读给的完整节奏走：`Zz` → `Zzz` → `Zzzzzz` 吸气渐长，`（呼）`
+ * 呼出来，空一拍，再补一声 `呼`。
  */
 test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   // 空闲：不管时钟走到哪儿都是 idle。
@@ -1987,11 +1990,14 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
     assert.ok(frame.includes(')~'), `${state} 第 ${index} 帧该有鲸鱼轮廓：${JSON.stringify(frame)}`)
   }
 
-  // **只用字体覆盖率高的半角字符。** 早先用过 `≋`（U+224B）与 `ᐟ`
+  // **只用字体覆盖率高的字符。** 早先用过 `≋`（U+224B）与 `ᐟ`
   // （U+141F，加拿大音节文字）：Unicode 标准里都是 1 列宽，但后者在多数
   // 西文字体里没有字形，fallback 字体未必与等宽数字同宽——一旦被画成 2 列，
   // 整条用量条就错位。
-  const allowed = new Set(['~', ')', '>', '.', 'o', 'O', ' '])
+  //
+  // 鼾声的「呼」与全角括号是唯一的中文：它们由 `displayWidth` 按 CJK 规则
+  // 各算 2 列，面板里本来就通篇中文，字体必定覆盖。
+  const allowed = new Set(['~', ')', '>', '.', 'o', 'O', 'Z', 'z', '呼', '（', '）', ' '])
   for (const { state, index, frame } of allFrames) {
     for (const ch of frame) {
       assert.ok(allowed.has(ch), `${state} 第 ${index} 帧用了非白名单字符 ${JSON.stringify(ch)}`)
@@ -2008,17 +2014,55 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   const firsts = Object.values(BAND_WHALE_FRAMES).map(frames => frames[0])
   assert.equal(new Set(firsts).size, 3, '三个状态的起始帧应当各不相同')
 
+  // **睡觉的鲸鱼一列都不挪。** 其余两态靠位移表现「在游」，睡着时必须逐帧
+  // 定在同一处，否则看起来像在梦游。用鲸鱼轮廓之前的显示宽度衡量，中文
+  // 帧也按真实列数算。
+  const heads = new Set(
+    BAND_WHALE_FRAMES.idle.map(frame => displayWidth(frame.slice(0, frame.indexOf('~')))),
+  )
+  assert.equal(heads.size, 1, `睡觉的鲸鱼位置在帧间漂移了：${[...heads].join(' / ')}`)
+
+  // 鼾声的完整节奏都出现过：由短到长的三档 Zz、呼出来的（呼）、补的那声呼，
+  // 以及中间那拍空档。
+  const idleText = BAND_WHALE_FRAMES.idle.join('|')
+  for (const beat of ['Zz ', 'Zzz ', 'Zzzzzz', '（呼）', ' 呼']) {
+    assert.ok(idleText.includes(beat), `睡觉的鼾声缺了「${beat}」这一拍：${idleText}`)
+  }
+
   // 帧序列随时刻推进：同一状态在不同时刻给出不同帧。
   const idleFrames = new Set(
     [0, 1600, 3200, 4800].map(now => bandWhaleGlyph('idle', now)),
   )
-  assert.ok(idleFrames.size > 1, '静止状态也该在动（吐泡泡）')
+  assert.ok(idleFrames.size > 1, '睡觉状态也该在动（打呼噜）')
 
-  // 相位由墙钟取模，不记状态：同一时刻永远给同一帧。
-  assert.equal(bandWhaleGlyph('idle', 5000), bandWhaleGlyph('idle', 5000))
-  // 周期整除时回到第一帧。
-  const period = 1600 * BAND_WHALE_FRAMES.idle.length
+  // 帧时长可以逐帧不同，所以周期是各帧时长之和；走满一轮回到第一帧。
+  // 睡觉这一轮 4.8 秒，接近人一次呼吸。
+  const period = 800 + 800 + 1000 + 600 + 900 + 700
   assert.equal(bandWhaleGlyph('idle', period), bandWhaleGlyph('idle', 0))
+  assert.equal(BAND_WHALE_FRAMES.idle.length, 6, '睡觉一轮应当六拍')
+
+  // **帧的切换点逐个钉住。** 逐毫秒采样，记下「帧变了」的那些时刻——
+  // 这同时验证了三件事：帧的先后次序、每一拍的实际时长、以及时长表与
+  // 帧表一样长（多一节会让某帧永远画不到，少一节会让最后一帧多停一截）。
+  const switches = []
+  let last = bandWhaleGlyph('idle', 0)
+  for (let now = 1; now <= period; now += 1) {
+    const glyph = bandWhaleGlyph('idle', now)
+    if (glyph !== last) {
+      switches.push({ at: now, glyph })
+      last = glyph
+    }
+  }
+  assert.deepEqual(
+    switches.map(item => item.at),
+    [800, 1600, 2600, 3200, 4100, period],
+    `睡觉的换帧时刻不对：${switches.map(item => item.at).join(', ')}`,
+  )
+  // 换帧后画的必须是下一拍，且走完一轮正好回到第一拍。
+  assert.deepEqual(
+    switches.map(item => item.glyph),
+    [...BAND_WHALE_FRAMES.idle.slice(1), BAND_WHALE_FRAMES.idle[0]],
+  )
 })
 
 /**
