@@ -131,20 +131,75 @@ export function emblemOf(mood: WhaleMood): string {
 export type BandWhaleState = 'idle' | 'working' | 'busy'
 
 /**
- * 用量条字符画的三种状态。宽都必须是 5 列——状态切换时后面的摘要文字
- * 才不会左右跳（有测试钉住这一点）。
+ * 用量条字符画的帧。**每一帧都恰好 10 列**——状态切换、帧切换时后面的摘要
+ * 文字才不会左右跳（有测试钉住这一点）。
  *
- * 每幅都是「水面波纹 `≋` + 身体轮廓 `ᐟᐟ\`」的组合，区别只在波纹位置：
- * 静止时波纹在尾部，划水时移向前方、并多一道尾迹。
+ * ## 三个状态各讲一件事
+ *
+ * 状态差异不靠颜色（`diffAdded` 按设计规则只用于「增加的行数」，拿来当装饰
+ * 会让同一个颜色表达两件事），全靠字形与位移：
+ *
+ * - **静止 `idle`**：鲸鱼**原地不动**，头顶的气泡由 `.` 长成 `o` 再长成 `O`
+ *   然后收回——像睡着了在冒泡；水波在它身侧荡开又收回。位置固定是关键：
+ *   「没在赶路」这件事，静止比什么都说得清。节奏最慢（1.6s 一帧）。
+ * - **干活 `working`**：鲸鱼**整体向左移**（第 1→3 列），身后拖出一条 `>` 尾迹，
+ *   `~` 从一列涨到两列再收——正是划一下桨的形状。节奏 0.4s 一帧。
+ * - **忙 `busy`**：两侧都是 `~`，尾迹更长更密，像顶着急流往前冲。节奏最快，
+ *   0.3s 一帧。
+ *
+ * 三帧/四帧一轮，四帧的第 2、4 帧相同，所以走完一轮是「去—回—去—回」的
+ * 往复，不是单向循环，看起来才像有呼吸。
+ *
+ * ## 字符选择
+ *
+ * 只用 `~ ) > . o O` 与空格——**全是字体覆盖率最高的半角字符**。
+ * 早先用过 `≋`（U+224B）与 `ᐟ`（U+141F，加拿大音节文字）：Unicode 标准里
+ * 两者都是 1 列宽，但后者在多数西文字体里没有字形，会触发 fallback，而
+ * fallback 字体未必与等宽数字同宽——一旦它被画成 2 列，整条用量条就会错位。
+ * 现在的字符集在任何等宽字体里都是稳定 1 列。
  */
-export const BAND_WHALE_GLYPHS: Readonly<Record<BandWhaleState, string>> = {
-  idle: ' ≋ᐟᐟ\\',
-  working: '≋ᐟᐟ\\ ',
-  busy: '≋≋ᐟᐟ ',
+export const BAND_WHALE_FRAMES: Readonly<Record<BandWhaleState, readonly string[]>> = {
+  // 静止：鲸鱼不动，气泡长大，水波荡开。
+  idle: [
+    '  .  ~)~  ',
+    '  o  ~)~  ',
+    '  O ~~)~ ~',
+    '  o  ~)~  ',
+  ],
+  // 干活：向左游，尾迹拖长。
+  working: [
+    ' ~)~>     ',
+    '  ~)~>~   ',
+    '   ~)~>~~ ',
+    '  ~)~>~   ',
+  ],
+  // 忙：两侧翻浪。
+  busy: [
+    '~~)~>~~   ',
+    '~~~)~>~~~ ',
+    ' ~~)~>~~  ',
+    '~~~)~>~~~ ',
+  ],
 }
 
-/** 用量条字符画的固定宽度（列）。三种状态必须一致。 */
-export const BAND_WHALE_TEXT_COLS = 5
+/**
+ * 用量条字符画的固定宽度（列）。
+ *
+ * 从 5 列拉长到 10 列：5 列只够画一个静止的符号，做不了动画——水波一挪就
+ * 出框。10 列能容下「鲸鱼 3 列 + 两侧各 3 列浪」，三种状态都跑得起来。
+ *
+ * 代价是条子上少 5 列给摘要。摘要本来就靠 `flexGrow` 撑开，窄窗口下先收窄
+ * 的是它；字符画这一侧宽度固定、不会被压变形，也不会因为摘要变长变短而
+ * 左右跳。
+ */
+export const BAND_WHALE_TEXT_COLS = 10
+
+/** 每个状态一帧停多久（毫秒）。越忙越快。 */
+const BAND_FRAME_MS: Readonly<Record<BandWhaleState, number>> = {
+  idle: 1600,
+  working: 400,
+  busy: 300,
+}
 
 /**
  * 会话是否在运行 → 用量条鲸鱼的状态。
@@ -164,9 +219,27 @@ export function bandWhaleStateOf(isRunning: boolean, now: number): BandWhaleStat
   return Math.floor(now / 700) % 2 === 0 ? 'working' : 'busy'
 }
 
-/** 用量条字符画的文字。 */
-export function bandWhaleGlyph(state: BandWhaleState): string {
-  return BAND_WHALE_GLYPHS[state]
+/**
+ * 当前该画哪一帧。
+ *
+ * 帧序列按 `now` 取模，不记任何状态：面板开在哪一刻，就从序列的哪一刻
+ * 接着走；关掉再开不会跳回第一帧。这与 `swimOffsetFor` 的相位算法同一个
+ * 思路——时间本身就是唯一的状态。
+ *
+ * @param state 当前状态
+ * @param now   当前时刻（毫秒）
+ * @returns 该状态下的第几帧（从 0 起）
+ */
+export function bandWhaleFrameOf(state: BandWhaleState, now: number): number {
+  const frames = BAND_WHALE_FRAMES[state]
+  const step = BAND_FRAME_MS[state]
+  return Math.floor(now / step) % frames.length
+}
+
+/** 用量条字符画的文字：当前状态 + 当前时刻对应的一帧。 */
+export function bandWhaleGlyph(state: BandWhaleState, now: number): string {
+  const frames = BAND_WHALE_FRAMES[state]
+  return frames[bandWhaleFrameOf(state, now)] ?? frames[0]!
 }
 
 /**
