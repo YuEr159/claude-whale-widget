@@ -71,7 +71,7 @@ import {
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { BAND_SWIM_STEP_COLS, BAND_SWIM_STEP_MS, WHALE_ASPECT, bandWhaleFacingRight, bandWhaleSvg, emblemOf, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from './whale-art.ts'
+import { BAND_SWIM_STEP_MS, WHALE_ASPECT, bandWhaleGlyph, bandWhaleStateOf, BAND_WHALE_TEXT_COLS, emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
@@ -154,6 +154,19 @@ const TURN_WINDOW_DAYS = 400
  * 只活在模块内存里：重载插件后不再标旧记录，但旧记录本来也已经画过了。
  */
 let isCompactPending = false
+
+/**
+ * 引擎是否正在跑一轮对话（`turn.start` → `turn.complete` / `turn.abort`）。
+ *
+ * 用量条的小鲸鱼靠它决定是停着还是划水——「是不是在干活」这件事本身就是
+ * 一条信息，比一个永远在动的装饰有用。
+ *
+ * 只活在模块内存里，不写 `$.state`：写状态会额外触发一次重绘，而这个值
+ * 每次 `turn.start` / `turn.complete` 都会变，等于每轮多两次全量重绘。
+ * 插件重载后它会回到 `false`——下一轮 `turn.start` 会重新置真，中间那一小段
+ * 最坏情况是把「正在跑」显示成「空闲」，不影响任何数字。
+ */
+let isSessionRunning = false
 
 /**
  * 圆角框的底色，第一次读 `/config` 后缓存。
@@ -351,7 +364,36 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  /**
+   * 一轮开始：用量条的小鲸鱼从「停着」变成「划水」。
+   *
+   * 只记模块变量、不写 `$.state`（写状态会多一次全量重绘，而这件事每轮都
+   * 发生两次）。`next(e)` 原样往下走——这个钩子只观察，不改变任何行为。
+   *
+   * **`turn.start` 的输入里没有 `agentId`**（只有 `text` 与 `turnId`），
+   * 所以这里无法区分主会话与子代理；`turn.complete` 那边有 `agentId`，
+   * 但那边只负责落回静止——最坏情况是子代理起轮时条子划一会儿水，
+   * 无害。
+   */
+  on('turn.start', async (_$, e, next) => {
+    isSessionRunning = true
+    return next(e)
+  })
+
+  /**
+   * 一轮被中断：同样要落回「停着」，否则鲸鱼会一直划水到下一轮开始。
+   *
+   * 用户按 Esc 停掉回答是常见操作，`turn.complete` 不会再来一次。
+   * 输入同样只有 `turnId`。
+   */
+  on('turn.abort', async (_$, e, next) => {
+    isSessionRunning = false
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
+    // 主会话这一轮结束：鲸鱼落回静止。子代理的完成不影响主条子。
+    if (!e.agentId) isSessionRunning = false
     const usage = e.usage
     if (usage && !e.agentId) {
       const cost = costOf(usage.model, {
@@ -519,32 +561,24 @@ export const register: Register = (on, options) => {
     const summary = bandSummary(view, metrics, now, bandSessionCost)
 
     const { Box, Text, Button } = $.ui.resolve(e)
-    // **按 surface 判断，不靠元素表探测。** 终端的元素表里没有 `Svg`（引擎
-    // 文档：terminal 只有 `Raster` 与 `Image`），但真人终端与测试宿主给出的
-    // 表并不一致：`'Svg' in table` 在后者里为真，于是走进 Svg 分支、渲染成
-    // 空。真实终端上 Svg 也画不出内嵌位图，直接不看它。
-    const table = $.ui.resolve(e)
-    const Svg = e.surface === 'terminal' || !('Svg' in table) ? undefined : table.Svg
 
     /**
-     * 鲸鱼的巡游跑道（列）。左上角这一整段在本挂件出现前就一直是空的：
-     * 摘要与「面板」按钮靠右，`flex-end` 把内容全推到右边去。
+     * 用量条的小鲸鱼：**单行字符画**，随会话是否在运行而变。
      *
-     * **跑道宽度固定**，不跟着摘要长度算——`summary` 随额度、倒计时、
-     * 花费随时变长变短，算剩余宽度的代码估错一个字符就会换行、把条子
-     * 变成两行高。固定的跑道只在极窄的窗口里被引擎按 flexShrink 收窄，
-     * 收窄后 `swimOffsetFor` 拿到更小的余量，自己就不游了。
+     * 从位图 Svg 换成字符画的原因：这条子只有一行高，而位图立绘的最小可读
+     * 尺寸就顶到 52px——要么被裁掉一半，要么把条子撑高两行。字符画按字符格
+     * 布局，与同一行的摘要文字同一套度量，既不撑高也不会在换 DPI 时错位；
+     * 顺带在终端上也能画（终端本来就没有 Svg）。
+     *
+     * 三种状态宽都是 5 列，所以状态切换时后面的摘要不会左右跳。
      */
-    const BAND_SWIM_COLS = 24
-    // 小鲸鱼显示尺寸：素材的不透明区几乎铺满画布（小图实测 x 11–159 / y 2–159，
-    // 占宽 93%、占高 99%），所以框宽基本就是她本人的宽度。取 52px（约 6.5 列）、
-    // 高按画布比例 ≈ 27px，略高于一行字但仍在条子的行高内。
-    const BAND_WHALE_PX = 52
+    const bandState = bandWhaleStateOf(isSessionRunning, now)
     const bandMood = moodOf(now)
-    // 跑道里还要容下鲸鱼自身，「可挪动列数」要减掉它，否则到最右端会被裁。
-    const bandSwimCols = swimOffsetFor(now, BAND_SWIM_COLS - 6, BAND_SWIM_STEP_COLS, BAND_SWIM_STEP_MS)
-    // 朝向跟着相位走：向右游时镜像（原素材头朝左），折返后翻回来。
-    const bandFacingRight = bandWhaleFacingRight(now, BAND_SWIM_COLS - 6)
+    // **宽度固定成 6 列**（字符画 5 列 + 1 列右缝），不跟着摘要长度算——
+    // `summary` 随额度、倒计时、花费随时变长变短，按剩余宽度算的代码估错
+    // 一个字符就会换行、把条子变成两行高。窄窗口里引擎按 flexShrink 收窄，
+    // 收窄后字符画位置由 `overflow` 裁掉，不影响布局。
+    const BAND_WHALE_COLS = BAND_WHALE_TEXT_COLS + 1
 
     // 注意：这里不能在 Text 里用 `<>` 或嵌套 Text。
     // 引擎的 `Fragment` 实现是「一个纵向 Box」，塞进 Text 就是
@@ -565,26 +599,15 @@ export const register: Register = (on, options) => {
         width={e.props.bodyColumns}
         gap={1}
       >
-        {/* 跑道：宽度固定，里面的鲸鱼用 `marginLeft` 左右挪。用 margin 而
-            不是 `justifyContent`，是因为后者只有 4 个档位、做不出连续位移。
-            跑道本身 `flexShrink` 默认允许收窄，窄窗口里自动让位给摘要。
+        {/* 小鲸鱼：单行字符画，宽度固定 6 列。外面不再套跑道 Box——那层
+            是为巡游准备的可挪动空间，巡游取消后它只剩一个定宽外壳。
+            字符画本身已经表达了「在不在干活」，不需要再靠位置变化。
 
-            **不要写成 `cond ? <A/> : <B/>`。** 引擎的 JSX 运行时会把三元
-            整体包成一个 fragment（空纵向 Box），`Text` 在 Box 里渲染为空——
-            实测终端上整个位置是空的。两个分支各自内联、用 `&&` 分开写，就
-            不会出现那个占位 fragment。 */}
-        <Box key="whale-band-swim" flexDirection="row" width={BAND_SWIM_COLS}>
-          <Box marginLeft={bandSwimCols}>
-            {Svg && (
-              <Svg
-                source={bandWhaleSvg(bandMood, now, WHALE_FLOAT_EPOCH, bandFacingRight)}
-                alt={`小鲸鱼：${bandMood}`}
-                width={BAND_WHALE_PX}
-                height={BAND_WHALE_PX * WHALE_ASPECT}
-              />
-            )}
-            {!Svg && <Text>{emblemOf(bandMood)}</Text>}
-          </Box>
+            **不上色。** 曾经想给运行中的鲸鱼一支绿色，但 `diffAdded` 按
+            设计规则只用于「增加的行数」——挪来当装饰会让读者在条子上看到
+            同一个颜色表达两件事。状态差异由字形承担（见 `BAND_WHALE_GLYPHS`）。 */}
+        <Box key="whale-band-whale" width={BAND_WHALE_COLS}>
+          <Text>{bandWhaleGlyph(bandState)}</Text>
         </Box>
         <Box key="whale-band-spacer" flexGrow={1} />
         <Text dimColor>{summary}</Text>
@@ -710,12 +733,6 @@ export const register: Register = (on, options) => {
     const availablePx = Math.max(0, width - 1) * 8
     const whaleWidth = Math.min(whaleSize.width * scale, availablePx)
     const whaleHeight = whaleWidth * WHALE_ASPECT
-    // 巡游的余量 = 面板列数 − 立绘实际占的列数。用**夹取后**的显示宽度换算，
-    // 而不是 `whaleSizeFor` 的基准值：窄面板上立绘已被收到可用宽度，基准列数
-    // 会高估占用。余量不足一步时 `swimOffsetFor` 恒返回 0（贴右端，与巡游前
-    // 一致），负余量同样落进这一支，不需要额外夹取。
-    const swimFreeCols = width - Math.ceil(whaleWidth / 8)
-    const swimCols = swimOffsetFor(now, swimFreeCols)
 
     const whale = Svg ? (
       <Svg
@@ -1535,18 +1552,21 @@ export const register: Register = (on, options) => {
         {/* 数据新鲜度贴在最底下：它是「上面那些数字有多可信」的脚注，
             放在开场反而挡在真正要看的数字前面。 */}
         {historyHead}
-        {/* 鲸鱼独占最后一行、靠右起步。泡泡**常驻**，内容每 `BUBBLE_PAGE_MS`
+        {/* 鲸鱼独占最后一行、**恒贴右端**。泡泡常驻，内容每 `BUBBLE_PAGE_MS`
             换一页；常驻是因为点击区没法精确对齐立绘——`Svg` 按 CSS 像素
             布局、`Box` 按字符格布局，两者之间引擎不给换算，只能猜行高；
             猜小了「点鲸鱼底部没反应」，猜大了又会盖住别的内容。不如直接
             把要看的数字画出来，读者连点都不用点。
-            **低频巡游**：立绘整体沿底边来回游，一步三列（24px）、一步 6 秒
-            （三角波，见 `whale-art.ts` 的 `swimOffsetFor`），到左端折返。步频
-            就是泡泡翻页的节奏——同一拍重绘里翻页又挪步，零新增定时器。
-            窄到余量不足一步时恒贴右端不游。鲸鱼不翻转：素材朝左，镜像会让
+
+            **不再巡游。** 曾经这里按 `swimOffsetFor` 做三角波，每 6 秒向内
+            挪三列、到头折返。问题是面板每 30 秒自动重绘一次，读者看到的是
+            「鲸鱼每次刷新都往中间走一点、位置回不去」——一个本该固定在右下角
+            的立绘变成了会漂移的东西。巡游的收益只是「看起来活着」，而这个
+            挂件本来就靠数据刷新证明自己活着；代价是位置不可预期。所以改回
+            恒定 `justifyContent="flex-end"`。鲸鱼不翻转：素材朝左，镜像会让
             气泡的指向关系失效，碰撞测试也全部重算——已知取舍。 */}
         <Box flexDirection="row" justifyContent="flex-end" width={width}>
-          <Box marginRight={swimCols} key="whale-swim">
+          <Box key="whale-swim">
             {whale}
           </Box>
         </Box>

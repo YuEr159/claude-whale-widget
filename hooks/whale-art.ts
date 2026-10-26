@@ -112,6 +112,64 @@ export function emblemOf(mood: WhaleMood): string {
 }
 
 /**
+ * 用量条上的鲸鱼：**单行字符画**，随会话是否在运行而变。
+ *
+ * 为什么不用 Svg 位图：那条子只有一行高（约 20px），而位图立绘的最小可读
+ * 尺寸就顶到 52px——塞进去要么被裁掉一半，要么把条子撑高。字符画按字符格
+ * 布局，与条子上的摘要文字同一套度量，不会撑高，也不会在 DPI 变化时错位。
+ *
+ * 三个状态各有一幅，宽都是 5 列（`WATER` 的位置固定），所以状态切换时后面
+ * 的摘要文字不会左右跳：
+ *
+ *   - `idle`    静止：`≋ᐟᐟ\` —— 尾巴在水面，身体朝向左边（与素材一致）
+ *   - `working` 干活：水花移到左边、加一个尾迹，像刚划出去
+ *   - `busy`    忙：两侧都有水花，尾迹最长
+ *
+ * 只用一个反斜杠和一个斜杠拼轮廓，是因为方括号、圆括号在等宽字体里与
+ * CJK 字形的基线不一致；`\` `/` `~` `≋` 这几个在常见等宽字体里高度一致。
+ */
+export type BandWhaleState = 'idle' | 'working' | 'busy'
+
+/**
+ * 用量条字符画的三种状态。宽都必须是 5 列——状态切换时后面的摘要文字
+ * 才不会左右跳（有测试钉住这一点）。
+ *
+ * 每幅都是「水面波纹 `≋` + 身体轮廓 `ᐟᐟ\`」的组合，区别只在波纹位置：
+ * 静止时波纹在尾部，划水时移向前方、并多一道尾迹。
+ */
+export const BAND_WHALE_GLYPHS: Readonly<Record<BandWhaleState, string>> = {
+  idle: ' ≋ᐟᐟ\\',
+  working: '≋ᐟᐟ\\ ',
+  busy: '≋≋ᐟᐟ ',
+}
+
+/** 用量条字符画的固定宽度（列）。三种状态必须一致。 */
+export const BAND_WHALE_TEXT_COLS = 5
+
+/**
+ * 会话是否在运行 → 用量条鲸鱼的状态。
+ *
+ * `isRunning` 由 `turn.start` 置真、`turn.complete` / `turn.abort` 置假
+ * （见 `register.tsx` 的 `sessionRunning` 状态）。未开始时按 `idle`。
+ *
+ * @param isRunning 引擎是否正在跑一轮对话
+ * @param now       当前时刻，用来在 `working` / `busy` 之间轮换——同一状态
+ *                  停着不动会让人以为卡住了
+ */
+export function bandWhaleStateOf(isRunning: boolean, now: number): BandWhaleState {
+  if (!isRunning) return 'idle'
+  // 运行中每 700ms 在两幅之间切一次：肉眼看到的是「在划水」，而不是
+  // 一个定格的符号。这个节奏与 `BAND_SWIM_STEP_MS`（1.2s）相近，
+  // 但更快一点，因为只有两个状态、切换幅度小。
+  return Math.floor(now / 700) % 2 === 0 ? 'working' : 'busy'
+}
+
+/** 用量条字符画的文字。 */
+export function bandWhaleGlyph(state: BandWhaleState): string {
+  return BAND_WHALE_GLYPHS[state]
+}
+
+/**
  * 气泡与文字的颜色：沿用原图的配色（#203170 描边、#4858A8 主体蓝）。
  *
  * **所有情绪共用一套配色。** 曾经按情绪换底色：额度过半转暖、夜里再暖一点，

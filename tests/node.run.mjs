@@ -24,7 +24,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { WHALE_MAX_WIDTH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
+import { BAND_WHALE_GLYPHS, BAND_WHALE_TEXT_COLS, WHALE_MAX_WIDTH, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   canonicalModelName,
@@ -1945,4 +1945,32 @@ test('设置页：口径芯片整行宽度守住 70 列预算', () => {
     wholeRow <= 70,
     `整行 ${wholeRow} 列，超过 70 列预算——74 列以下的面板会折行`,
   )
+})
+
+/**
+ * 用量条字符画：空闲静止，运行中两幅轮换，三种状态等宽。
+ *
+ * 「把鲸鱼和会话是否运行中联系起来」那条需求的落点。状态机是纯函数：
+ * `turn.start` 置真、`turn.complete` / `turn.abort` 置假（register.tsx 的
+ * 模块变量 `isSessionRunning`），这里只验「给定运行状态与时刻，画出哪一幅」。
+ */
+test('用量条字符画：空闲静止，运行中两幅轮换且等宽', () => {
+  // 空闲：不管时钟走到哪儿都是 idle。
+  for (const now of [0, 700, 1400, 5000, 1_000_000]) {
+    assert.equal(bandWhaleStateOf(false, now), 'idle')
+  }
+  // 运行中：700ms 一换。
+  assert.equal(bandWhaleStateOf(true, 0), 'working')
+  assert.equal(bandWhaleStateOf(true, 700), 'busy')
+  assert.equal(bandWhaleStateOf(true, 1400), 'working')
+  // 两幅必须真的不同，否则「轮换」是假的。
+  assert.notEqual(BAND_WHALE_GLYPHS.working, BAND_WHALE_GLYPHS.busy)
+  // 三种状态宽都是 5 列：状态切换时后面的摘要不会左右跳。
+  for (const [state, glyph] of Object.entries(BAND_WHALE_GLYPHS)) {
+    assert.equal(displayWidth(glyph), BAND_WHALE_TEXT_COLS, `${state} 宽度应是 ${BAND_WHALE_TEXT_COLS} 列`)
+  }
+  // 每一幅都带水面波纹，读者才认得出是鲸鱼而不是一串符号。
+  for (const glyph of Object.values(BAND_WHALE_GLYPHS)) {
+    assert.ok(glyph.includes('≋'), `字符画应当带水面：${JSON.stringify(glyph)}`)
+  }
 })

@@ -462,21 +462,18 @@ function findSvgs(node: any, out: any[] = []): any[] {
   return out
 }
 
-/** 找到包鲸鱼的那个巡游 Box（最后一行里的第一个孩子）。 */
-function findSwimBox(tree: any): any {
-  const kids = tree.children ?? []
-  const row = kids[kids.length - 1]
-  return row?.children?.find?.((kid: any) => kid?.type === 'Box')
-}
-
 /**
- * 低频巡游在树里的落点：鲸鱼那一行包一个 `Box`，`marginRight` 按三角波走。
+ * 面板里的鲸鱼**恒贴右端**，不随刷新漂移。
  *
- * 起点（整点 12:00:00.000）相位恰为 0——`floor(now / 6000)` 落在换页边界上，
- * 所以第一条断言是「贴右端，与没有巡游时完全一致」：巡游不该改变静止状态
- * 下的画面，老测试钉的 `justifyContent: flex-end` 也还成立。
+ * 曾经这里做低频巡游：`marginRight` 按三角波每 6 秒向内挪三列。问题是面板
+ * 每 30 秒自动重绘一次，读者看到的是「鲸鱼每次刷新都往中间走一点、回不去」
+ * ——一个本该固定在右下角的立绘变成了会漂的东西。巡游的收益只是「看起来
+ * 活着」，而挂件本来就靠数据刷新证明自己活着；代价是位置不可预期。
+ *
+ * 这条守的是「不管时钟走到哪儿，`marginRight` 都不存在」——没有 margin，
+ * 鲸鱼就只能贴着 `justifyContent: flex-end` 的右端。
  */
-test('巡游：起点贴右端，推进时钟逐步左移，余量不足时不游', async ($, on) => {
+test('面板鲸鱼恒贴右端：推进时钟也不改位置', async ($, on) => {
   const clock = mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -485,25 +482,42 @@ test('巡游：起点贴右端，推进时钟逐步左移，余量不足时不�
     surface: 'desktop',
     component: 'Pane',
     requestId: 'whale',
-    // 140 列：余量 = 140 − ceil(380/8) = 92 列，单程 30 步，足够走两步。
     props: props(140),
     viewport: { columns: 160, rows: 50 },
   })
 
-  expect(findSwimBox(await ui.drawn())?.props?.marginRight).toBe(0)
+  const rightEdge = async () => {
+    const tree = await ui.drawn() as any
+    const kids = tree.children ?? []
+    const last = kids[kids.length - 1]
+    // 靠右对齐靠的是 justifyContent，不是 margin。
+    expect(last?.props?.justifyContent).toBe('flex-end')
+    const inner = last?.children?.[0]
+    expect(inner?.props?.marginRight).toBeUndefined()
+    expect(inner?.props?.marginLeft).toBeUndefined()
+  }
 
+  await rightEdge()
   await clock.advance(6_000)
   await ui.redraw()
-  expect(findSwimBox(await ui.drawn())?.props?.marginRight).toBe(3)
-
+  await rightEdge()
   await clock.advance(6_000)
   await ui.redraw()
-  expect(findSwimBox(await ui.drawn())?.props?.marginRight).toBe(6)
+  await rightEdge()
+  await clock.advance(60_000)
+  await ui.redraw()
+  await rightEdge()
 
   await ui.unmount()
 })
 
-test('窄面板（40 列）余量不足一步，鲸鱼恒贴右端', async ($, on) => {
+/**
+ * 窄面板同样是鲸鱼贴右端。
+ *
+ * 巡游取消后这条不再测「余量不足不游」，而是测「窄面板下也没有任何边距」——
+ * 立绘被夹取到可用宽度以内，靠 `justifyContent: flex-end` 贴右。
+ */
+test('窄面板（40 列）鲸鱼同样贴右端，无边距', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -512,13 +526,16 @@ test('窄面板（40 列）余量不足一步，鲸鱼恒贴右端', async ($, o
     surface: 'desktop',
     component: 'Pane',
     requestId: 'whale',
-    // 40 列：立绘占 48 列 > 面板，夹取后没有余量。
     props: props(40),
     viewport: { columns: 60, rows: 40 },
   })
 
-  const swim = findSwimBox(await ui.drawn())
-  expect(swim?.props?.marginRight).toBe(0)
+  const tree = await ui.drawn() as any
+  const kids = tree.children ?? []
+  const last = kids[kids.length - 1]
+  expect(last?.props?.justifyContent).toBe('flex-end')
+  const inner = last?.children?.[0]
+  expect(inner?.props?.marginRight).toBeUndefined()
 
   await ui.unmount()
 })
