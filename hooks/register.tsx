@@ -40,9 +40,11 @@ import {
 import {
   contextParts,
   contextView,
+  latestPartsText,
   modelDetailRows,
   detailTableLayout,
   CHIP_COLUMN,
+  LEGEND_SKELETON_KINDS,
   MODEL_STACK_KEEP,
   modelGrainFor,
   modelGrainLabel,
@@ -52,6 +54,7 @@ import {
   overviewFooter,
   rasterizeStacks,
   rasterizeTurnBars,
+  stackCaption,
   stackColor,
   turnBars,
   turnBarsCaption,
@@ -824,16 +827,28 @@ export const register: Register = (on, options) => {
     // 显示最近几轮、柱子、图例、图注全由 `contextView` 一处算出：宽度决定
     // 能放几根，图注与图例跟着同一份结果走。以前这里写死 60 轮、SVG 内部
     // 又按宽度裁一次，窄画布下就会出现「图注说 60 轮、图上 34 根」。
-    const chartWidth = Math.max(80, Math.min(width * 8 - 16, 640))
+    //
+    // **上限 900px 而不是 640px**：640 是模型页立图时期留下的数，对上下文
+    // 柱状图来说偏窄——96 列以上的面板会空出 112～784px 一条死区（右侧整
+    // 块什么都不画）。柱状图按 CSS 像素布局、面板按字符格，两套单位之间没
+    // 有换算，所以「填满」只能靠这个上限把常见宽度兜住；140 列以上再封顶
+    // 900px，因为那时柱子已经到 60 根上限（`CONTEXT_MAX_BARS`），再宽只是
+    // 让每根柱子变胖，读不出更多轮。
+    const chartWidth = Math.max(80, Math.min(width * 8 - 16, 900))
     const contextScreen = contextView(contextTurns, chartWidth, Math.max(0, bufferPct), theme.isLight)
+    // 最近一轮与它的构成文字：用 `contextTurns` 的末项（不是 `contextScreen.turns`）
+    // ——后者已经被宽度裁到这一屏，末项虽然也是最新的那轮，但取原始数组更直白，
+    // 也免得「窗口窄时最近一轮恰好被裁掉」这种误读。
+    const latestTurn = contextTurns[contextTurns.length - 1]
+    const latestParts = latestPartsText(latestTurn)
 
     const contextPage = (
       <Box flexDirection="column">
         {contextTurns.length === 0 ? (
           <Text dimColor>还没有逐轮数据</Text>
         ) : (
-          // 图与图例一起装进一块圆角里：它们说的是同一件事（这一屏每轮的
-          // 构成），分开铺在页面底色上会像是两块碰巧挨着的内容。底色比
+          // 图、构成、图注、图例装进一块圆角里：它们说的是同一件事（这一屏
+          // 每轮的构成），分开铺在页面底色上会像是几块碰巧挨着的内容。底色比
           // 大框深一档，读起来是「嵌进去的一块」，而不是又浮起来一层。
           <Box
             key="whale-context-inset"
@@ -873,14 +888,36 @@ export const register: Register = (on, options) => {
                 ))}
               </>
             )}
-            {/* 图例跟着数据走：只列这一屏里真正出现过的分类，缺构成的柱子仍按「已用」标。 */}
+            {/* 最近一轮的构成：这一页原先一个数字都没有——柱状图只有形状，
+                所有读数（轮数、峰值、压缩次数）都写在 Svg 的 `<title>` 里，
+                屏幕上看不见。读者想问的第一件事恰恰是「现在窗口被什么占着」，
+                而这是整页唯一能回答它的地方，且它是**文字**，所以窄面板、终端
+                上也照样读得到。 */}
+            {latestTurn && latestParts && (
+              <Text>
+                最近一轮 <Text bold>{pct(latestTurn.percent)}</Text>
+                <Text dimColor>{latestParts}</Text>
+              </Text>
+            )}
+            {/* 图注从 `alt` 里搬出来。`alt` 是无障碍描述，引擎不会把它画在
+                屏幕上；而「最近几轮、峰值多少」正是柱状图的读法说明，读者
+                必须看得见。文字与 `alt` 是同源的一句话（都出自
+                `contextView`），不会各说各的。
+                终端那一路加 `yMax`：那边没有 Svg、也就没有纵轴刻度，上限只能
+                写在文字里；桌面端的轴顶已经标了上界。 */}
+            <Text dimColor>{Svg ? contextScreen.caption : stackCaption(contextScreen.bars.length, contextScreen.peak, contextScreen.yMax)}</Text>
+            {/* 图例只列「分类」：骨架段已经在图注里说过了（「12 轮」「峰值
+                56%」），再加上「已用（无构成）」「压缩缓冲」两格只是把同一
+                件事说了两遍。分类才是柱内那些颜色真正需要解释的东西。 */}
             <Box flexDirection="row" gap={1} flexWrap="wrap">
-              {contextScreen.legend.map(item => (
-                <Box key={`whale-legend-${item.kind}`} flexDirection="row" gap={1}>
-                  <Text color={item.color}>■</Text>
-                  <Text dimColor>{item.label}</Text>
-                </Box>
-              ))}
+              {contextScreen.legend
+                .filter(item => !LEGEND_SKELETON_KINDS.has(item.kind))
+                .map(item => (
+                  <Box key={`whale-legend-${item.kind}`} flexDirection="row" gap={1}>
+                    <Text color={item.color}>■</Text>
+                    <Text dimColor>{item.label}</Text>
+                  </Box>
+                ))}
             </Box>
           </Box>
         )}

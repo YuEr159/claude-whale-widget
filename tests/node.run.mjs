@@ -44,6 +44,7 @@ import {
   contextParts,
   contextStack,
   contextView,
+  stackCaption,
   stackColor,
   stackLegendOf,
   rasterizeStacks,
@@ -784,6 +785,28 @@ test('contextView：图注、图例、纵轴、柱子数全出自同一份裁好
   // 窄画布裁掉它们之后，图例里也不该再有。
   const narrow = contextView(turns, 80, 0, false)
   assert.ok(!narrow.legend.some(item => item.kind === 'system'), '窄画布不该再列出已被裁掉的分类')
+})
+
+/**
+ * 图注上屏之后不能再重复纵轴上界。
+ *
+ * `stackCaption` 的 `yMax` 参数原本只给终端用：那边没有 Svg，画不出左侧
+ * 纵轴，上限只能写进文字。桌面端的图上已经有 `0` 与上界两处刻度，图注里
+ * 再来一句「纵轴 75%」就是同一件事说两遍。
+ *
+ * 早先 `contextView` 把 `yMax` 传给了 `stackCaption`——那时 caption 只进
+ * `alt`（屏幕上看不见），所以没暴露；图注搬上屏幕后就成了可见的重复。
+ */
+test('contextView 的图注不带纵轴（轴上有刻度），终端自己补', () => {
+  const turns = Array.from({ length: 12 }, (_, index) => ({
+    seq: index + 1, percent: 40, tokens: 1000, at: index,
+  }))
+  const view = contextView(turns, 900, 0, false)
+  assert.ok(!view.caption.includes('纵轴'), `图注不该提纵轴，实际「${view.caption}」`)
+  // 但 `yMax` 本身仍要给出来——终端那一路要拿它拼自己那句。
+  assert.ok(view.yMax > 0)
+  const terminalLine = stackCaption(view.bars.length, view.peak, view.yMax)
+  assert.ok(terminalLine.includes('纵轴'), `终端图注该带纵轴，实际「${terminalLine}」`)
 })
 
 test('轮次热图：窗口固定（默认半年），不再分页', () => {
