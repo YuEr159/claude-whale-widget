@@ -392,21 +392,27 @@ export function bubblePages(
 /**
  * 用量条能显示的口径，面板与默认值共用。
  *
- * 这几项的次序就是拼接口径的次序——读者选了「额度窗口」与「代码改动」时，
+ * 这几项的次序就是拼接口径的次序——读者选了「额度」与「代码改动」时，
  * 条子上先出现额度、再出现改动，不会因为勾选先后而变。标签必须与
  * `bandSummary` 里 `one()` 真正画出来的内容对上：
  *
  *   - `cost` 画 `上下文 62%`，所以它的标签是「上下文占用」；
- *   - `context` 画 `5h 24% · 7d 41%`，所以它的标签是「5h + 7d」。
+ *   - `context` 画 `5h 24% · 7d 41%`，所以它的标签是「5h/7d」。
  *
  * 这两条曾经被我按相反的对应关系改错过一次，结果是勾「上下文占用」却看到
  * 额度百分比、关掉它条子毫无变化。`tests/unit.test.ts` 里有一条断言把
  * 每个标签和它实际画出的内容锁在一起。
+ *
+ * **标签长度是宽度预算的一部分。** 五颗芯片加一个总开关写成一行要 58 列，
+ * 而 60 列面板的页内只有 56 列——旧标签「额度窗口」「5h + 7d」让门槛升到
+ * 80 列，窄面板下整组必然折行，标签被孤零零留在上一行。缩到「额度」
+ * 「5h/7d」后门槛降到 74 列，同时不丢语义：`window` 画的是重置倒计时、
+ * `context` 画的是两个窗口的百分比，内容本来就不一样。
  */
 export const BAND_METRIC_OPTIONS: ReadonlyArray<{ value: BandMetric; label: string }> = [
-  { value: 'window', label: '额度窗口' },
+  { value: 'window', label: '额度' },
   { value: 'cost', label: '上下文占用' },
-  { value: 'context', label: '5h + 7d' },
+  { value: 'context', label: '5h/7d' },
   { value: 'session', label: '本会话花费' },
   { value: 'diff', label: '代码改动' },
 ]

@@ -1348,45 +1348,78 @@ export const register: Register = (on, options) => {
       </Button>
     )
 
-    // 设置页：四组设置。它们曾排在面板最下方，与上面的几页内容并列，读起来
+    // 设置页：三组设置。它们曾排在面板最下方，与上面的几页内容并列，读起来
     // 像一块没名字的区域；收进「设置」页签之后，每一块都归属于一个明确的页。
     //
     // 所有项一律是**开关**：亮＝这一项开着。不做「按一下切换标签」的动作按钮
     // ——同一个视觉组里混两种语义，读者没法从「亮不亮」判断当前状态。
+    //
+    // **「显示用量条」与五个口径同属一组。** 它们改的是同一件东西——输入框
+    // 上方那条子：`isBandVisible` 决定它显不显示，`bandMetrics` 决定显示哪几项。
+    // 早先「显示用量条」被放在「面板」组里，与「轮次费用提示」并列，而五个
+    // 口径在「用量条显示」组里——同一个对象的两个开关被拆成两组，读者会以为
+    // 它们是两回事。现在总开关排在五个口径前面，是一棵树的两层。
+    const SETTINGS_LABEL_COL = 8
+    const settingsRow = (key: string, label: string, chips: any) => (
+      <Box key={key} flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+        {/* 标签列定宽：三组标签宽度不同（用量条 6 / 面板 4 / 立绘 8），不统一
+            的话每组芯片的起始位置都不一样，读起来像三张互不相干的表。
+            `SETTINGS_LABEL_COL` 取最长那个（立绘大小 = 8）。 */}
+        <Box width={SETTINGS_LABEL_COL}>
+          <Text dimColor>{label}</Text>
+        </Box>
+        {chips}
+      </Box>
+    )
     const settingsPage = (
       <Box flexDirection="column" gap={1}>
-        {/* 用量条口径是多选：每项一个方块，亮着的就是会出现在条子上的。
-            至少保留一项——全取消会让用量条变成一条空行，看起来像坏了。
-            点到最后一项时给一句提示，不要静默吞掉那次点击。 */}
-        <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-          <Text dimColor>用量条显示</Text>
-          {BAND_METRIC_OPTIONS.map(option => {
-            const isOn = metrics.includes(option.value)
-            return chip(`whale-metric-${option.value}`, option.label, isOn, () => {
-              const next = isOn
-                ? metrics.filter(item => item !== option.value)
-                : [...metrics, option.value]
-              if (next.length === 0) {
-                $.ui.toast('用量条至少要留一项，否则会变成一条空行。')
-                return
-              }
+        {settingsRow('whale-settings-band', '用量条', (
+          <>
+            {/* 总开关排在五个口径前面：先决定「要不要」，再决定「显示什么」。
+                之前这里写死 `false`，于是它永远不亮、也读不出当前状态。 */}
+            {chip('whale-band-toggle', '显示', prefsNow.isBandVisible ?? DEFAULT_PREFS.isBandVisible, () => {
               void (async () => {
                 const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                const nowPrefs = latest.value ?? DEFAULT_PREFS
+                const isNextVisible = !nowPrefs.isBandVisible
                 await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                  ...(latest.value ?? DEFAULT_PREFS),
-                  bandMetrics: BAND_METRIC_OPTIONS.map(o => o.value).filter(v => next.includes(v)),
+                  ...nowPrefs,
+                  isBandVisible: isNextVisible,
                 })
-                // 这个按钮只改变底色与明暗，条目本身仍然在同一个位置——不开
-                // 口的读者没法从画面判断这一下到底生效没有。每次点击都回一句
-                // 开/关，配合「项目名」说清是哪一项。
-                $.ui.toast(`${option.label}：${isOn ? '已关闭' : '已开启'}`)
+                // 收起后整个入口都没了，得告诉人怎么再叫出来，否则只能重开会话。
+                if (!isNextVisible) $.ui.toast('/whale 可以呼出当前面板哦！')
               })()
-            })
-          })}
-        </Box>
-        <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-          <Text dimColor>面板</Text>
-          {chip('whale-turn-cost', '轮次费用提示', prefsNow.isTurnCostOn ?? DEFAULT_PREFS.isTurnCostOn, () => {
+            })}
+            {/* 用量条口径是多选：每项一个方块，亮着的就是会出现在条子上的。
+                至少保留一项——全取消会让用量条变成一条空行，看起来像坏了。
+                点到最后一项时给一句提示，不要静默吞掉那次点击。 */}
+            {BAND_METRIC_OPTIONS.map(option => {
+              const isOn = metrics.includes(option.value)
+              return chip(`whale-metric-${option.value}`, option.label, isOn, () => {
+                const next = isOn
+                  ? metrics.filter(item => item !== option.value)
+                  : [...metrics, option.value]
+                if (next.length === 0) {
+                  $.ui.toast('用量条至少要留一项，否则会变成一条空行。')
+                  return
+                }
+                void (async () => {
+                  const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                  await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                    ...(latest.value ?? DEFAULT_PREFS),
+                    bandMetrics: BAND_METRIC_OPTIONS.map(o => o.value).filter(v => next.includes(v)),
+                  })
+                  // 这个按钮只改变底色与明暗，条目本身仍然在同一个位置——不开
+                  // 口的读者没法从画面判断这一下到底生效没有。每次点击都回一句
+                  // 开/关，配合「项目名」说清是哪一项。
+                  $.ui.toast(`${option.label}：${isOn ? '已关闭' : '已开启'}`)
+                })()
+              })
+            })}
+          </>
+        ))}
+        {settingsRow('whale-settings-panel', '面板', (
+          chip('whale-turn-cost', '轮次费用提示', prefsNow.isTurnCostOn ?? DEFAULT_PREFS.isTurnCostOn, () => {
             void (async () => {
               const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
               const nowPrefs = latest.value ?? DEFAULT_PREFS
@@ -1403,48 +1436,33 @@ export const register: Register = (on, options) => {
                 isNext ? '轮次费用提示：已开启，每轮结束时弹一次' : '轮次费用提示：已关闭',
               )
             })()
-          })}
-          {/* 这也是开关：亮＝用量条正在显示。点它把用量条收起来或叫回来。
-              之前这里写死 `false`，于是它永远不亮、也读不出当前状态。 */}
-          {chip('whale-band-toggle', '显示用量条', prefsNow.isBandVisible ?? DEFAULT_PREFS.isBandVisible, () => {
-            void (async () => {
-              const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-              const nowPrefs = latest.value ?? DEFAULT_PREFS
-              const isNextVisible = !nowPrefs.isBandVisible
-              await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                ...nowPrefs,
-                isBandVisible: isNextVisible,
-              })
-              // 收起后整个入口都没了，得告诉人怎么再叫出来，否则只能重开会话。
-              if (!isNextVisible) $.ui.toast('/whale 可以呼出当前面板哦！')
-            })()
-          })}
-        </Box>
-        {/* 立绘大小：引擎没有滑块控件，所以这里是一排档位按钮。
-            点哪一档，鲸鱼立刻变到那个比例——「拖动条」要的是「随手可调」，
-            而不是字面意义上的拖拽。选中的那档与其它开关同一套明暗规则。
-            这一排放进「面板」组：它改的是面板里立绘的显示，不是用量条口径。 */}
-        <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-          <Text dimColor>立绘大小</Text>
-          {WHALE_SCALES.map(scaleValue => {
-            const isOn = Math.abs(scale - scaleValue) < 1e-6
-            return chip(
-              `whale-scale-${scaleValue}`,
-              `${Math.round(scaleValue * 100)}%`,
-              isOn,
-              () => {
-                void (async () => {
-                  const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
-                  await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
-                    ...(latest.value ?? DEFAULT_PREFS),
-                    whaleScale: scaleValue,
-                  })
-                  $.ui.toast(`立绘大小：${Math.round(scaleValue * 100)}%`)
-                })()
-              },
-            )
-          })}
-        </Box>
+          })
+        ))}
+        {settingsRow('whale-settings-whale', '立绘大小', (
+          <>
+            {/* 引擎没有滑块控件，所以这里是一排档位按钮。点哪一档，鲸鱼立刻
+                变到那个比例——「拖动条」要的是「随手可调」，而不是字面意义
+                上的拖拽。选中的那档与其它开关同一套明暗规则。 */}
+            {WHALE_SCALES.map(scaleValue => {
+              const isOn = Math.abs(scale - scaleValue) < 1e-6
+              return chip(
+                `whale-scale-${scaleValue}`,
+                `${Math.round(scaleValue * 100)}%`,
+                isOn,
+                () => {
+                  void (async () => {
+                    const latest = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
+                    await $.state.set({ plugin: 'whale-usage', key: 'prefs' } as const, {
+                      ...(latest.value ?? DEFAULT_PREFS),
+                      whaleScale: scaleValue,
+                    })
+                    $.ui.toast(`立绘大小：${Math.round(scaleValue * 100)}%`)
+                  })()
+                },
+              )
+            })}
+          </>
+        ))}
       </Box>
     )
 
