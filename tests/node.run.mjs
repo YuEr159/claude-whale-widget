@@ -2056,10 +2056,38 @@ test('上下文接线：历史在前、本次在后，同一时刻取信息更�
   assert.equal(merged[1].percent, 31)
   assert.ok(merged[1].parts && merged[1].parts.length === 1, '同刻应保留带构成的那条')
 
-  // 任何一边为空时直接返回另一边。
-  assert.deepEqual(mergeContextHistory([], live), live)
-  assert.deepEqual(mergeContextHistory(history, []), history)
+  // **合并后重编号**：两侧的 seq 各从 1 开始，直接接起来会得到
+  // 「1, 2, 5, 6」这种跳号（甚至倒序）——而图上的横坐标正是 seq。
+  assert.deepEqual(merged.map(turn => turn.seq), [1, 2, 3], '合并后必须重编成 1..N')
+
+  // 任何一边为空时直接返回另一边（同样重编号）。
+  assert.deepEqual(mergeContextHistory([], live).map(t => t.seq), [1, 2])
+  assert.deepEqual(mergeContextHistory(history, []).map(t => t.seq), [1, 2])
   assert.deepEqual(mergeContextHistory([], []), [])
+})
+
+/**
+ * 横坐标：合并且压缩之后，柱子上的序号必须仍是 1..N 的连续整数。
+ *
+ * 这是读者核对时间轴时唯一能抓住的东西。早先 `label` 直接取 `turn.seq`，
+ * 而历史与本次各从 1 开始，图上会出现标着 1 的柱子排在标着 21 的后面。
+ */
+test('横坐标：历史与本次接起来后序号连续，图上不跳号不倒序', () => {
+  // 历史 5 轮，本次 3 轮，各自 seq 从 1 起。
+  const history = Array.from({ length: 5 }, (_, i) => ({
+    seq: i + 1, percent: 20 + i, tokens: 1000 + i, at: 1000 + i * 100,
+  }))
+  const live = Array.from({ length: 3 }, (_, i) => ({
+    seq: i + 1, percent: 40 + i, tokens: 2000 + i, at: 2000 + i * 100,
+  }))
+
+  const merged = mergeContextHistory(history, live)
+  assert.equal(merged.length, 8)
+  assert.deepEqual(merged.map(t => t.seq), [1, 2, 3, 4, 5, 6, 7, 8])
+
+  // 图上横坐标取自 `bar.label`，而它来自 `turn.seq`——两者必须一致。
+  const { bars } = contextStack(merged, merged.length, 0)
+  assert.deepEqual(bars.map(b => b.label), ['1', '2', '3', '4', '5', '6', '7', '8'])
 })
 
 /** 历史接上之后，整条曲线能一路画到会话开头——这是这个改动的全部意义。 */

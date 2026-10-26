@@ -38,7 +38,6 @@ import {
   turnHeatSvg,
 } from './chart-art.ts'
 import {
-  contextDetailRows,
   contextParts,
   contextView,
   historyContextTurns,
@@ -890,13 +889,6 @@ export const register: Register = (on, options) => {
     const contextDenominator = contextDetail?.autoCompactThreshold ?? contextDetail?.rawMaxTokens
     const historyContext = historyContextTurns(record.data?.contextTurns, contextDenominator)
     const contextTurns = mergeContextHistory(historyContext, liveContextTurns)
-    // 逐轮明细：柱状图之上给一张可读的表——哪一轮涨了多少、什么时候被压缩。
-    const detailRows = contextDetailRows(contextTurns)
-    const isWideDetail = width >= 60
-    const DETAIL_SEQ_COL = 3
-    const DETAIL_PCT_COL = 6
-    const DETAIL_TOKENS_COL = 9
-    const DETAIL_DELTA_COL = 7
 
     // 显示最近几轮、柱子、图例、图注全由 `contextView` 一处算出：宽度决定
     // 能放几根，图注与图例跟着同一份结果走。以前这里写死 60 轮、SVG 内部
@@ -982,42 +974,6 @@ export const register: Register = (on, options) => {
                   </Box>
                 ))}
             </Box>
-            {/* 逐轮明细：柱状图只给形状，读者想问的是具体数字——哪一轮涨了
-                多少、什么时候被压缩过。压缩在图上只是一根突然变矮的柱子，
-                不标出来会被当成「这一轮用得少」，而它其实是引擎把旧内容收走了。
-                窄面板下调成两列（轮次 + 占比），列多了一定折行，反而更难读。 */}
-            {detailRows.length > 0 && (
-              <Box flexDirection="column" marginTop={1}>
-                <Box flexDirection="row" gap={1}>
-                  <Box width={DETAIL_SEQ_COL}><Text dimColor>轮</Text></Box>
-                  <Box width={DETAIL_PCT_COL}><Text dimColor>占比</Text></Box>
-                  {isWideDetail && <Box width={DETAIL_TOKENS_COL}><Text dimColor>窗口</Text></Box>}
-                  {isWideDetail && <Box width={DETAIL_DELTA_COL}><Text dimColor>变化</Text></Box>}
-                </Box>
-                {detailRows.map(row => (
-                  <Box key={`whale-ctx-row-${row.seq}`} flexDirection="row" gap={1}>
-                    <Box width={DETAIL_SEQ_COL}><Text dimColor>{row.seq}</Text></Box>
-                    <Box width={DETAIL_PCT_COL}>
-                      <Text bold={row.seq === detailRows.length}>{pct(row.percent)}</Text>
-                    </Box>
-                    {isWideDetail && (
-                      <Box width={DETAIL_TOKENS_COL}><Text dimColor>{tokens(row.tokens)}</Text></Box>
-                    )}
-                    {isWideDetail && (
-                      <Box width={DETAIL_DELTA_COL}>
-                        {/* 压缩优先于增量：那才是这一行最该被解释的事。
-                            用 `warning` 而不是红——压缩是正常机制，不是错误。 */}
-                        {row.afterCompact
-                          ? <Text color="warning">压缩</Text>
-                          : row.delta === undefined
-                            ? <Text dimColor>—</Text>
-                            : <Text dimColor>{`${row.delta > 0 ? '+' : ''}${row.delta.toFixed(1)}%`}</Text>}
-                      </Box>
-                    )}
-                  </Box>
-                ))}
-              </Box>
-            )}
           </Box>
         )}
       </Box>
