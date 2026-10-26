@@ -540,14 +540,15 @@ test('取消最后一个口径时给出提示，而不是静默无视', async ($
 })
 
 /**
- * 用量条：摘要 + 面板入口 + **左侧巡游的小鲸鱼**。
+ * 用量条：摘要 + 面板入口 + **左侧的字符画小鲸鱼**。
  *
- * 早先这里断言「不画任何形象」（`expect(find({type:'Svg'})).toBeUndefined()`），
- * 那是旧设计——条子当时只做摘要。现在用户要的是「在用量条界面空白处来回
- * 游」，左侧那片空白正是它的跑道。断言因此反过来：**桌面端必须有 Svg**，
- * 且它落在跑道里（`whale-band-swim`），不是挤在摘要边上。
+ * 早先这里是一条位图 Svg。换掉的原因：条子只有一行高，而位图立绘的最小
+ * 可读尺寸就顶到 52px——要么被裁掉一半，要么把条子撑高。字符画按字符格
+ * 布局，与同一行的摘要文字同一套度量。
+ *
+ * 这条守两件事：**没有 Svg**（位图确实换掉了），**字符画在**且宽度固定。
  */
-test('输入框上方用量条：摘要在右，小鲸鱼在左侧跑道里', async ($, on) => {
+test('输入框上方用量条：摘要在右，左侧是字符画小鲸鱼', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/test' })
 
@@ -569,75 +570,17 @@ test('输入框上方用量条：摘要在右，小鲸鱼在左侧跑道里', as
   expect(await ui.find({ key: 'whale-band' })).toBeDefined()
   expect(await ui.find({ key: 'whale-open' })).toBeDefined()
 
-  // 鲸鱼真的画了，而且只画鲸鱼本体——不画气泡（一行高的条子放不下气泡文字）。
-  const svg = await ui.find({ type: 'Svg' })
-  expect(svg).toBeDefined()
-  const source = String(svg?.props?.source ?? '')
-  expect(source).not.toContain('<ellipse') // 对话气泡的大椭圆
-  // 但鲸鱼位图在，且身后有水花。
-  expect(source).toContain('<image')
-  expect(source).toContain('#566CAE') // 水泡：素材自带的蓝紫水色
-  // 尺寸：宽 52px、高严格按画布比例（否则 preserveAspectRatio 留白，条子被撑高）。
-  expect(Number(svg?.props?.width)).toBe(52)
-  expect(Math.abs(Number(svg?.props?.height) - 52 * (320 / 620))).toBeLessThan(0.5)
+  // 位图换掉了：整条里没有 Svg。
+  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
 
-  // 跑道存在，鲸鱼在跑道里，不在外面。
-  const swim = await ui.find({ key: 'whale-band-swim' })
-  expect(swim).toBeDefined()
+  // 字符画在固定宽度的槽里（宽 6 列 = 5 列字形 + 1 列缝）。
+  const slot = await ui.find({ key: 'whale-band-whale' }) as any
+  expect(slot).toBeDefined()
+  expect(slot?.props?.width).toBe(6)
+  const glyph = JSON.stringify(slot)
+  expect(glyph).toContain('≋')
+
   expect(await ui.find({ key: 'whale-band-spacer' })).toBeDefined()
-
-  await ui.unmount()
-})
-
-/**
- * 巡游：推进时钟，跑道里的鲸鱼 `marginLeft` 变大（向右挪）。
- *
- * **不断言「推 6 秒正好走 3 步」。** `mock.clock.advance` 只是把时钟拨到
- * 未来，**不会逐拍触发** `clock.every`——真实会话里那 6 秒内有 3 次定时
- * 重绘，测试里只有测试自己调的那几次 `redraw()`。断言「拨过去之后位置
- * 变大了、且越拨越大」就够：这守的是「位移由时钟驱动」这一点，而不是
- * 时钟推进的实现细节。
- */
-test('用量条的鲸鱼会随时间向右挪动', async ($, on) => {
-  const clock = mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/test' })
-
-  const ui = await $.ui.mount({
-    plugin: PLUGIN,
-    surface: 'desktop',
-    component: 'AbovePrompt',
-    props: {
-      hasSurvey: false,
-      isWorking: false,
-      maxRows: 10,
-      bodyColumns: 100,
-      scroll: { offset: 0, bodyRows: 10 },
-      view: {},
-    },
-    viewport: { columns: 120, rows: 40 },
-  })
-
-  /** 跑道里包着鲸鱼的那个 Box 的 `marginLeft`。 */
-  const offsetOf = async (): Promise<number> => {
-    const swim = await ui.find({ key: 'whale-band-swim' }) as any
-    const inner = swim?.children?.[0]
-    return Number(inner?.props?.marginLeft ?? 0)
-  }
-
-  const start = await offsetOf()
-  expect(start).toBe(0) // 整点相位 0：贴左端起步
-
-  await clock.advance(6_000)
-  await ui.redraw()
-  const later = await offsetOf()
-  expect(later).toBeGreaterThan(start)
-
-  await clock.advance(6_000)
-  await ui.redraw()
-  expect(await offsetOf()).toBeGreaterThan(later)
-
-  // 位移是 2 列的整数倍（`BAND_SWIM_STEP_COLS`），不是随便一个数。
-  expect(later % 2).toBe(0)
 
   await ui.unmount()
 })
@@ -663,9 +606,9 @@ test('终端上用量条没有 Svg，退化成字符鲸鱼', async ($, on) => {
 
   expect(await ui.find({ key: 'whale-band' })).toBeDefined()
   expect(await ui.find({ key: 'whale-open' })).toBeDefined()
-  // 终端元素表里没有 Svg，鲸鱼退化成文字。
+  // 终端元素表里没有 Svg；字符画本来就不依赖 Svg，两种 surface 画的是同一幅。
   expect(await ui.find({ type: 'Svg' })).toBeUndefined()
-  expect(JSON.stringify(await ui.drawn())).toMatch(/🐳|🐋|✦|·|鲸/)
+  expect(JSON.stringify(await ui.drawn())).toContain('≋')
 
   await ui.unmount()
 })
