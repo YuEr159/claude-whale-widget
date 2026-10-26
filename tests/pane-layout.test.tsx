@@ -213,6 +213,64 @@ test('泡泡常驻：一打开就有气泡，不需要点', async ($, on) => {
 })
 
 /**
+ * 面板鲸鱼**不浮动**：相邻两次重绘的 SVG 源必须逐字节相同。
+ *
+ * ## 这条守的是什么
+ *
+ * 用量条为了「z 一个字母一个字母蹦出来」，每 200ms 调一次
+ * `$.ui.invalidate('ui.render')`。而引擎的 `invalidate` 会重绘**本插件能画的
+ * 所有实例**（类型声明原文：*every instance of its component*）——面板被一起
+ * 绑上。
+ *
+ * 面板里的 `<Svg>` 不传 `isInteractive`（传了会走沙箱 iframe，画不出内嵌
+ * 位图），桌面端因此按静态图片画，SMIL 不跑。浮动只能靠每次重绘把
+ * `now - epoch` 写进 `begin` 的负偏移——于是相位每 200ms 前进一段，`source`
+ * 每次都是新字符串，引擎重新解码重绘。3.6 秒、±4px 的浮动被切成 18 段，
+ * 肉眼看到的是高频抖动。
+ *
+ * 修法是面板直接传 `isAnimating: false`：`animateTransform` 根本不写进文档，
+ * 只随台词与配色变。这条测试把「不写动画」和「源稳定」两件事都钉住。
+ */
+test('面板鲸鱼不浮动：不写 animateTransform，重绘之间源不变', async ($, on) => {
+  const clock = mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+  // 停掉轮播的数据源，让两次重绘之间唯一可能变的就是相位——正是要测的那个。
+  on('session.usage', (async () => ({ value: undefined })) as never)
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(100),
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  const sourceAt = async (): Promise<string> =>
+    String(findLastSvg(await ui.drawn())?.props?.source ?? '')
+
+  // 200ms 一拍，正是用量条那条时钟的节拍。
+  const frames: string[] = []
+  for (let step = 0; step < 5; step += 1) {
+    await clock.set(Date.parse('2026-10-20T12:00:00Z') + step * 200)
+    await ui.redraw()
+    frames.push(await sourceAt())
+  }
+
+  // **不要有动画标签。** 有它就意味着这一帧是按 `begin` 定格的，会在重绘时跳。
+  for (const frame of frames) {
+    expect(frame).not.toContain('animateTransform')
+    expect(frame).not.toContain('begin=')
+  }
+  // **五帧逐字节相同**：引擎判等后不会重新解码重绘。
+  expect(new Set(frames).size).toBe(1)
+  expect(frames[0]!.length).toBeGreaterThan(0)
+
+  await ui.unmount()
+})
+
+/**
  * 泡泡内容会轮播：不同时刻画出的文字不同。
  *
  * 页号由时钟算（`floor(now / BUBBLE_PAGE_MS) % pages.length`），所以推进
