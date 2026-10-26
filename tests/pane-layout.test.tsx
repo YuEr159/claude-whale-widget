@@ -882,13 +882,18 @@ test('上下文页在屏幕上给出读数：最近一轮占比、构成明细�
   walk(tree)
   const text = visible.join('')
 
-  // 1. 最近一轮的占比与构成明细（降序：对话消息在前）。
-  expect(text).toContain('最近一轮')
+  // 1. 逐轮明细表：每一轮的占比都看得见。
+  //
+  // **不再有「最近一轮 xx% · 构成明细」那一行**——桌面端的 session rail 已经
+  // 实时显示各部分占比，同样的数字在面板里再说一遍只是噪音；而且面板这边只有
+  // 最近一轮有构成，历史轮次没有，读者会误以为那一行是整页的图例。
+  expect(text).not.toContain('最近一轮')
+  // 两轮的占比都在表里（20% 与 42%，后者是最近一轮）。
+  expect(text).toContain('20%')
   expect(text).toContain('42%')
-  expect(text).toContain('对话消息')
-  expect(text).toContain('系统提示')
-  // 构成按占用降序：对话消息(4.7万) 排在 系统提示(1.2万) 之前。
-  expect(text.indexOf('对话消息')).toBeLessThan(text.indexOf('系统提示'))
+  // 表头可见，读者才知道每一列是什么。
+  expect(text).toContain('轮')
+  expect(text).toContain('占比')
 
   // 2. 图注可见。轮数与峰值都要说出来。
   expect(text).toContain('最近 2 轮')
@@ -903,12 +908,13 @@ test('上下文页在屏幕上给出读数：最近一轮占比、构成明细�
 })
 
 /**
- * 老记录（没有 parts）时，「最近一轮」仍要给占比，但不画空的构成段。
+ * 老记录（没有 parts，也就没有分类构成）时，这一页仍然要正常渲染。
  *
- * 早期记录没有 breakdown，硬要画构成那一行就会变成「最近一轮 20% · 」——
- * 尾巴拖一个分隔符，读者以为内容被截断了。整段构成不画，百分比照给。
+ * 早期版本靠一行「最近一轮 xx% · 构成明细」来展示，那条已经删掉了（桌面端
+ * session rail 有更完整的）；现在读数靠逐轮明细表，没有 `parts` 的记录照样
+ * 进表，不该因此少一根柱子或错一行。
  */
-test('上下文页：没有构成数据时只给占比，不画空明细', async ($, on) => {
+test('上下文页：老记录没有构成数据也能进明细表', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
   mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
   mock.store(on, {})
@@ -927,11 +933,15 @@ test('上下文页：没有构成数据时只给占比，不画空明细', async
   })
 
   await ui.press({ key: 'whale-tab-context' })
-  const json = JSON.stringify(await ui.drawn())
-  // 没有构成就不出现这一行（不是画成「最近一轮 20% ·」）。
+  const tree = await ui.drawn()
+  const json = JSON.stringify(tree)
+
+  // 已删掉的那一行不该回来。
   expect(json).not.toContain('最近一轮')
   // 图注仍在——它是这一屏的形状说明，与有没有 breakdown 无关。
   expect(json).toContain('最近 1 轮')
+  // 没有构成的老记录照样有一行明细：占比看得见。
+  expect(json).toContain('20%')
 
   await ui.unmount()
 })

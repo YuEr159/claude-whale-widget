@@ -42,7 +42,6 @@ import {
   contextParts,
   contextView,
   historyContextTurns,
-  latestPartsText,
   mergeContextHistory,
   modelDetailRows,
   detailTableLayout,
@@ -911,11 +910,6 @@ export const register: Register = (on, options) => {
     // 让每根柱子变胖，读不出更多轮。
     const chartWidth = Math.max(80, Math.min(width * 8 - 16, 900))
     const contextScreen = contextView(contextTurns, chartWidth, Math.max(0, bufferPct), theme.isLight)
-    // 最近一轮与它的构成文字：用 `contextTurns` 的末项（不是 `contextScreen.turns`）
-    // ——后者已经被宽度裁到这一屏，末项虽然也是最新的那轮，但取原始数组更直白，
-    // 也免得「窗口窄时最近一轮恰好被裁掉」这种误读。
-    const latestTurn = contextTurns[contextTurns.length - 1]
-    const latestParts = latestPartsText(latestTurn)
 
     const contextPage = (
       <Box flexDirection="column">
@@ -963,18 +957,12 @@ export const register: Register = (on, options) => {
                 ))}
               </>
             )}
-            {/* 最近一轮的构成：这一页原先一个数字都没有——柱状图只有形状，
-                所有读数（轮数、峰值、压缩次数）都写在 Svg 的 `<title>` 里，
-                屏幕上看不见。读者想问的第一件事恰恰是「现在窗口被什么占着」，
-                而这是整页唯一能回答它的地方，且它是**文字**，所以窄面板、终端
-                上也照样读得到。 */}
-            {latestTurn && latestParts && (
-              <Text>
-                最近一轮 <Text bold>{pct(latestTurn.percent)}</Text>
-                <Text dimColor>{latestParts}</Text>
-              </Text>
-            )}
-            {/* 图注从 `alt` 里搬出来。`alt` 是无障碍描述，引擎不会把它画在
+            {/* 这一页原先有一行「最近一轮 xx% · 系统提示 12.3K · 消息 245.1K…」，
+                已删掉：桌面端的 session rail 已经实时显示各部分的占比，同样的
+                数字在两处各说一遍只是噪音，而且这边只有**最近一轮**有构成，
+                历史轮次没有——读者点开时会以为这一行是整页的图例。
+                逐轮明细表已经把「最近一轮多少」说清楚了。
+                图注从 `alt` 里搬出来。`alt` 是无障碍描述，引擎不会把它画在
                 屏幕上；而「最近几轮、峰值多少」正是柱状图的读法说明，读者
                 必须看得见。文字与 `alt` 是同源的一句话（都出自
                 `contextView`），不会各说各的。
