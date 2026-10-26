@@ -9,7 +9,7 @@
       "name": "whale-usage",
       "source": "./",
       "description": "Claude 版小鲸鱼挂件：prompt 上方常驻一条，侧边面板看额度窗口、会话花费、上下文占用与本地用量",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "license": "MIT"
     }
   ]
