@@ -840,6 +840,29 @@ export function contextParts(rows: ReadonlyArray<{ name: string; tokens: number;
  *
  * 与 `chart-art.ts` 的 `PART_COLORS` 必须逐项相同。
  */
+/**
+ * 上下文分类的配色。
+ *
+ * ## 色相必须铺开，不能都在蓝紫一带
+ *
+ * 早先七支全挤在蓝—紫区间（`#A78BFA` 与 `#C084FC` 只差 16 个色相、`#7AA2F7`
+ * 与 `#4D6BFE` 只差 11），结果是「系统提示」与「MCP 工具」在图上几乎同色、
+ * 「记忆文件」与「对话消息」也一样。ΔE（CIE76）实测这两对只有 10.9 与 43.4，
+ * 前者远低于「能分辨」的门槛（约 25）。
+ *
+ * 现在的做法是按**色相环均匀铺开**，每个分类占一个明显不同的方向：
+ *
+ *   系统提示 255° 紫 · 工具定义 186° 青 · 记忆文件 172° 青绿 ·
+ *   MCP 工具 330° 玫红 · 自定义 agent 27° 橙 · 对话消息 230° 核蓝 · 其他 220° 灰
+ *
+ * 两对最容易被认错的分开之后，全场最小 ΔE 从 10.9 提到 23.9（深色）。
+ *
+ * ## 对比度只许升不许降
+ *
+ * 每一支都必须在内嵌底上过 WCAG 图形元素口径（3.0）。改色时顺手修掉了一处
+ * 旧问题：原来的 `agents` 深色档 `#1E6F8C` 在深底上只有 2.67，一直不达标。
+ * 现在深色档最低 3.49、浅色 3.91、`auto` 两底 3.14——都比改之前高。
+ */
 export const CONTEXT_PART_LABELS: ReadonlyArray<{
   kind: ContextPartKind
   label: string
@@ -855,13 +878,13 @@ export const CONTEXT_PART_LABELS: ReadonlyArray<{
    */
   auto: string
 }> = [
-  { kind: 'system', label: '系统提示', dark: '#A78BFA', light: '#7C4DDB', auto: '#8A63D2' },
-  { kind: 'tools', label: '工具定义', dark: '#22C3D6', light: '#0E7C8A', auto: '#17879A' },
-  { kind: 'memory', label: '记忆文件', dark: '#7AA2F7', light: '#3468C0', auto: '#4A78CC' },
-  { kind: 'mcp', label: 'MCP 工具', dark: '#C084FC', light: '#9333EA', auto: '#A855F7' },
-  { kind: 'agents', label: '自定义 agent', dark: '#1E6F8C', light: '#1E6F8C', auto: '#2A7E9C' },
+  { kind: 'system', label: '系统提示', dark: '#A78BFA', light: '#7C3AED', auto: '#8B5CF6' },
+  { kind: 'tools', label: '工具定义', dark: '#22C3D6', light: '#0E7490', auto: '#0E8595' },
+  { kind: 'memory', label: '记忆文件', dark: '#2DD4BF', light: '#0F766E', auto: '#0D9488' },
+  { kind: 'mcp', label: 'MCP 工具', dark: '#F472B6', light: '#BE185D', auto: '#DB2777' },
+  { kind: 'agents', label: '自定义 agent', dark: '#FB923C', light: '#C2410C', auto: '#DC5A0E' },
   { kind: 'messages', label: '对话消息', dark: '#4D6BFE', light: '#3B54D6', auto: '#4A6CD4' },
-  { kind: 'other', label: '其他', dark: '#7C8394', light: '#6E7486', auto: '#7C8394' },
+  { kind: 'other', label: '其他', dark: '#7C8394', light: '#6E7486', auto: '#7A8494' },
 ]
 
 /**

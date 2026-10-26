@@ -41,6 +41,7 @@ import {
   overviewCards,
   contextPartKind,
   contextPartColor,
+  CONTEXT_PART_LABELS,
   contextDetailRows,
   contextParts,
   contextStack,
@@ -1097,6 +1098,35 @@ const contrast = (a, b) => {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
   return (hi + 0.05) / (lo + 0.05)
 }
+
+/**
+ * 两色的 ΔE（CIE76）：在 CIE Lab 空间里的欧氏距离。
+ *
+ * 对比度回答「能不能在底上看清」，ΔE 回答「两种颜色彼此像不像」——两个
+ * 问题互不相干：两支都很亮的色可以各自与深底拉得开，却因为色相相同而
+ * 在柱子里糊成一层。分类色同时受这两条约束。
+ *
+ * 经验刻度：< 10 基本算同色，10–20 一眼能看出差别但放在小色块里仍会混，
+ * > 25 明显是两种颜色。
+ */
+const toXyz = h => {
+  const [r, g, b] = sRGB(h).map(toLin)
+  return [
+    r * 0.4124564 + g * 0.3575761 + b * 0.1804375,
+    r * 0.2126729 + g * 0.7151522 + b * 0.0721750,
+    r * 0.0193339 + g * 0.1191920 + b * 0.9503041,
+  ]
+}
+const toLab = h => {
+  const [x, y, z] = toXyz(h)
+  const f = t => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116)
+  return [116 * f(y / 1.0) - 16, 500 * (f(x / 0.95047) - f(y / 1.0)), 200 * (f(y / 1.0) - f(z / 1.08883))]
+}
+const deltaE = (a, b) => {
+  const [l1, a1, b1] = toLab(a)
+  const [l2, a2, b2] = toLab(b)
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2)
+}
 /** 把半透明色叠到背景上，得到实际呈现的颜色。 */
 const over = (fg, alpha, bg) => {
   const f = sRGB(fg)
@@ -1138,8 +1168,81 @@ test('浅色主题：每支图表色的对比度都过线', () => {
   assert.ok(contrast(p.used, LIGHT_BG) >= 3, '主色要 3.0')
 })
 
-test('两套主题的分段色彼此分得开：已用 > 缓冲 > 空闲', () => {
-  for (const [name, p, bg] of [
+/**
+ * 分类色之间必须**互相分得开**，不只是各自与底色分得开。
+ *
+ * 这两个要求是独立的：七支都能在底上看清，不代表它们彼此能区分。早先七支
+ * 全挤在蓝—紫一带，`system`(`#A78BFA`) 与 `mcp`(`#C084FC`) 的 ΔE 只有
+ * 10.9，`memory`(`#7AA2F7`) 与 `messages`(`#4D6BFE`) 在 `auto` 档只有 14.0
+ * ——柱子里相邻两层根本分不出边界。
+ *
+ * 门槛取 ΔE ≥ 15（CIE76）。这个值是「一眼能看出是两种颜色」的下限附近：
+ * 低于 10 基本就是同色，15 以上在图例的小方块里也能分辨。历史上的最差
+ * 一对是 9.3，正是这条测试要挡住的情况。
+ */
+test('分类色彼此分得开：任意两支的 ΔE 不低于 15', () => {
+  for (const [name, palette] of [
+    ['深色', CHART_PALETTES.dark],
+    ['浅色', CHART_PALETTES.light],
+    ['auto', CHART_PALETTES.auto],
+  ]) {
+    const kinds = Object.keys(palette.parts)
+    for (let i = 0; i < kinds.length; i += 1) {
+      for (let j = i + 1; j < kinds.length; j += 1) {
+        const a = kinds[i]
+        const b = kinds[j]
+        const delta = deltaE(palette.parts[a], palette.parts[b])
+        assert.ok(
+          delta >= 15,
+          `${name}：${a}(${palette.parts[a]}) 与 ${b}(${palette.parts[b]}) 的 ΔE 只有 ${delta.toFixed(1)}，低于 15`,
+        )
+      }
+    }
+  }
+
+  // **用户点名的那两对必须明显分开。** 它们在改之前分别是 10.9 与 43.4
+  // （深色）／14.0（auto 的记忆文件与对话消息），单独盯一下，免得将来调色
+  // 时又撞回一起而其余对刚好都过线。
+  const dark = CHART_PALETTES.dark.parts
+  assert.ok(
+    deltaE(dark.system, dark.mcp) >= 30,
+    `系统提示与 MCP 工具的 ΔE 只有 ${deltaE(dark.system, dark.mcp).toFixed(1)}`,
+  )
+  assert.ok(
+    deltaE(dark.memory, dark.messages) >= 30,
+    `记忆文件与对话消息的 ΔE 只有 ${deltaE(dark.memory, dark.messages).toFixed(1)}`,
+  )
+  const auto = CHART_PALETTES.auto.parts
+  assert.ok(
+    deltaE(auto.memory, auto.messages) >= 30,
+    `auto 档记忆文件与对话消息的 ΔE 只有 ${deltaE(auto.memory, auto.messages).toFixed(1)}`,
+  )
+})
+
+/**
+ * 同一分类在三处的色号必须一致。
+ *
+ * 分类色有两个出口：`panel-fill.ts` 画 SVG，`usage-overview.ts` 的
+ * `CONTEXT_PART_LABELS` 画终端字符图与图例。两处对不上，同一张图在桌面端
+ * 与终端就会是两种颜色——而这种错不会报任何错，只是看着别扭。
+ */
+test('分类色在 SVG 与终端两处逐项相同', () => {
+  for (const [name, labels, palette] of [
+    ['深色', 'dark', CHART_PALETTES.dark],
+    ['浅色', 'light', CHART_PALETTES.light],
+    ['auto', 'auto', CHART_PALETTES.auto],
+  ]) {
+    for (const entry of CONTEXT_PART_LABELS) {
+      assert.equal(
+        palette.parts[entry.kind],
+        entry[labels],
+        `${name}：${entry.label} 在 SVG（${palette.parts[entry.kind]}）与终端（${entry[labels]}）不一致`,
+      )
+    }
+  }
+})
+
+test('两套主题的分段色彼此分得开：已用 > 缓冲 > 空闲', () => {  for (const [name, p, bg] of [
     ['深色', CHART_PALETTES.dark, DARK_BG],
     ['浅色', CHART_PALETTES.light, LIGHT_BG],
   ]) {

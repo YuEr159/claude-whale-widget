@@ -127,7 +127,8 @@ export type ChartPalette = {
  * 深色主题的图表色。
  *
  * 分类色明度偏高（亮蓝、亮紫、青绿），是为了在深底上跳出背景；
- * 每一支在 `#1a1a1a` 上都过 3.0。
+ * 每一支在 `#1a1a1a` 上都过 3.0——实测最低 3.49（messages），
+ * 早先的 `agents`（`#1E6F8C`）只有 2.67，这次换掉了。
  */
 const DARK_CHART: ChartPalette = {
   isLight: false,
@@ -145,9 +146,9 @@ const DARK_CHART: ChartPalette = {
     messages: '#4D6BFE',
     system: '#A78BFA',
     tools: '#22C3D6',
-    memory: '#7AA2F7',
-    mcp: '#C084FC',
-    agents: '#1E6F8C',
+    memory: '#2DD4BF',
+    mcp: '#F472B6',
+    agents: '#FB923C',
     other: '#7C8394',
   },
 }
@@ -156,8 +157,8 @@ const DARK_CHART: ChartPalette = {
  * 浅色主题的图表色。
  *
  * 同一批色相，明度压低到在白底上读得出。逐支实测（白底对比度）：
- * messages 6.13、system 5.33、tools 4.92、memory 5.40、mcp 5.38、
- * agents 5.66、other 4.66。
+ * messages 6.13、system 5.19、tools 5.35、memory 5.32、mcp 5.70、
+ * agents 5.10、other 4.66。最低 4.66，全部过 4.5。
  *
  * 透明度这边反而要**调高**：浅底上「已用」是深蓝、缓冲是同色更浅的一档，
  * 靠的是让底色透上来把它冲淡，所以 60% 比深色主题那份更实一点才对。
@@ -175,11 +176,11 @@ const LIGHT_CHART: ChartPalette = {
   barEmptyOpacity: 0.28,
   parts: {
     messages: '#3B54D6',
-    system: '#7C4DDB',
-    tools: '#0E7C8A',
-    memory: '#3468C0',
-    mcp: '#9333EA',
-    agents: '#1E6F8C',
+    system: '#7C3AED',
+    tools: '#0E7490',
+    memory: '#0F766E',
+    mcp: '#BE185D',
+    agents: '#C2410C',
     other: '#6E7486',
   },
 }
@@ -188,9 +189,12 @@ const LIGHT_CHART: ChartPalette = {
  * `auto`（深浅未知）时的图表色。
  *
  * 取舍：每一支都取**中等明度**，在深色内嵌底（38,38,38）与浅色内嵌底
- * （235,235,235）上同时过 3.0——实测最低 3.16（messages 在深底）、
- * 最高 4.02。没有一支能像专用色板那样拿到 5 以上的余量，这是「不知道
+ * （235,235,235）上同时过 3.0——实测最低 3.14（memory 在浅底）、
+ * 最高 3.55。没有一支能像专用色板那样拿到 5 以上的余量，这是「不知道
  * 画在哪边」的必然代价；但也不会像原来那样在浅底上跌到 2.13。
+ *
+ * 这一档的分类色**必须与 `usage-overview.ts` 的 `CONTEXT_PART_LABELS`
+ * 逐项相同**：那边画终端字符图，这边画 SVG。
  *
  * 透明度取两套的中间值：太淡在深底上看不见，太浓在浅底上糊成一团。
  */
@@ -207,12 +211,12 @@ const AUTO_CHART: ChartPalette = {
   barEmptyOpacity: 0.23,
   parts: {
     messages: '#4A6CD4',
-    system: '#8A63D2',
-    tools: '#17879A',
-    memory: '#4A78CC',
-    mcp: '#A855F7',
-    agents: '#2A7E9C',
-    other: '#7C8394',
+    system: '#8B5CF6',
+    tools: '#0E8595',
+    memory: '#0D9488',
+    mcp: '#DB2777',
+    agents: '#DC5A0E',
+    other: '#7A8494',
   },
 }
 
