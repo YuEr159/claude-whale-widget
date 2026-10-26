@@ -2081,23 +2081,30 @@ test('历史上下文：按压缩阈值换算百分比，没有分母就整段�
  * 有一两轮重叠（`turn.complete` 记下那轮时，日志里也已经写进去了），所以
  * 按时刻去重，并且**保留本次那条**——它带着分类构成，图例能画出内容分类。
  */
-test('上下文接线：历史在前、本次在后，同一时刻取信息更全的那条', () => {
+test('上下文接线：历史在前、本次在后，同一轮取信息更全的那条', () => {
+  // **时刻必须有真实的时间差。** 两个时刻来自两个独立时钟：历史侧是日志
+  // 写入的时刻，本次侧是 `turn.complete` 的 `Date.now()`——同一轮也差几百
+  // 毫秒到几秒。夹具若写成精确同刻，就测不到「按时间窗去重」这件事本身。
+  const T0 = 1_000_000
   const history = [
-    { seq: 1, percent: 20, tokens: 1000, at: 100 },
-    { seq: 2, percent: 30, tokens: 1500, at: 200 },
+    { seq: 1, percent: 20, tokens: 1000, at: T0 },
+    { seq: 2, percent: 30, tokens: 1500, at: T0 + 5_000 },
   ]
   const live = [
-    // 与历史末项同刻，但带构成：应当胜出。
-    { seq: 5, percent: 31, tokens: 1550, at: 200, parts: [{ kind: 'system', tokens: 300 }] },
-    { seq: 6, percent: 40, tokens: 2000, at: 300 },
+    // 与历史末项是**同一轮**（相差 3 秒，落在时间窗内），但带构成：应当胜出。
+    { seq: 5, percent: 31, tokens: 1550, at: T0 + 8_000, parts: [{ kind: 'system', tokens: 300 }] },
+    // 下一轮，时间上隔了两分钟（远超时间窗）：应当作为新的一条留下。
+    { seq: 6, percent: 40, tokens: 2000, at: T0 + 128_000 },
   ]
 
   const merged = mergeContextHistory(history, live)
   assert.equal(merged.length, 3, '重叠的一轮只该留一条')
-  assert.deepEqual(merged.map(turn => turn.at), [100, 200, 300], '必须按时刻排序')
-  // 同刻那条取自 `live`：percent 与 parts 都是它的。
+  // 留下来的那条取 `live` 的值（它的时刻、percent、parts 都是 `live` 的）。
   assert.equal(merged[1].percent, 31)
-  assert.ok(merged[1].parts && merged[1].parts.length === 1, '同刻应保留带构成的那条')
+  assert.equal(merged[1].at, T0 + 8_000, '同一轮应保留本次侧的读数')
+  assert.ok(merged[1].parts && merged[1].parts.length === 1, '同一轮应保留带构成的那条')
+  // 排序仍然按时刻。
+  assert.deepEqual(merged.map(turn => turn.at), [T0, T0 + 8_000, T0 + 128_000])
 
   // **合并后重编号**：两侧的 seq 各从 1 开始，直接接起来会得到
   // 「1, 2, 5, 6」这种跳号（甚至倒序）——而图上的横坐标正是 seq。
@@ -2117,15 +2124,18 @@ test('上下文接线：历史在前、本次在后，同一时刻取信息更�
  */
 test('横坐标：历史与本次接起来后序号连续，图上不跳号不倒序', () => {
   // 历史 5 轮，本次 3 轮，各自 seq 从 1 起。
+  // **每轮相隔 2 分钟**，远超合并时间窗（60s）——它们是不同的轮次，不该被并。
+  const STEP = 120_000
+  const T0 = 1_000_000
   const history = Array.from({ length: 5 }, (_, i) => ({
-    seq: i + 1, percent: 20 + i, tokens: 1000 + i, at: 1000 + i * 100,
+    seq: i + 1, percent: 20 + i, tokens: 1000 + i, at: T0 + i * STEP,
   }))
   const live = Array.from({ length: 3 }, (_, i) => ({
-    seq: i + 1, percent: 40 + i, tokens: 2000 + i, at: 2000 + i * 100,
+    seq: i + 1, percent: 40 + i, tokens: 2000 + i, at: T0 + (5 + i) * STEP,
   }))
 
   const merged = mergeContextHistory(history, live)
-  assert.equal(merged.length, 8)
+  assert.equal(merged.length, 8, '时间上分得开的轮次不该被合并')
   assert.deepEqual(merged.map(t => t.seq), [1, 2, 3, 4, 5, 6, 7, 8])
 
   // 图上横坐标取自 `bar.label`，而它来自 `turn.seq`——两者必须一致。
@@ -2135,16 +2145,19 @@ test('横坐标：历史与本次接起来后序号连续，图上不跳号不�
 
 /** 历史接上之后，整条曲线能一路画到会话开头——这是这个改动的全部意义。 */
 test('上下文接线：接缝不断档，整条曲线覆盖到会话开头', () => {
+  // 每轮隔 2 分钟，远超合并时间窗——它们本该是各自独立的轮次。
+  const STEP = 120_000
+  const T0 = 1_000_000
   const history = Array.from({ length: 100 }, (_, i) => ({
-    seq: i + 1, percent: 10 + i * 0.5, tokens: 20_000 + i * 1000, at: 1000 + i * 1000,
+    seq: i + 1, percent: 10 + i * 0.5, tokens: 20_000 + i * 1000, at: T0 + i * STEP,
   }))
   const live = Array.from({ length: 5 }, (_, i) => ({
-    seq: 101 + i, percent: 60 + i, tokens: 120_000 + i * 1000, at: 1000 + 100 * 1000 + i * 1000,
+    seq: 101 + i, percent: 60 + i, tokens: 120_000 + i * 1000, at: T0 + (100 + i) * STEP,
   }))
 
   const merged = mergeContextHistory(history, live)
-  assert.equal(merged.length, 105)
-  assert.equal(merged[0].at, 1000, '第一条必须是会话最早那一轮')
+  assert.equal(merged.length, 105, '时间上分得开的轮次不该被合并')
+  assert.equal(merged[0].at, T0, '第一条必须是会话最早那一轮')
   assert.equal(merged[merged.length - 1].at, live[live.length - 1].at, '末条必须是最新一轮')
   // 时刻严格递增：图上不会出现一根柱子压着另一根。
   for (let i = 1; i < merged.length; i += 1) {
@@ -2345,21 +2358,29 @@ test('上下文逐轮明细：标出压缩，增量按百分点算', () => {
  * 用引擎的 `percent`，同一场会话会出现「泡泡说 28%、图上说 30.4%」。
  */
 test('上下文占比：有 breakdown 就按自动压缩阈值算，泡泡与用量条同源', () => {
-  // 窗口 1M，压缩阈值 921_600（92%），当前用了 300_000。
+  // 窗口 1M，压缩阈值 921_600（92%）。
+  //
+  // **刻意让 `tokens` 与 `breakdown.totalTokens` 不同**（300k vs 340k）：
+  // 前者是 API 实际计费的输入，后者是引擎把系统提示、工具定义逐类估算出来
+  // 的和。引擎自己在类型声明里写了 `its totalTokens need not equal tokens`。
+  // 曲线用**计费口径**——历史侧（日志）拿不到估算值，只有 `usage`；两侧
+  // 若各用一个分子，同一轮会出现两根占比不同的柱子。
   const usage = {
     rateLimits: [],
     context: {
       tokens: 300_000,
       window: 1_000_000,
       percent: 30, // 引擎按完整窗口给的：30%
-      breakdown: { totalTokens: 300_000, rawMaxTokens: 1_000_000, autoCompactThreshold: 921_600 },
+      breakdown: { totalTokens: 340_000, rawMaxTokens: 1_000_000, autoCompactThreshold: 921_600 },
     },
   }
   const view = toUsageView(usage)
 
-  // **阈值口径**：300k / 921.6k ≈ 32.6%，而不是引擎的 30%。
+  // **阈值口径 + 计费分子**：300k / 921.6k ≈ 32.6%，而不是引擎的 30%，
+  // 也不是用 `breakdown.totalTokens`（340k）算出的 36.9%。
   assert.ok(Math.abs(view.contextPercent - (300_000 / 921_600) * 100) < 1e-9)
   assert.ok(view.contextPercent > 30, '按阈值算应当比按完整窗口算更大')
+  assert.ok(view.contextPercent < 36, '不该用 breakdown.totalTokens——那是估算值')
   assert.equal(view.contextDenominator, 921_600, '分母应当报出阈值')
 
   // 泡泡与用量条都从这里取，所以两条出口说的是同一个数。

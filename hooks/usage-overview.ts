@@ -1233,19 +1233,26 @@ export function historyContextTurns(
  * 把历史序列与本次会话记下的轮次接成一条。
  *
  * **历史在前、本次在后。** 两者记的是同一场会话：历史覆盖到插件装上之前的
- * 全部轮次，本次接在它后面。接缝处可能有一两轮重叠（`turn.complete` 记下
- * 的那轮，日志里也已经写进去了），所以按时刻去重——保留后出现的那条，
- * 它带着分类构成，信息更全。
+ * 全部轮次，本次接在它后面。
  *
- * ## 序号在合并之后重新编
+ * ## 为什么按「时间窗」而不是精确时刻去重
  *
- * 两侧的 `seq` **各从 1 开始**：历史是日志里第几轮，本次是插件装上后第几轮。
- * 直接接起来就会出现「…19, 20, 21, 1, 2, 3」——图上的横坐标正是 `seq`，
- * 读者会看到标着 1 的柱子排在标着 21 的后面，整条时间轴读不通。
+ * 两个时刻来自**两个独立的时钟**，永远对不上：
  *
- * 所以合并后按位置重编一遍：全表唯一、严格递增，与横轴和明细表同一个口径。
- * 牺牲的是「这是会话的第几轮」这个绝对信息——但两侧本来就没有共同基准，
- * 编不出真的绝对轮次，不如给一条连续可读的轴。
+ * - 历史侧是日志里的 `timestamp`，即那一行被写进 jsonl 的时刻；
+ * - 本次侧是 `turn.complete` 里的 `Date.now()`，即引擎判定这一轮结束的时刻。
+ *
+ * 两者相差几百毫秒到几秒，早先按 `at` 精确相等去重，结果**一条都匹配不上**
+ * ——同一轮在图上出现两次：一根带 content 构成（本次侧），一根只有占比
+ * （历史侧），后者因为窗口读数更晚反而更高。读者看到「同一轮有两个数」。
+ *
+ * 现在改用时间窗：本次这条若落在历史某条的 `MERGE_WINDOW_MS` 之内，就认为
+ * 说的是同一轮，用本次那条覆盖它（它带 `parts`，图例能画出构成）。窗口取
+ * 60 秒——一轮对话里最后一次写日志到 `turn.complete` 之间不会更久，而两轮
+ * 提问之间通常也不止一分钟，不会误并。
+ *
+ * @param history 日志重建的逐轮读数（时间顺序）
+ * @param live    `turn.complete` 记下的轮次（时间顺序）
  */
 export function mergeContextHistory(
   history: readonly ContextTurn[],
@@ -1254,15 +1261,40 @@ export function mergeContextHistory(
   const merged = (() => {
     if (history.length === 0) return [...live]
     if (live.length === 0) return [...history]
-    const byTime = new Map<number, ContextTurn>()
-    for (const turn of history) byTime.set(turn.at, turn)
-    // 本次的覆盖同刻的历史那条：它有 `parts`，图例能画出构成。
-    for (const turn of live) byTime.set(turn.at, turn)
-    return [...byTime.values()].sort((a, b) => a.at - b.at)
+    // 先按时刻排好，合并时才能用「取最近邻」而不是两两比较。
+    const rest = [...history].sort((a, b) => a.at - b.at)
+    for (const turn of live) {
+      // 找时间上最接近的那条历史记录。
+      let bestIndex = -1
+      let bestGap = MERGE_WINDOW_MS
+      for (let i = 0; i < rest.length; i += 1) {
+        const gap = Math.abs(rest[i]!.at - turn.at)
+        if (gap <= bestGap) {
+          bestGap = gap
+          bestIndex = i
+        }
+      }
+      if (bestIndex >= 0) {
+        // 同一轮：本次那条胜出，它有构成明细。
+        rest[bestIndex] = turn
+      } else {
+        rest.push(turn)
+      }
+    }
+    return rest.sort((a, b) => a.at - b.at)
   })()
-  // 合并后重编号：横轴与明细表都靠它，必须是 1..N 的连续整数。
+  // 合并后重编号：横轴靠它，必须是 1..N 的连续整数。
   return merged.map((turn, index) => ({ ...turn, seq: index + 1 }))
 }
+
+/**
+ * 判定「历史侧的一条」与「本次侧的一条」是同一轮的时间容差（毫秒）。
+ *
+ * 两个时刻来自两个独立时钟（日志写入 vs `turn.complete`），差几百毫秒到
+ * 几秒。60 秒既够覆盖这个偏差，又短于两轮提问之间的常见间隔——误并的风险
+ * 低于漏并（漏并会让同一轮在图上出现两次，那是读者一眼就能看出的错）。
+ */
+const MERGE_WINDOW_MS = 60_000
 
 /**
  * 逐轮明细：这一场会话每一次提问，窗口涨到了多少。
