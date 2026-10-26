@@ -2083,18 +2083,36 @@ test('扫描：缓存只保留当前会话的上下文序列，其余清空', as
     const project = join(root, 'proj')
     mkdirSync(project)
     const now = new Date().toISOString()
-    // 两个会话，各自若干轮：上下文序列都不为空。
-    const line = (sid, i) => JSON.stringify({
+    // 会话内容：先一条用户提问，再跟若干条 assistant。上下文图按**提问**
+    // 归组（一次提问里的工具循环只画一根柱子），所以夹具必须有 user 行——
+    // 全是 assistant 的夹具会全部落到同一个 turnIndex 上，只剩一根柱子。
+    const ask = (sid, i, ts) => JSON.stringify({
+      type: 'user',
+      timestamp: ts,
+      promptId: `${sid}_p${i}`,
+      message: { role: 'user', content: `问题 ${i}` },
+    })
+    const line = (sid, i, ts) => JSON.stringify({
       type: 'assistant',
-      timestamp: now,
+      timestamp: ts,
       message: {
         id: `${sid}_${i}`,
         model: 'claude-opus-5-5',
         usage: { input_tokens: 1000 * (i + 1), output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
       },
     })
-    writeFileSync(join(project, 'sess-a.jsonl'), [line('a', 0), line('a', 1), line('a', 2)].join('\n'))
-    writeFileSync(join(project, 'sess-b.jsonl'), [line('b', 0), line('b', 1)].join('\n'))
+    const t = i => new Date(Date.now() + i * 1000).toISOString()
+    // sess-a：3 次提问，各自 1 条 assistant → 3 根柱子。
+    writeFileSync(join(project, 'sess-a.jsonl'), [
+      ask('a', 0, t(0)), line('a', 0, t(1)),
+      ask('a', 1, t(2)), line('a', 1, t(3)),
+      ask('a', 2, t(4)), line('a', 2, t(5)),
+    ].join('\n'))
+    // sess-b：2 次提问。
+    writeFileSync(join(project, 'sess-b.jsonl'), [
+      ask('b', 0, t(0)), line('b', 0, t(1)),
+      ask('b', 1, t(2)), line('b', 1, t(3)),
+    ].join('\n'))
 
     const cache = new Map()
     const result = aggregate(root, 1, cache, 'sess-a')
@@ -2114,6 +2132,65 @@ test('扫描：缓存只保留当前会话的上下文序列，其余清空', as
     assert.equal(again.contextTurns.length, 3, '带缓存重扫时当前会话序列不能丢')
     // 数字也不能因为重读而翻倍。
     assert.equal(again.total.messages, 5, '重读当前会话不该把消息数算两遍')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+/**
+ * 上下文柱子按**提问**归组，不按 assistant 消息。
+ *
+ * 一次提问里的工具调用循环会写出几十条 assistant 消息。逐条画柱子时，实测
+ * 一场 19 次提问的会话画出 694 根柱子——读者完全对不上自己的操作，而且
+ * 「上下文占比」这个问题的答案本来是「我每问一次，窗口涨多少」。
+ */
+test('扫描：一次提问只画一根上下文柱子，取这一轮的末条读数', async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { aggregate } = await import('../scripts/usage-scan.mjs')
+
+  const root = mkdtempSync(join(tmpdir(), 'whale-turn-'))
+  try {
+    const project = join(root, 'proj')
+    mkdirSync(project)
+    const t = i => new Date(Date.now() + i * 1000).toISOString()
+    const ask = (i) => JSON.stringify({
+      type: 'user',
+      timestamp: t(i),
+      promptId: `p${i}`,
+      message: { role: 'user', content: `问题 ${i}` },
+    })
+    const reply = (id, i, input) => JSON.stringify({
+      type: 'assistant',
+      timestamp: t(i),
+      message: {
+        id,
+        model: 'claude-opus-5-5',
+        usage: { input_tokens: input, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    })
+
+    writeFileSync(join(project, 's.jsonl'), [
+      // 第 1 次提问：三条 assistant（工具循环），窗口 1000 → 2000 → 3000。
+      ask(0),
+      reply('m1', 1, 1000),
+      reply('m2', 2, 2000),
+      reply('m3', 3, 3000),
+      // 第 2 次提问：两条 assistant，窗口 5000 → 7000。
+      ask(4),
+      reply('m4', 5, 5000),
+      reply('m5', 6, 7000),
+    ].join('\n'))
+
+    // 上下文序列只在指定会话时返回：它是会话级的数据，不给 id 就无从谈起。
+    const result = aggregate(root, 1, new Map(), 's')
+    // 两次提问 = 两根柱子，不是五根。
+    assert.equal(result.contextTurns.length, 2, '一次提问只该产生一根柱子')
+    // 取的是每一轮的**末条**：1000/2000/3000 里取 3000，5000/7000 里取 7000。
+    assert.deepEqual(result.contextTurns.map(turn => turn.tokens), [3000, 7000])
+    // 序号连续，图上不会跳号。
+    assert.deepEqual(result.contextTurns.map(turn => turn.seq), [1, 2])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

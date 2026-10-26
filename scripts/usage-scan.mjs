@@ -136,6 +136,17 @@ function scanFile(file, cutoff, seen) {
   const latestById = new Map()
   /** 没有 id 的行（老格式）直接按出现顺序累加，无法去重。 */
   const noIdRows = []
+  /**
+   * 当前是第几次用户提问（从 0 起，遇到真正的提问就 +1）。
+   *
+   * 上下文图的一根柱子应当对应**读者的一次提问**，而不是引擎的一次请求。
+   * 一次提问里工具调用的往返循环会写出几十条 assistant 消息，逐条画柱子
+   * 会让 19 次提问变成 694 根柱子（实测），读者根本对不上自己的操作。
+   * 所以每条 assistant 消息都记下它属于哪一次提问，最后按这个分组取末条。
+   */
+  let turnIndex = 0
+  /** 每一轮提问在窗口里留下的最后一个读数，按 `turnIndex` 索引。 */
+  const contextByTurn = new Map()
 
   let start = 0
   while (start < text.length) {
@@ -179,6 +190,8 @@ function scanFile(file, cutoff, seen) {
         const day = dayKey(row.timestamp)
         const stamp = Date.parse(row.timestamp)
         if (day && !(stamp < cutoff)) bump(out.byTurnDay, day, 1)
+        // 新的一次提问：后面的 assistant 消息都归到这一轮。
+        turnIndex += 1
       }
       continue
     }
@@ -194,7 +207,7 @@ function scanFile(file, cutoff, seen) {
     const stamp = Date.parse(row.timestamp)
     if (stamp < cutoff) continue
 
-    const record = { row, message, usage, day }
+    const record = { row, message, usage, day, turnIndex }
     const id = message.id
     if (typeof id === 'string' && id.length > 0) {
       // 后写覆盖先写：同一个 id 在文件里出现多次时，留下的是最后那个快照。
@@ -206,6 +219,7 @@ function scanFile(file, cutoff, seen) {
 
   for (const record of [...noIdRows, ...latestById.values()]) {
     const { row, message, usage, day } = record
+    const stamp = Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : 0
     const id = message.id
     if (typeof id === 'string' && id.length > 0) {
       // 跨文件去重仍然先到先得：resume / fork 会把旧会话的行抄进新文件，
@@ -295,25 +309,39 @@ function scanFile(file, cutoff, seen) {
       }
     }
 
-    // 上下文窗口占用：本轮的输入（含缓存读写）就是这一轮**用完**之后的窗口
+    // 上下文窗口占用：本轮输入（含缓存读写）就是这一轮**用完**之后的窗口
     // 内容量。输出不算——它是这一轮新生成、下一轮才会进窗口的东西。
     //
     // **零值丢掉。** 首轮请求发出时 `cache_read` 与 `cache_write` 都还是 0，
     // 只有 `input_tokens` 有值，那是真实读数；但流式写下的「请求已发出、
     // 回复还没来」那种空快照会算出 0，画到图上就是一根假谷底。
+    //
+    // **按提问归组，不按消息。** 一次提问里的工具调用循环会写出几十条
+    // assistant 消息，逐条画柱子对不上读者的操作（实测一场 19 次提问的
+    // 会话会画出 694 根柱子）。这里先用 `turnIndex` 收齐同一轮的所有消息，
+    // 最后只取那一条——窗口在这一轮结束时最大，就取它。
     const contextTokens = input + cacheRead + cacheWrite
     if (contextTokens > 0) {
-      out.contextTurns.push({
-        at: Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : 0,
-        tokens: contextTokens,
-        output,
-        model,
-        // 轮次序号按文件内出现顺序给，跨文件不保证连续——它只用来排序与
-        // 标「第几轮」，不参与任何跨会话运算。
-        seq: out.contextTurns.length + 1,
-      })
+      const prev = contextByTurn.get(record.turnIndex)
+      // 同一轮里取**时刻最新**的那条：工具循环的往返按时间递增，末条就是
+      // 这一轮的终态。不做 `Math.max(tokens)`——上下文可能因压缩而下降，
+      // 取最大值会把压缩后的真实读数抹掉。
+      if (!prev || stamp >= prev.at) {
+        contextByTurn.set(record.turnIndex, {
+          at: stamp,
+          tokens: contextTokens,
+          output,
+          model,
+        })
+      }
     }
   }
+
+  // 归组结果按时刻排序后写进 `out`：`turnIndex` 只保证文件内递增，
+  // 而同一场的消息可能分散在多个文件里（resume / fork）。
+  out.contextTurns = [...contextByTurn.values()]
+    .sort((a, b) => a.at - b.at)
+    .map((item, index) => ({ ...item, seq: index + 1 }))
   return out
 }
 
