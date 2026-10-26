@@ -182,10 +182,13 @@ let themeCache: ThemeColors | null = null
 /**
  * 鲸鱼浮动动画的零点（毫秒），模块加载时定一次，之后不再变。
  *
- * 为什么需要它：宿主每次重绘都换一份新的 SVG 文档，SMIL 时间轴归零，
- * 浮动就从最上面那一帧重来——泡泡每 6 秒翻页，于是每 6 秒「卡」一下。
- * 修法是给动画一个负的 `begin`，把它拨到当前相位（见 `whaleSvg`）。
- * 相位要按**一个固定的零点**算；每帧重算零点等于相位永远为 0，白改。
+ * **面板现在不用它了**（面板鲸鱼不浮动，见 `Pane` 里 `<Svg>` 处的说明）。
+ * 保留是因为 `whaleSvg` 的负 `begin` 机制还在：将来若引擎支持在静态图片
+ * 路径里画内嵌位图，或者面板改用别的绘制方式，这个零点就是接回去的地方。
+ *
+ * 为什么需要固定零点：宿主每次重绘都换一份新的 SVG 文档，SMIL 时间轴归零，
+ * 浮动就从最上面那一帧重来。修法是给动画一个负的 `begin`，把它拨到当前
+ * 相位。相位必须按**一个固定零点**算；每帧重算零点等于相位永远为 0。
  *
  * 取 `Date.now()` 而不是 `$.clock.now()`：这里在模块加载时执行，还没有 `$`。
  * 宿主时钟与墙钟在相位上只差一个常量，而这个常量本来就被零点吸收了。
@@ -767,7 +770,24 @@ export const register: Register = (on, options) => {
 
     const whale = Svg ? (
       <Svg
-        source={whaleSvg(mood, lines, { isBubbleOpen: true, hero, now, epoch: WHALE_FLOAT_EPOCH })}
+        // **面板鲸鱼不浮动。**
+        //
+        // 这里的 SVG 不传 `isInteractive`（原因见下），桌面端因此把它当
+        // 静态图片画，SMIL 不跑——浮动只能靠 `whaleSvg` 每次重绘时把
+        // `now - epoch` 写进 `begin` 的负偏移，由渲染器画出 `begin` 所指的
+        // 那一帧。
+        //
+        // 问题是 `$.ui.invalidate('ui.render')` 重绘的是本插件能画的**所有**
+        // 实例（引擎 `invalidate` 的 remarks 原文：*every instance of its
+        // component*）。用量条为了「z 一个字母一个字母蹦出来」每 200ms 重绘
+        // 一次，面板就被一起绑上：相位每 200ms 前进一段，`source` 每次都是
+        // 新字符串，引擎重新解码重绘——3.6 秒、±4px 的浮动被切成 18 段，
+        // 肉眼看到的是高频抖动，不是浮动。
+        //
+        // 所以直接关掉：`isAnimating: false` 让 `whaleSvg` 根本不写
+        // `animateTransform`，`source` 只随台词与配色变（6 秒翻一页），
+        // 200ms 那批重绘画出的字节完全相同，引擎判等后不会动它。
+        source={whaleSvg(mood, lines, { isBubbleOpen: true, hero, isAnimating: false })}
         alt={`小鲸鱼：${lines.join('，')}`}
         width={whaleWidth}
         // 高度：显示尺寸 = 宽度 × 画布比例。盒子由这两个数决定。
@@ -776,11 +796,6 @@ export const register: Register = (on, options) => {
         // 渲染（SMIL 才跑），而那条路径**画不出内嵌的 `<image>` 位图**：
         // 面板里只剩下矢量画的气泡，鲸鱼整个消失，看起来像一块纯白。
         // 引擎的禁止标签清单里就有 `<image>` 与 `animate*`。
-        //
-        // 代价是浮动动画不跑（不传时引擎按静态图片画，只渲染 `begin` 所指的
-        // 那一帧）。画面完整比动画重要——鲸鱼看不见，动画也就无从谈起。
-        // `whaleSvg` 里的负 `begin` 保留着：将来若引擎支持了内嵌位图，
-        // 去掉这一行注释即可恢复连续动画。
       />
     ) : (
       <Text>{emblemOf(mood)}</Text>
