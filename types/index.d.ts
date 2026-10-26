@@ -143,6 +143,32 @@ export type LocalUsage = {
   daily: LocalDay[]
   byModel: LocalModel[]
   skippedDuplicates: number
+  /**
+   * **当前这场会话**的上下文窗口占用曲线（按时间顺序）。
+   *
+   * 来自日志里每条 assistant 消息的 `usage`：本轮的输入（含缓存读写）就是
+   * 这一轮用完之后的窗口内容量。它比 `contextTurns`（只记插件启动之后的轮次）
+   * 长得多——一场开了几小时的对话，插件可能才刚装上。
+   *
+   * 与 `ContextTurn` 相比少了 `percent` 与 `parts`：日志里没有窗口上限
+   * （`rawMaxTokens`），也没有分类构成，只有绝对 token 数。
+   */
+  contextTurns?: HistoricalContextTurn[]
+  /** 扫描时的会话 id（transcript 文件名）；没有会话时为空串。 */
+  sessionId?: string
+}
+
+/** 从会话日志重建的一轮上下文读数。只有数字与模型名，没有内容。 */
+export type HistoricalContextTurn = {
+  /** 记录时刻，毫秒。 */
+  at: number
+  /** 这一轮用完之后的窗口内容量（输入 + 缓存读 + 缓存写）。 */
+  tokens: number
+  /** 这一轮的输出 token；画图不用，留给「这一轮花了多少」的提示。 */
+  output: number
+  model: string
+  /** 会话内递增的序号，只用于排序与标「第几轮」。 */
+  seq: number
 }
 
 /** 本地扫描的运行时记录：结果、错误、最近一次扫描时间。 */
