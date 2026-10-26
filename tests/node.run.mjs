@@ -1920,3 +1920,29 @@ test('本会话花费：有未收录价格就整体退回，口径只有一份',
   assert.deepEqual(bandMetricsOf({}, fallback), fallback)
   assert.deepEqual(bandMetricsOf({ bandMetrics: ['cost'] }, fallback), ['cost'])
 })
+
+/**
+ * 设置页的口径芯片组的宽度预算。
+ *
+ * 「先算宽度预算，再定文案」那条规则的又一次应用。`flexWrap` 在引擎里是
+ * **绘制期折行**：树上看还是同一行，屏幕上却断成两行，标签孤零零留在上一
+ * 行、五个芯片挤在下一行。只有把宽度算出来才知道会不会折。
+ *
+ * 实测：旧标签（额度窗口 / 5h + 7d）整行 73 列，新标签（额度 / 5h/7d）
+ * 67 列。断言取 **≤ 70 列**——它同时满足两件事：新标签过、旧标签不过。
+ * 这个数不是为了凑数，而是「74 列面板能一行放下」这条真实门槛（74 − 4 =
+ * 70 列页内可用）。
+ */
+test('设置页：口径芯片整行宽度守住 70 列预算', () => {
+  const chips =
+    BAND_METRIC_OPTIONS.reduce((sum, o) => sum + displayWidth(` ${o.label} `), 0) +
+    (BAND_METRIC_OPTIONS.length - 1)
+  // 「显示」总开关 + 一个 gap。
+  const withToggle = chips + displayWidth(' 显示 ') + 1
+  // 标签列 8 + 间隔 1。
+  const wholeRow = 9 + withToggle
+  assert.ok(
+    wholeRow <= 70,
+    `整行 ${wholeRow} 列，超过 70 列预算——74 列以下的面板会折行`,
+  )
+})

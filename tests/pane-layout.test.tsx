@@ -918,3 +918,101 @@ test('上下文页：没有构成数据时只给占比，不画空明细', async
 
   await ui.unmount()
 })
+
+/**
+ * 「显示用量条」与五个口径必须在**同一组**里。
+ *
+ * 它们改的是同一件东西——输入框上方那条子：`isBandVisible` 决定它显不显示，
+ * `bandMetrics` 决定显示哪几项。早先「显示用量条」被放在「面板」组里，与
+ * 「轮次费用提示」并列，五个口径却在「用量条显示」组里——同一个对象的两个
+ * 开关被拆成两组，读者会以为它们是两回事（而且组名里的「用量条」出现了两次，
+ * 指的却是同一个东西）。
+ *
+ * 这条按**结构**断言：`whale-band-toggle` 与 `whale-metric-*` 必须共享同一个
+ * 最近的 row-Box 祖先。
+ */
+test('设置页：显示开关与五个口径同属一组', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+  await ui.press({ key: 'whale-tab-settings' })
+  const tree = await ui.drawn() as any
+
+  /** 找到某个 key 的按钮，返回它最近的 row-Box 祖先。 */
+  function rowAncestorOf(node: any, key: string, row: any = null): any {
+    if (!node || typeof node !== 'object') return undefined
+    const isRow = node.type === 'Box' && node.props?.flexDirection === 'row'
+    if (node.type === 'Button' && node.props?.key === key) return row
+    for (const kid of node.children ?? []) {
+      const found = rowAncestorOf(kid, key, isRow ? node : row)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+
+  const toggleRow = rowAncestorOf(tree, 'whale-band-toggle')
+  expect(toggleRow).toBeDefined()
+  for (const metric of ['window', 'cost', 'context', 'session', 'diff']) {
+    const metricRow = rowAncestorOf(tree, `whale-metric-${metric}`)
+    expect(metricRow).toBe(toggleRow)
+  }
+
+  // 「轮次费用提示」不在这一组里——它是另一件事（弹不弹提示），不是用量条。
+  const costRow = rowAncestorOf(tree, 'whale-turn-cost')
+  expect(costRow).not.toBe(toggleRow)
+
+  await ui.unmount()
+})
+
+/**
+ * 三组设置的标签列等宽，芯片起始位置对齐。
+ *
+ * 三组标签文字长度不同（用量条 6 / 面板 4 / 立绘大小 8）。不统一宽度时，
+ * 每组芯片的起始位置都不一样，读起来像三张互不相干的表。
+ */
+test('设置页：三组标签列等宽，芯片起点对齐', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+  await ui.press({ key: 'whale-tab-settings' })
+  const tree = await ui.drawn() as any
+
+  /** 收集三个设置组的行，返回每行第一个子 Box（标签列）的宽度。 */
+  function settingsRows(node: any, out: any[] = []): any[] {
+    if (!node || typeof node !== 'object') return out
+    if (node.type === 'Box' && node.props?.flexDirection === 'row') {
+      const kids = node.children ?? []
+      if (kids.some((k: any) => k?.type === 'Box' && typeof k?.props?.width === 'number')) {
+        out.push(node)
+      }
+    }
+    for (const kid of node.children ?? []) settingsRows(kid, out)
+    return out
+  }
+
+  const rows = settingsRows(tree)
+  expect(rows.length).toBe(3)
+  const widths = rows.map(row => (row.children ?? [])[0]?.props?.width)
+  expect(new Set(widths).size).toBe(1)
+  expect(widths[0]).toBeGreaterThanOrEqual(8)
+
+  await ui.unmount()
+})

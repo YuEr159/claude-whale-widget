@@ -564,11 +564,11 @@ test('口径的标签与它画出来的内容一一对应', () => {
 
   // 「上下文占用」画的是上下文百分比。
   expect(valueOfLabel('上下文占用')).toBe('上下文 12%')
-  // 「5h + 7d」画的是两个额度窗口的百分比。
-  expect(valueOfLabel('5h + 7d')).toBe('5h 40% · 7d 70%')
-  // 「本会话花费」画金额，「额度窗口」画 5h 与重置时间。
+  // 「5h/7d」画的是两个额度窗口的百分比。
+  expect(valueOfLabel('5h/7d')).toBe('5h 40% · 7d 70%')
+  // 「本会话花费」画金额，「额度」画 5h 与重置时间。
   expect(valueOfLabel('本会话花费')).toBe('本会话 ≈$2.00')
-  expect(valueOfLabel('额度窗口')).toContain('5h 40%')
+  expect(valueOfLabel('额度')).toContain('5h 40%')
 })
 
 test('口径全选时同一条数字不印两遍：window 已写 5h，context 只补 7d', () => {
