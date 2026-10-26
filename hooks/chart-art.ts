@@ -12,7 +12,7 @@
 import type { ContextTurn, TurnDay } from '../types'
 import { CHART_PALETTES } from './panel-fill.ts'
 import type { ChartPalette } from './panel-fill.ts'
-import { tokens } from './format.ts'
+import { axisTokens, tokens } from './format.ts'
 import {
   CONTEXT_CHART_PADDING,
   CONTEXT_MAX_BARS,
@@ -207,6 +207,11 @@ export function contextChartSvg(
   maxBars = CONTEXT_MAX_BARS,
   bufferPct = 0,
   palette: ChartPalette = CHART_PALETTES.dark,
+  /**
+   * 纵轴上限，token 数。通常就是自动压缩阈值——柱子按 token 绝对量画，
+   * 让「现在多大」与「到多少会被压」用同一把尺子。不给就按峰值自适应。
+   */
+  axisMaxTokens?: number,
 ): string {
   const height = 112
   // 左侧留出纵轴刻度与轴线的位置：刻度数字要放在轴线左边，给 26px。
@@ -223,7 +228,9 @@ export function contextChartSvg(
   const visible = Math.min(contextVisibleCount(width, maxBars), Math.max(1, turns.length))
   const shown = turns.slice(-visible)
 
-  const { bars, peak, yMax } = contextStack(shown, shown.length, bufferPct)
+  const { bars, peak, yMaxTokens } = contextStack(shown, shown.length, bufferPct, {
+    ...(axisMaxTokens === undefined ? {} : { yMaxTokens: axisMaxTokens }),
+  })
   if (bars.length === 0) {
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">` +
@@ -271,9 +278,13 @@ export function contextChartSvg(
     `<line x1="${padding.left}" y1="${axisBottom}" x2="${width - padding.right}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
   )
   // 上界刻度：轴顶向左伸一小段，数字右对齐贴着轴线。
+  //
+  // **单位是 token，不是百分比。** 纵轴上限通常就是自动压缩阈值（见
+  // `contextStack` 的 `yMaxTokens`），用 `400K` / `1M` 直接标出来，
+  // 读者不必先把「100%」换算回 token 才看得懂离压缩还有多少。
   parts.push(
     `<line x1="${padding.left - 3}" y1="${axisTop}" x2="${padding.left}" y2="${axisTop}" ${strokeOf(palette.axis, 1)} stroke-width="1"/>`,
-    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}>${Math.round(yMax)}%</text>`,
+    `<text x="${padding.left - 4}" y="${axisTop + 3}" text-anchor="end" font-size="9" ${fillOf(palette.label, 1)}>${escapeXml(axisTokens(yMaxTokens))}</text>`,
   )
   // 0 刻度：同样向左伸一小段。
   parts.push(
@@ -283,11 +294,15 @@ export function contextChartSvg(
 
   // 压缩虚线：画在「压缩后那一轮」柱子的左缘，从柱脚贯穿到图顶。
   // 放在柱子之后画，虚线才不会被柱身盖住看不见。
+  //
+  // **用灰色**（`palette.axis`），不是原来那支橙色（`palette.compact`）。
+  // 橙色在冷色柱子里太跳，读起来像又是一个内容分类；虚线只该是「这里发生了
+  // 一件事」的标记，灰色才退到背景里。轴上原本的橙色只留给别处。
   bars.forEach((bar, index) => {
     if (!bar.isAfterCompact) return
     const x = (padding.left + index * slot + gap / 2).toFixed(2)
     parts.push(
-      `<line x1="${x}" y1="${axisTop}" x2="${x}" y2="${axisBottom}" ${strokeOf(palette.compact, 1)} stroke-width="1" stroke-dasharray="2 2"/>`,
+      `<line x1="${x}" y1="${axisTop}" x2="${x}" y2="${axisBottom}" ${strokeOf(palette.axis, 1)} stroke-width="1" stroke-dasharray="2 2"/>`,
     )
   })
 
@@ -304,7 +319,7 @@ export function contextChartSvg(
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">` +
-    `<title>${escapeXml(`上下文占比：最近 ${bars.length} 轮，峰值 ${Math.round(peak)}%（纵轴 0–${Math.round(yMax)}%）${partsCount > 0 ? `，其中 ${partsCount} 轮按内容构成着色` : ''}${compactCount > 0 ? `，${compactCount} 处压缩` : ''}`)}</title>` +
+    `<title>${escapeXml(`上下文占用：最近 ${bars.length} 轮，峰值 ${Math.round(peak)}%（${axisTokens(yMaxTokens)} 为纵轴上限）${partsCount > 0 ? `，其中 ${partsCount} 轮按内容构成着色` : ''}${compactCount > 0 ? `，${compactCount} 处压缩` : ''}`)}</title>` +
     parts.join('') +
     `</svg>`
   )

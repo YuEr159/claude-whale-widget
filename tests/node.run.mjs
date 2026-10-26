@@ -665,15 +665,21 @@ test('显示宽度：中文占两格，英文占一格', () => {
 })
 
 test('上下文堆叠柱与轮次柱', () => {
-  const { bars, peak, yMax } = contextStack([
-    { seq: 1, percent: 20, tokens: 1000, at: 0 },
-    { seq: 2, percent: 90, tokens: 2000, at: 1 },
+  // 柱高按 **token 绝对量** 画，纵轴上限默认是峰值的一成余量。
+  // `percent` 只作为读数保留，不参与高度——它与柱高用的是两个尺度。
+  const { bars, peak, yMaxTokens } = contextStack([
+    { seq: 1, percent: 20, tokens: 100_000, at: 0 },
+    { seq: 2, percent: 90, tokens: 450_000, at: 1 },
   ], 24, 10)
   assert.equal(bars.length, 2)
+  // 峰值仍是百分比口径（图注那句「峰值 90%」说的是窗口占了多满）。
   assert.equal(peak, 90)
-  // 纵轴自适应：取峰值（90 + 10 缓冲）的 1.1 倍并向上取整到 5 的倍数 = 110 → 夹到 100。
-  assert.equal(yMax, 100)
-  // 柱子的总高是「已用 + 缓冲」占纵轴的比例，不再是恒定 100%。
+  // 纵轴：峰值 450K 的 1.1 倍 = 495K。
+  assert.equal(yMaxTokens, 495_000)
+  // 柱高 = token / 纵轴上限，不再恒定。
+  const heights = bars.map(bar => bar.segments.reduce((sum, s) => sum + s.ratio, 0))
+  assert.ok(Math.abs(heights[0] - 100_000 / 495_000) < 1e-9)
+  assert.ok(Math.abs(heights[1] - 450_000 / 495_000) < 1e-9)
   for (const bar of bars) {
     const total = bar.segments.reduce((sum, s) => sum + s.ratio, 0)
     assert.ok(total <= 1 + 1e-9, `柱子溢出：${total}`)
@@ -694,18 +700,33 @@ test('上下文堆叠柱与轮次柱', () => {
   assert.ok(turnBarsCaption(tb).includes('400 条消息'))
 })
 
-test('纵轴自适应：低用量时柱子矮，不必撑满画布', () => {
-  // 整段用量都只有两三成：旧几何下柱子照样满格，看不出「其实很空」。
-  const { bars, yMax } = contextStack([
-    { seq: 1, percent: 20, tokens: 1, at: 0 },
-    { seq: 2, percent: 30, tokens: 1, at: 1 },
-  ], 24, 0)
-  // 峰值 30 → 1.1 倍向上取整到 5 的倍数 = 35。
-  assert.equal(yMax, 35)
+test('纵轴上限：给了压缩阈值就用它，柱高按 token 算', () => {
+  // 阈值 400K：一根 100K、一根 300K。
+  const { bars, yMaxTokens } = contextStack([
+    { seq: 1, percent: 10, tokens: 100_000, at: 0 },
+    { seq: 2, percent: 30, tokens: 300_000, at: 1 },
+  ], 24, 0, { yMaxTokens: 400_000 })
+  assert.equal(yMaxTokens, 400_000, '给了阈值就当纵轴上限')
   const heights = bars.map(bar => bar.segments.reduce((sum, s) => sum + s.ratio, 0))
-  // 最高那根顶到 30/35 ≈ 86%，留一点头；矮的那根明显更矮。
-  assert.ok(Math.abs(heights[1] - 30 / 35) < 1e-9)
-  assert.ok(Math.abs(heights[0] - 20 / 35) < 1e-9)
+  // 100K/400K = 25%，300K/400K = 75%：与「离压缩还有多远」直接可比。
+  assert.ok(Math.abs(heights[0] - 0.25) < 1e-9)
+  assert.ok(Math.abs(heights[1] - 0.75) < 1e-9)
+  // 自适应模式下不画空闲段：空白本身就在表达「还有余量」。
+  assert.ok(!bars.some(bar => bar.segments.some(s => s.kind === 'free')))
+})
+
+test('纵轴自适应：没给阈值时按峰值留一成余量', () => {
+  // 低用量：两根柱子都只有一小截，按峰值定轴后它们仍然分得出高低。
+  const { bars, yMaxTokens } = contextStack([
+    { seq: 1, percent: 20, tokens: 20_000, at: 0 },
+    { seq: 2, percent: 30, tokens: 30_000, at: 1 },
+  ], 24, 0)
+  // 峰值 30K 的 1.1 倍 = 33K。
+  assert.equal(yMaxTokens, 33_000)
+  const heights = bars.map(bar => bar.segments.reduce((sum, s) => sum + s.ratio, 0))
+  // 最高那根顶到 30/33 ≈ 91%，留一点头；矮的那根明显更矮。
+  assert.ok(Math.abs(heights[1] - 30 / 33) < 1e-9)
+  assert.ok(Math.abs(heights[0] - 20 / 33) < 1e-9)
   // 自适应模式不画空闲段：它会把柱子重新补满，抵消自适应的意义。
   assert.ok(!bars.some(bar => bar.segments.some(s => s.kind === 'free')))
 })
@@ -757,7 +778,7 @@ test('contextView：图注、图例、纵轴、柱子数全出自同一份裁好
   const turns = Array.from({ length: 60 }, (_, index) => ({
     seq: index + 1,
     percent: index < 10 ? 95 : 20,
-    tokens: 1000,
+    tokens: index < 10 ? 950_000 : 200_000,
     at: index,
     parts: index < 10 ? [{ kind: 'system', tokens: 500 }, { kind: 'tools', tokens: 500 }] : undefined,
   }))
@@ -777,10 +798,10 @@ test('contextView：图注、图例、纵轴、柱子数全出自同一份裁好
       assert.ok(kinds.has(kind), `宽 ${width}px：图例列了「${kind}」，但这一屏的柱子里没有`)
     }
 
-    // 纵轴只由可见的柱子定：95% 那几轮在窗口内时它是 100，不在时是 25。
-    const seenPeak = Math.max(...view.turns.map(turn => turn.percent))
-    const expectedCeiling = Math.min(100, Math.max(10, Math.ceil((seenPeak * 1.1) / 5) * 5))
-    assert.equal(view.yMax, expectedCeiling, `宽 ${width}px：可见峰值 ${seenPeak}% 却给出纵轴 ${view.yMax}%`)
+    // 纵轴上限只由可见的柱子定（这里没给阈值，走自适应）：峰值 token 的
+    // 1.1 倍。95K 那几轮在窗口内时是 104.5K，不在时是 22K。
+    const seenPeak = Math.max(...view.turns.map(turn => turn.tokens))
+    assert.equal(view.yMaxTokens, Math.max(1, Math.ceil(seenPeak * 1.1 - 1e-6)), `宽 ${width}px：可见峰值 ${seenPeak} 却给出纵轴 ${view.yMaxTokens}`)
   }
 
   // 宽画布才露得出那 10 轮带构成的老记录。
@@ -803,14 +824,16 @@ test('contextView：图注、图例、纵轴、柱子数全出自同一份裁好
  */
 test('contextView 的图注不带纵轴（轴上有刻度），终端自己补', () => {
   const turns = Array.from({ length: 12 }, (_, index) => ({
-    seq: index + 1, percent: 40, tokens: 1000, at: index,
+    seq: index + 1, percent: 40, tokens: 400_000, at: index,
   }))
   const view = contextView(turns, 900, 0, false)
   assert.ok(!view.caption.includes('纵轴'), `图注不该提纵轴，实际「${view.caption}」`)
-  // 但 `yMax` 本身仍要给出来——终端那一路要拿它拼自己那句。
-  assert.ok(view.yMax > 0)
-  const terminalLine = stackCaption(view.bars.length, view.peak, view.yMax)
+  // 但 `yMaxTokens` 本身仍要给出来——终端那一路要拿它拼自己那句。
+  assert.ok(view.yMaxTokens > 0)
+  const terminalLine = stackCaption(view.bars.length, view.peak, view.yMaxTokens)
   assert.ok(terminalLine.includes('纵轴'), `终端图注该带纵轴，实际「${terminalLine}」`)
+  // 终端图注按 token 单位写（K / M），不是百分比。
+  assert.ok(terminalLine.includes('K') || terminalLine.includes('M'), `纵轴单位应为 token，实际「${terminalLine}」`)
 })
 
 /**
@@ -826,7 +849,9 @@ test('图注：有压缩才写，写出次数与最近一次的压缩前后', ()
   // 没有压缩：不加尾巴。
   const plain = stackCaption(12, 46)
   assert.equal(plain, '最近 12 轮 · 峰值 46%')
-  assert.equal(stackCaption(12, 46, 80), '最近 12 轮 · 峰值 46% · 纵轴 80%')
+  // 纵轴按 token 单位写（K / M），与图上轴顶那个刻度同一套写法。
+  assert.equal(stackCaption(12, 46, 400_000), '最近 12 轮 · 峰值 46% · 纵轴 400K')
+  assert.equal(stackCaption(12, 46, 1_000_000), '最近 12 轮 · 峰值 46% · 纵轴 1M')
   // 空数组与不传等价。
   assert.equal(stackCaption(12, 46, undefined, []), '最近 12 轮 · 峰值 46%')
 
@@ -836,11 +861,15 @@ test('图注：有压缩才写，写出次数与最近一次的压缩前后', ()
   assert.equal(one, '最近 12 轮 · 峰值 46% · 1 次压缩（36.7万 压到 2.8万）')
 
   // 多次：次数写总数，数字写**最后一次**——读者最关心刚发生的那一回。
-  const two = stackCaption(12, 46, 90, [
+  const two = stackCaption(12, 46, 921_600, [
     { trigger: 'auto', preTokens: 367_270, postTokens: 28_228 },
     { trigger: 'manual', preTokens: 368_923, postTokens: 25_830 },
   ])
-  assert.equal(two, '最近 12 轮 · 峰值 46% · 纵轴 90% · 2 次压缩（36.9万 压到 2.6万）')
+  assert.equal(two, '最近 12 轮 · 峰值 46% · 纵轴 922K · 2 次压缩（36.9万 压到 2.6万）')
+
+  // 压缩点：阈值换算到模型窗口的百分比，与「峰值 46%」同一个尺度。
+  const withPoint = stackCaption(12, 46, 400_000, [], '压缩点 40%')
+  assert.equal(withPoint, '最近 12 轮 · 峰值 46% · 纵轴 400K · 压缩点 40%')
 
   // 缺数字时只写次数，不画一对空括号。
   const bare = stackCaption(12, 46, undefined, [
@@ -999,12 +1028,12 @@ test('上下文分类：同一类合并，零值与坏值丢弃', () => {
   assert.equal(parts[0].tokens, 3_000)
 })
 
-test('有构成数据时柱子按内容分类堆叠，高度按自适应纵轴算', () => {
+test('有构成数据时柱子按内容分类堆叠，高度按 token 算', () => {
   const turns = [
     {
       seq: 1,
       percent: 50,
-      tokens: 1000,
+      tokens: 500_000,
       at: 0,
       parts: [
         { name: 'Messages', kind: 'messages', tokens: 300_000 },
@@ -1013,68 +1042,68 @@ test('有构成数据时柱子按内容分类堆叠，高度按自适应纵轴�
       ],
     },
     // 老记录：没有 parts，退回单色「已用」。
-    { seq: 2, percent: 20, tokens: 500, at: 1 },
+    { seq: 2, percent: 20, tokens: 200_000, at: 1 },
   ]
-  // 峰值 50 + 10 缓冲 = 60 → ×1.1 = 66 → 向上取整到 5 的倍数 = 70。
-  const { bars, yMax } = contextStack(turns, 24, 10)
-  assert.equal(yMax, 70)
+  // 没给阈值：纵轴按峰值 500K 的 1.1 倍 = 550K。
+  const { bars, yMaxTokens } = contextStack(turns, 24, 0)
+  assert.equal(yMaxTokens, 550_000)
   assert.equal(bars.length, 2)
   assert.equal(bars[0].hasParts, true)
   assert.equal(bars[1].hasParts, false)
 
-  // 第一根：三种分类按 token 比例分掉 50%，再加 10 缓冲；自适应模式不画空闲。
+  // 第一根：三种分类按 token 比例分掉整根「已用」。
   const kinds = bars[0].segments.map(s => s.kind)
-  assert.deepEqual(kinds, ['messages', 'system', 'memory', 'buffer'])
-  // 三种分类合计 50%，占纵轴 50/70。
-  const usedShare = bars[0].segments
-    .filter(s => s.kind !== 'buffer')
-    .reduce((acc, s) => acc + s.ratio, 0)
-  assert.ok(Math.abs(usedShare - 50 / 70) < 1e-9)
+  assert.deepEqual(kinds, ['messages', 'system', 'memory'])
+  // 合计 = 500K / 550K。
+  const usedShare = bars[0].segments.reduce((acc, s) => acc + s.ratio, 0)
+  assert.ok(Math.abs(usedShare - 500_000 / 550_000) < 1e-9)
   // 最大那一类占已用的 3/5。
-  assert.ok(Math.abs(bars[0].segments[0].ratio - (300_000 / 500_000) * (50 / 70)) < 1e-9)
+  assert.ok(Math.abs(bars[0].segments[0].ratio - (300_000 / 500_000) * (500_000 / 550_000)) < 1e-9)
 
-  // 第二根只有「已用 / 缓冲」两段，没有空闲补满。
-  assert.deepEqual(bars[1].segments.map(s => s.kind), ['used', 'buffer'])
+  // 第二根没有构成，整根一段「已用」。
+  assert.deepEqual(bars[1].segments.map(s => s.kind), ['used'])
 })
 
 test('图例跟着这一屏出现过的分段走，顺序稳定', () => {
   const withParts = contextStack([{
     seq: 1,
     percent: 60,
-    tokens: 1,
+    tokens: 9,
     at: 0,
     parts: [
       { name: 'Messages', kind: 'messages', tokens: 5 },
       { name: 'System prompt', kind: 'system', tokens: 3 },
       { name: 'MCP tools', kind: 'mcp', tokens: 1 },
     ],
-  }], 24, 20)
+  }], 24, 0)
   const legend = stackLegendOf(withParts.bars)
-  // 顺序按 CONTEXT_PART_LABELS：system → tools → memory → mcp → agents → messages，
-  // 末尾才是缓冲。自适应纵轴下不再画空闲段，所以图例里也没有它。
-  assert.deepEqual(legend.map(item => item.kind), ['system', 'mcp', 'messages', 'buffer'])
+  // 顺序按 CONTEXT_PART_LABELS：system → tools → memory → mcp → agents → messages。
+  // 新几何里纵轴就是压缩阈值，缓冲段没有容身之处，所以图例里也没有它。
+  assert.deepEqual(legend.map(item => item.kind), ['system', 'mcp', 'messages'])
   // 没出现过的分类不进图例。
   assert.ok(!legend.some(item => item.kind === 'memory'))
   assert.ok(!legend.some(item => item.kind === 'tools'))
 })
 
-test('只有老记录时图例退回两段骨架', () => {
-  const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
+test('只有老记录时图例只剩一段骨架', () => {
+  const legacy = contextStack([{ seq: 1, percent: 30, tokens: 100_000, at: 0 }], 24, 0)
   const legend = stackLegendOf(legacy.bars)
-  assert.deepEqual(legend.map(item => item.kind), ['used', 'buffer'])
+  assert.deepEqual(legend.map(item => item.kind), ['used'])
 })
 
-test('固定纵轴 100% 时保留旧行为：柱子补满，含空闲段', () => {
-  const { bars, yMax } = contextStack(
-    [{ seq: 1, percent: 30, tokens: 1, at: 0 }],
+test('压缩阈值就是纵轴顶：柱子顶到轴顶即「马上要被压缩」', () => {
+  // 阈值 400K，这一轮 300K：柱子占轴高的 75%，而不是按百分比口径的 30%。
+  const { bars, yMaxTokens } = contextStack(
+    [{ seq: 1, percent: 30, tokens: 300_000, at: 0 }],
     24,
-    10,
-    { yMax: 100 },
+    0,
+    { yMaxTokens: 400_000 },
   )
-  assert.equal(yMax, 100)
-  assert.deepEqual(bars[0].segments.map(s => s.kind), ['used', 'buffer', 'free'])
+  assert.equal(yMaxTokens, 400_000)
+  // 新几何里不再有缓冲段与空闲段：轴顶就是阈值，上面没有空间可画。
+  assert.deepEqual(bars[0].segments.map(s => s.kind), ['used'])
   const sum = bars[0].segments.reduce((acc, s) => acc + s.ratio, 0)
-  assert.ok(Math.abs(sum - 1) < 1e-9, `柱子应当补满到 100%，实际 ${sum}`)
+  assert.ok(Math.abs(sum - 0.75) < 1e-9, `柱子应当占轴高 75%，实际 ${sum}`)
 })
 
 
@@ -1560,19 +1589,46 @@ test('压缩标记：只落在压缩后的第一轮', () => {
 test('压缩处画竖向虚线，其余柱子不画', () => {
   const svg = contextChartSvg(
     [
-      { seq: 1, percent: 20, tokens: 1, at: 0 },
-      { seq: 2, percent: 80, tokens: 1, at: 1, afterCompact: true },
+      { seq: 1, percent: 20, tokens: 100_000, at: 0 },
+      { seq: 2, percent: 80, tokens: 400_000, at: 1, afterCompact: true },
     ],
     320,
     24,
     0,
+    CHART_PALETTES.dark,
+    500_000,
   )
   // 虚线是唯一带 dasharray 的元素，数量应当与压缩处一致。
   const dashes = svg.match(/stroke-dasharray/g) ?? []
   assert.equal(dashes.length, 1)
   assert.ok(svg.includes('stroke-dasharray="2 2"'))
+  // **灰色，不是橙色。** 橙色在冷色柱子里太跳，读起来像又一个内容分类；
+  // 虚线只是「这里发生过一件事」的标记，该退到背景里。
+  const dashStroke = svg.match(/stroke="([^"]+)" stroke-width="1" stroke-dasharray/)
+  assert.equal(dashStroke?.[1], CHART_PALETTES.dark.axis, '压缩虚线应当是灰色（轴色）')
+  assert.notEqual(dashStroke?.[1], CHART_PALETTES.dark.compact, '不该再用橙色')
   // 图的说明文字里也要提一句，读屏用户才知道那里发生了什么。
   assert.ok(svg.includes('1 处压缩'))
+})
+
+/**
+ * 纵轴刻度按 token 单位写（`K` / `M`），不是百分比。
+ *
+ * 柱子按 token 绝对量画、轴顶是自动压缩阈值，刻度读作 `400K` 才能与
+ * 「离压缩还有多远」直接对上；写成 `100%` 的话读者还得自己换算一次。
+ */
+test('纵轴刻度写 K / M 单位，轴顶就是压缩阈值', () => {
+  const turns = [
+    { seq: 1, percent: 30, tokens: 300_000, at: 0 },
+    { seq: 2, percent: 40, tokens: 400_000, at: 1 },
+  ]
+  // 阈值 400K：轴顶标 400K。
+  const alpha = contextChartSvg(turns, 320, 2, 0, CHART_PALETTES.dark, 400_000)
+  assert.ok(alpha.includes('>400K<'), `轴顶应标 400K，实际 SVG 里没有`)
+  assert.ok(!alpha.includes('100%'), '轴刻度不该再写百分比')
+  // 阈值 1M：轴顶标 1M（不拖 `.0`）。
+  const beta = contextChartSvg(turns, 320, 2, 0, CHART_PALETTES.dark, 1_000_000)
+  assert.ok(beta.includes('>1M<'), `轴顶应标 1M`)
 })
 
 test('横轴标出轮次序号，密集时抽稀但首尾保留', () => {
@@ -2763,8 +2819,8 @@ test('上下文接线：本次侧覆盖历史时保住压缩细节', () => {
  * 面板的柱状图按阈值算（读者关心「离压缩还有多远」）。早先泡泡与用量条直接
  * 用引擎的 `percent`，同一场会话会出现「泡泡说 28%、图上说 30.4%」。
  */
-test('上下文占比：有 breakdown 就按自动压缩阈值算，泡泡与用量条同源', () => {
-  // 窗口 1M，压缩阈值 921_600（92%）。
+test('上下文占用：按模型完整窗口算，泡泡与用量条同源', () => {
+  // 1M 窗口、阈值 921_600（92%）、已用 300K。
   //
   // **刻意让 `tokens` 与 `breakdown.totalTokens` 不同**（300k vs 340k）：
   // 前者是 API 实际计费的输入，后者是引擎把系统提示、工具定义逐类估算出来
@@ -2782,40 +2838,43 @@ test('上下文占比：有 breakdown 就按自动压缩阈值算，泡泡与用
   }
   const view = toUsageView(usage)
 
-  // **阈值口径 + 计费分子**：300k / 921.6k ≈ 32.6%，而不是引擎的 30%，
-  // 也不是用 `breakdown.totalTokens`（340k）算出的 36.9%。
-  assert.ok(Math.abs(view.contextPercent - (300_000 / 921_600) * 100) < 1e-9)
-  assert.ok(view.contextPercent > 30, '按阈值算应当比按完整窗口算更大')
-  assert.ok(view.contextPercent < 36, '不该用 breakdown.totalTokens——那是估算值')
-  assert.equal(view.contextDenominator, 921_600, '分母应当报出阈值')
+  // **完整窗口口径 + 计费分子**：300K / 1M = 30%。
+  //
+  // 早先这里按压缩阈值算，同一个 300K 会显示成 32.6%（阈值更小时甚至 75%），
+  // 读起来像快撑爆了，而实际还有七成空间没用。阈值改用
+  // `autoCompactThreshold` 单独给出，只用于「压缩点」提示。
+  assert.equal(view.contextPercent, 30)
+  assert.equal(view.contextDenominator, 1_000_000, '分母应当是模型完整窗口')
+  assert.equal(view.autoCompactThreshold, 921_600, '阈值单独给出，不参与占比')
 
   // 泡泡与用量条都从这里取，所以两条出口说的是同一个数。
   const pages = bubblePages(view, { totals: { turns: 0, ms: 0, linesAdded: 0, linesRemoved: 0 } }, 0)
   const contextPage = pages.find(page => page.id === 'context')
   assert.ok(contextPage, '应当有上下文页')
+  assert.equal(contextPage.lines[0], '上下文占用')
   assert.equal(contextPage.lines[1], pct(view.contextPercent))
   assert.equal(bandSummary(view, ['cost'], 0), `上下文 ${pct(view.contextPercent)}`)
 
-  // 没有阈值时退回压缩窗口（rawMaxTokens）。
-  const noThreshold = toUsageView({
+  // 没有 `window` 时退回压缩窗口（rawMaxTokens）——至少还是一个真实读数。
+  const noWindow = toUsageView({
     rateLimits: [],
     context: {
-      tokens: 300_000, window: 1_000_000, percent: 30,
+      tokens: 300_000,
       breakdown: { totalTokens: 300_000, rawMaxTokens: 800_000 },
     },
   })
-  assert.equal(noThreshold.contextDenominator, 800_000)
-  assert.ok(Math.abs(noThreshold.contextPercent - (300_000 / 800_000) * 100) < 1e-9)
+  assert.equal(noWindow.contextDenominator, 800_000)
+  assert.ok(Math.abs(noWindow.contextPercent - (300_000 / 800_000) * 100) < 1e-9)
 
-  // 连 breakdown 都没有：退回引擎的完整窗口口径——至少还有一个真实读数。
+  // 连 breakdown 都没有：退回引擎的 `percent`，分母不明。
   const noBreakdown = toUsageView({
     rateLimits: [],
     context: { tokens: 300_000, window: 1_000_000, percent: 30 },
   })
   assert.equal(noBreakdown.contextPercent, 30)
-  assert.equal(noBreakdown.contextDenominator, undefined)
+  assert.equal(noBreakdown.contextDenominator, 1_000_000)
 
-  // 超出阈值时夹到 100：柱子与百分比都不能溢出。
+  // 超出窗口时夹到 100：百分比不能溢出。
   const over = toUsageView({
     rateLimits: [],
     context: {
@@ -2823,5 +2882,5 @@ test('上下文占比：有 breakdown 就按自动压缩阈值算，泡泡与用
       breakdown: { totalTokens: 1_200_000, rawMaxTokens: 1_000_000, autoCompactThreshold: 921_600 },
     },
   })
-  assert.equal(over.contextPercent, 100, '超过阈值应当夹到 100%')
+  assert.equal(over.contextPercent, 100, '超过窗口应当夹到 100%')
 })

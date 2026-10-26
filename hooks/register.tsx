@@ -861,16 +861,18 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // 上下文占比的堆叠柱状图：每根柱子是一轮，柱内按内容分类堆叠。
+    // 上下文占用的堆叠柱状图：每根柱子是一轮，柱内按内容分类堆叠。
     //
-    // **纵轴 100% = 自动压缩阈值**，不是窗口上限。这个口径与引擎 `/context`
-    // 一致：读者关心的是「离压缩还有多远」，窗口涨到 100% 本身什么都不会
-    // 发生，到阈值才会被砍。
+    // **纵轴是 token 绝对量，上限取自动压缩阈值。** 柱子高度就是这一轮的
+    // `tokens`，轴顶是阈值（`400K` 这种刻度）——「现在多大」与「到多少会被压」
+    // 在同一把尺子上，最高的柱子顶到轴顶就等于「马上要被压缩」。
     //
-    // 因此**不需要「压缩缓冲」那一段**：换成分母之后，阈值之上的空间根本
-    // 不在图上，缓冲段也就没有可画的地方。`bufferPct = 0` 就是这个意思，
-    // 不是漏了。同理，整根柱子顶到 100% 才意味着「马上要被压缩」，这个
-    // 视觉信号比原来按窗口算时强得多。
+    // 早先纵轴是百分比、上限是阈值，柱子按 `percent`（阈值口径）画；那个
+    // 口径下 300K 会显示成 75%，读者容易以为快撑爆了。现在百分比改按模型
+    // 完整窗口算（300K/1M = 30%），柱高直接用 token，两处不再打架。
+    //
+    // 因此**不需要「压缩缓冲」那一段**：阈值就是轴顶，它上面没有空间可画。
+    // `bufferPct = 0` 就是这个意思，不是漏了。
     const bufferPct = 0
 
     /**
@@ -881,22 +883,19 @@ export const register: Register = (on, options) => {
      * 的几轮」，而窗口其实早就快满了。日志里每条 assistant 消息都带 usage，
      * 从会话开头就能重建，补的正是这一段。
      *
-     * ## 分母是**自动压缩阈值**，不是窗口上限
+     * ## 分母是**模型完整窗口**，不是压缩阈值
      *
-     * 这是整页最容易搞错的一处。读者问「上下文还剩多少」，真正想知道的是
-     * 「离自动压缩还有多远」——窗口到 100% 并不会发生什么，到阈值才会被砍。
-     * 引擎的 `/context` 也是这个口径：`percentage` 按 `autoCompactThreshold`
-     * 算，而不是 `rawMaxTokens`。早先这里拿窗口上限当分母，同样一批读数会
-     * 算出小得多的占比，「快压缩了」的紧张感整个消失。
+     * 柱子回答的是「这个模型的窗口用了多少成」：1M 窗口里放了 300K 就是 30%。
+     * 早先按自动压缩阈值算，同一个 300K 会画成 75%，整条曲线凭空显得紧张。
+     * 「离压缩还有多远」由 `autoCompactThreshold` 单独回答，图注里写。
      *
-     * 两个值都只能取**当前这次** breakdown：日志里既没有 `rawMaxTokens` 也
-     * 没有 `autoCompactThreshold`。同一场会话里这两个档位不会变，所以用
-     * 当下这一份换算是成立的；换到别的会话就不成立——这也是只取当前会话
-     * （`$.session.id()`）的原因。
+     * 分母只能取**当前这次**的读数：日志里既没有窗口上限也没有阈值。同一场
+     * 会话里模型不换、窗口不变，所以用当下这一份换算是成立的；换到别的会话
+     * 就不成立——这也是只取当前会话（`$.session.id()`）的原因。
      */
-    // 分母与 `view.contextPercent` 同源：`toUsageView` 已经把「阈值优先、
-    // 其次压缩窗口」这套选择收在一处，这里直接取，别再算第二遍——两处各算
-    // 一遍迟早会分叉（这正是先前「泡泡 28%、图上 30.4%」的成因）。
+    // 分母与 `view.contextPercent` 同源：`toUsageView` 已经把这套选择收在一处，
+    // 这里直接取，别再算第二遍——两处各算一遍迟早会分叉（这正是先前
+    // 「泡泡 28%、图上 30.4%」的成因）。
     const contextDenominator = view.contextDenominator
     const historyContext = historyContextTurns(record.data?.contextTurns, contextDenominator)
     const contextTurns = mergeContextHistory(historyContext, liveContextTurns)
@@ -912,7 +911,14 @@ export const register: Register = (on, options) => {
     // 900px，因为那时柱子已经到 60 根上限（`CONTEXT_MAX_BARS`），再宽只是
     // 让每根柱子变胖，读不出更多轮。
     const chartWidth = Math.max(80, Math.min(width * 8 - 16, 900))
-    const contextScreen = contextView(contextTurns, chartWidth, Math.max(0, bufferPct), theme.isLight)
+    const contextScreen = contextView(
+      contextTurns,
+      chartWidth,
+      Math.max(0, bufferPct),
+      theme.isLight,
+      // 压缩点：柱子按模型完整窗口画，得点出阈值落在同一个尺度上的哪里。
+      { threshold: view.autoCompactThreshold, window: contextDenominator },
+    )
 
     const contextPage = (
       <Box flexDirection="column">
@@ -939,6 +945,7 @@ export const register: Register = (on, options) => {
                   contextScreen.turns.length,
                   Math.max(0, bufferPct),
                   chart,
+                  contextScreen.yMaxTokens,
                 )}
                 alt={contextScreen.caption}
                 width={chartWidth}
@@ -1012,7 +1019,7 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // 页签：用量概览 / 模型分布 / 本会话上下文占比 / 设置。
+    // 页签：用量概览 / 模型分布 / 本会话上下文占用 / 设置。
     //
     // **不要在外面套带边框的 Box**。引擎文档写明 `Button` 在桌面端画成
     // 原生按钮，命中区只包住它自己的内容；Box 的边框在按钮之外，那一圈
@@ -1024,7 +1031,7 @@ export const register: Register = (on, options) => {
     const tabIds = [
       { id: 'overview', label: '用量概览' },
       { id: 'models', label: '模型分布' },
-      { id: 'context', label: '本会话上下文占比' },
+      { id: 'context', label: '本会话上下文占用' },
       { id: 'settings', label: '设置' },
     ] as const
     const pageTabs = (
