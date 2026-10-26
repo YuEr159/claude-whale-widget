@@ -576,13 +576,14 @@ test('输入框上方用量条：摘要在右，左侧是字符画小鲸鱼', as
   // 字符画在固定宽度的槽里（宽 11 列 = 10 列字形 + 1 列缝）。
   //
   // 从 5 列拉长到 10 列：5 列只够画一个静止的符号，做不了动画——水波一挪
-  // 就出框。10 列能容下「鲸鱼 3 列 + 两侧各 3 列浪」，三种状态都跑得起来。
-  const slot = await ui.find({ key: 'whale-band-whale' }) as any
+  // 就出框。10 列能容下「睡觉攒满十个 z」，也能容下「鱼头 + 两侧各 3 列浪」。
+  const slot = await ui.find({ key: 'whale-band-whale' }) as unknown as { props?: { width?: number } }
   expect(slot).toBeDefined()
-  expect(slot?.props?.width).toBe(11)
+  expect(slot.props?.width).toBe(11)
   const glyph = JSON.stringify(slot)
-  // 鲸鱼轮廓 `~)~`：只用半角字符，任何等宽字体里都是稳定 1 列。
-  expect(glyph).toContain('~)~')
+  // 这一段画的是 10 列的字符画，且**不再有 `~)~`**——那个静止的括号脸
+  // 既不像鲸鱼，又把鼾声挤到左边半格。睡觉时只有 z 一个字母一个字母长出来。
+  expect(glyph).not.toContain('~)~')
 
   expect(await ui.find({ key: 'whale-band-spacer' })).toBeDefined()
 
@@ -612,7 +613,9 @@ test('终端上用量条没有 Svg，退化成字符鲸鱼', async ($, on) => {
   expect(await ui.find({ key: 'whale-open' })).toBeDefined()
   // 终端元素表里没有 Svg；字符画本来就不依赖 Svg，两种 surface 画的是同一幅。
   expect(await ui.find({ type: 'Svg' })).toBeUndefined()
-  expect(JSON.stringify(await ui.drawn())).toContain('~)~')
+  // 终端上同样是 10 列字符画，不再有 `~)~` 那个静止的括号脸。
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).not.toContain('~)~')
 
   await ui.unmount()
 })

@@ -71,7 +71,7 @@ import {
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { BAND_SWIM_STEP_MS, WHALE_ASPECT, bandWhaleGlyph, bandWhaleStateOf, BAND_WHALE_TEXT_COLS, emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
+import { BAND_TICK_MS, WHALE_ASPECT, bandWhaleGlyph, bandWhaleStateOf, BAND_WHALE_TEXT_COLS, emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
@@ -315,13 +315,14 @@ export const register: Register = (on, options) => {
       $.ui.invalidate('ui.render')
     })
 
-    // 用量条的巡游比面板快：条子里一步只有 16px，跟 6 秒的拍子走每分钟
-    // 才挪 20 列，看久了像静止。1.2 秒一条独立时钟，约每秒 13px，是真在游。
+    // 用量条的字符画按帧刷新：睡觉攒字母每拍 0.2 秒，节拍比它慢就会跳帧，
+    // 「一个字母一个字母蹦出来」会变成「一次蹦两三个」。干活 0.4 秒、忙
+    // 0.3 秒也都落在这条节拍的采样精度里。
     //
     // 这条只驱动**一行高的小树**；`session.usage()` 在引擎侧是缓存值
     // （新数字由 `session.measure` 推），所以多出来的重绘很便宜。桌面端
-    // `$.ui.invalidate` 上限每秒十次，1.2 秒一次远在限内。
-    $.clock.every(BAND_SWIM_STEP_MS, () => {
+    // `$.ui.invalidate` 上限每秒十次，200ms 一拍是五次，余量一半。
+    $.clock.every(BAND_TICK_MS, () => {
       $.ui.invalidate('ui.render')
     })
 
@@ -545,9 +546,9 @@ export const register: Register = (on, options) => {
   ).catch(async ($, e, next) => next(e))
 
   // ---------------- 输入框上方的用量条 ----------------
-  // 摘要与面板入口靠右；**左侧的空白留给小鲸鱼巡游**（用户要的「在用量条
-  // 空白处来回游」）。条子只有一行高，所以只画鲸鱼本体、不画气泡——气泡是
-  // 三行 21–46px 的字，最小可读尺寸就顶到 150px。数字本来就在摘要里。
+  // 摘要与面板入口靠右；左侧是一块 10 列的字符画。条子只有一行高，所以
+  // 画不了气泡——气泡是三行 21–46px 的字，最小可读尺寸就顶到 150px。
+  // 数字本来就在摘要里。
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const heldPrefs = await $.state.get({ plugin: 'whale-usage', key: 'prefs' } as const)
     const prefsNow = heldPrefs.value ?? DEFAULT_PREFS
@@ -599,7 +600,8 @@ export const register: Register = (on, options) => {
      * 顺带在终端上也能画（终端本来就没有 Svg）。
      *
      * 三种状态宽都是 `BAND_WHALE_TEXT_COLS` 列，所以状态切换时后面的摘要
-     * 不会左右跳。空闲时她在打呼噜（`Zz` → `Zzzzzz` → `（呼）` → 呼）。
+     * 不会左右跳。空闲时她在睡觉，`z` 一个字母一个字母地蹦出来，攒满整条
+     * 再「呼」一口气。
      */
     const bandState = bandWhaleStateOf(isSessionRunning, now)
     // **宽度固定成字形宽度 + 1 列右缝**，不跟着摘要长度算——
@@ -627,13 +629,13 @@ export const register: Register = (on, options) => {
         width={e.props.bodyColumns}
         gap={1}
       >
-        {/* 小鲸鱼：单行字符画，宽度固定 6 列。外面不再套跑道 Box——那层
+        {/* 小鲸鱼：单行字符画，宽度固定 10 列。外面不再套跑道 Box——那层
             是为巡游准备的可挪动空间，巡游取消后它只剩一个定宽外壳。
             字符画本身已经表达了「在不在干活」，不需要再靠位置变化。
 
             **不上色。** 曾经想给运行中的鲸鱼一支绿色，但 `diffAdded` 按
             设计规则只用于「增加的行数」——挪来当装饰会让读者在条子上看到
-            同一个颜色表达两件事。状态差异由字形承担（见 `BAND_WHALE_GLYPHS`）。 */}
+            同一个颜色表达两件事。状态差异由字形承担（见 `BAND_WHALE_FRAMES`）。 */}
         <Box key="whale-band-whale" width={BAND_WHALE_COLS}>
           <Text>{bandWhaleGlyph(bandState, now)}</Text>
         </Box>
