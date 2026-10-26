@@ -462,6 +462,38 @@ cp -r . "$HOME/.claude/dev-mods/<会话 id>/whale-usage"
 
 也可以把目录写进环境变量 `CLAUDE_CODE_PLUGIN_DIRS`，一次挂多个插件目录。
 
+### 更新已安装的插件
+
+**这是最容易踩的坑。** 插件从本地目录安装时，`plugin install` 会把文件
+**复制**到 `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`，之后
+加载的一直是那份副本。直接改仓库里的源码，`/reload-plugins` 也不会生效——
+它重载的是缓存里的旧文件。
+
+而 `plugin update` 只比较**版本号**：版本号没变，它回答「已是最新」，
+不会重新拷贝。
+
+所以仓库里装了 `pre-commit` hook，每次提交自动把版本号加一（见
+`scripts/bump-version.mjs`），`plugin update` 因此总能认出新代码：
+
+```bash
+claude plugin marketplace update whale-usage-marketplace
+claude plugin update whale-usage
+```
+
+然后**完全退出并重新启动桌面端**。注意 `/reload-plugins` 在部分环境里会被
+禁用（日志出现 `reload_plugins disabled: a managed MCP policy governs plugin
+servers at spawn only`），那时只有重启进程才会加载新版本。
+
+克隆仓库后先装一次 hook，否则版本号不会自己涨：
+
+```bash
+node scripts/install-hooks.mjs
+```
+
+`plugin details` 里的 `Hooks (0)` 是**正常的**：它只数声明式 hook，不数
+`hooks/hooks.json` 里 `modules` 指向的 JS 模块。插件是否真的挂上了，看
+`claude plugin validate <目录>` 能否列出那 11 个 hook。
+
 ### 卸掉
 
 ```
@@ -486,6 +518,13 @@ ENGINE="$LOCALAPPDATA/Claude-3p/claude-code/<版本>/<哈希>/claude.exe"
 "$ENGINE" plugin test .       # 单元 + 渲染测试
 npx --package typescript@5.6 tsc -p .   # 类型检查
 node --test tests/node.run.mjs          # 不依赖 CLI 的等价测试
+node scripts/bump-version.mjs --check   # 当前版本号
+```
+
+版本号的递增逻辑有单元测试覆盖（末位进位、拒绝非法形状）：
+
+```bash
+node --test tests/version.run.mjs
 ```
 
 ## 数据取不到时
