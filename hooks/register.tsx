@@ -599,11 +599,11 @@ export const register: Register = (on, options) => {
      * 布局，与同一行的摘要文字同一套度量，既不撑高也不会在换 DPI 时错位；
      * 顺带在终端上也能画（终端本来就没有 Svg）。
      *
-     * 三种状态宽都是 5 列，所以状态切换时后面的摘要不会左右跳。
+     * 三种状态宽都是 `BAND_WHALE_TEXT_COLS` 列，所以状态切换时后面的摘要
+     * 不会左右跳。空闲时她在打呼噜（`Zz` → `Zzzzzz` → `（呼）` → 呼）。
      */
     const bandState = bandWhaleStateOf(isSessionRunning, now)
-    const bandMood = moodOf(now)
-    // **宽度固定成 6 列**（字符画 5 列 + 1 列右缝），不跟着摘要长度算——
+    // **宽度固定成字形宽度 + 1 列右缝**，不跟着摘要长度算——
     // `summary` 随额度、倒计时、花费随时变长变短，按剩余宽度算的代码估错
     // 一个字符就会换行、把条子变成两行高。窄窗口里引擎按 flexShrink 收窄，
     // 收窄后字符画位置由 `overflow` 裁掉，不影响布局。

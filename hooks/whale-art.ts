@@ -118,15 +118,15 @@ export function emblemOf(mood: WhaleMood): string {
  * 尺寸就顶到 52px——塞进去要么被裁掉一半，要么把条子撑高。字符画按字符格
  * 布局，与条子上的摘要文字同一套度量，不会撑高，也不会在 DPI 变化时错位。
  *
- * 三个状态各有一幅，宽都是 5 列（`WATER` 的位置固定），所以状态切换时后面
- * 的摘要文字不会左右跳：
+ * 三个状态各有一套帧，宽都是 `BAND_WHALE_TEXT_COLS` 列，所以状态切换时
+ * 后面的摘要文字不会左右跳：
  *
- *   - `idle`    静止：`≋ᐟᐟ\` —— 尾巴在水面，身体朝向左边（与素材一致）
- *   - `working` 干活：水花移到左边、加一个尾迹，像刚划出去
- *   - `busy`    忙：两侧都有水花，尾迹最长
+ *   - `idle`    睡觉：鲸鱼不动，打一个完整的呼噜（见 `BAND_WHALE_FRAMES`）
+ *   - `working` 干活：向左游，拖一条尾迹，像刚划出去
+ *   - `busy`    忙：两侧都有浪，尾迹最长
  *
- * 只用一个反斜杠和一个斜杠拼轮廓，是因为方括号、圆括号在等宽字体里与
- * CJK 字形的基线不一致；`\` `/` `~` `≋` 这几个在常见等宽字体里高度一致。
+ * 轮廓用 `~)~`：方括号、反斜杠在等宽字体里与 CJK 字形的基线不一致，而
+ * `~ )` 这几个在常见等宽字体里高度一致。详见 `BAND_WHALE_FRAMES` 的注释。
  */
 export type BandWhaleState = 'idle' | 'working' | 'busy'
 
@@ -139,32 +139,44 @@ export type BandWhaleState = 'idle' | 'working' | 'busy'
  * 状态差异不靠颜色（`diffAdded` 按设计规则只用于「增加的行数」，拿来当装饰
  * 会让同一个颜色表达两件事），全靠字形与位移：
  *
- * - **静止 `idle`**：鲸鱼**原地不动**，头顶的气泡由 `.` 长成 `o` 再长成 `O`
- *   然后收回——像睡着了在冒泡；水波在它身侧荡开又收回。位置固定是关键：
- *   「没在赶路」这件事，静止比什么都说得清。节奏最慢（1.6s 一帧）。
+ * - **睡觉 `idle`**：鲸鱼**原地不动**，打一个完整的呼噜——`Zz` → `Zzz` →
+ *   `Zzzzzz` 吸气渐长，`（呼）` 呼出来，空一帧停顿，再补一声 `呼`。鲸鱼
+ *   一列都不挪：睡着的东西不会动，动的只有鼾声。整轮 4.8 秒，接近人一次
+ *   呼吸的周期。
  * - **干活 `working`**：鲸鱼**整体向左移**（第 1→3 列），身后拖出一条 `>` 尾迹，
  *   `~` 从一列涨到两列再收——正是划一下桨的形状。节奏 0.4s 一帧。
  * - **忙 `busy`**：两侧都是 `~`，尾迹更长更密，像顶着急流往前冲。节奏最快，
  *   0.3s 一帧。
  *
- * 三帧/四帧一轮，四帧的第 2、4 帧相同，所以走完一轮是「去—回—去—回」的
- * 往复，不是单向循环，看起来才像有呼吸。
+ * 干活与忙各四帧，第 2、4 帧相同，所以走完一轮是「去—回—去—回」的往复，
+ * 不是单向循环，看起来才像有呼吸。
+ *
+ * ## 为什么睡觉的鲸鱼位置逐帧不变
+ *
+ * 其余两态里鲸鱼的位置随帧移动，那是「在游」。睡着时位置必须**逐帧一致**，
+ * 否则看起来像在梦游。六帧的轮廓都从显示列 7 起（前面留 6 列），正好够
+ * `（呼）` 按全角算的 6 列宽——最长的那个鼾声贴着鲸鱼，短的就往右缩。
  *
  * ## 字符选择
  *
- * 只用 `~ ) > . o O` 与空格——**全是字体覆盖率最高的半角字符**。
+ * 半角字符只取 `~ ) > . o O Z z` 与空格——全是字体覆盖率最高的字符。
  * 早先用过 `≋`（U+224B）与 `ᐟ`（U+141F，加拿大音节文字）：Unicode 标准里
  * 两者都是 1 列宽，但后者在多数西文字体里没有字形，会触发 fallback，而
  * fallback 字体未必与等宽数字同宽——一旦它被画成 2 列，整条用量条就会错位。
- * 现在的字符集在任何等宽字体里都是稳定 1 列。
+ * 现在的半角字符集在任何等宽字体里都是稳定 1 列。
+ *
+ * 鼾声两个汉字与全角括号是**唯一的中文**，它们按 CJK 规则各占 2 列，由
+ * `displayWidth` 正确计数；面板里本来就通篇中文，字体必定覆盖。
  */
 export const BAND_WHALE_FRAMES: Readonly<Record<BandWhaleState, readonly string[]>> = {
-  // 静止：鲸鱼不动，气泡长大，水波荡开。
+  // 睡觉：鲸鱼不动，鼾声由短到长，呼出来，停一下，再呼一声。
   idle: [
-    '  .  ~)~  ',
-    '  o  ~)~  ',
-    '  O ~~)~ ~',
-    '  o  ~)~  ',
+    '   Zz ~)~ ',
+    '  Zzz ~)~ ',
+    'Zzzzzz~)~ ',
+    '（呼）~)~ ',
+    '      ~)~ ',
+    '    呼~)~ ',
   ],
   // 干活：向左游，尾迹拖长。
   working: [
@@ -194,11 +206,22 @@ export const BAND_WHALE_FRAMES: Readonly<Record<BandWhaleState, readonly string[
  */
 export const BAND_WHALE_TEXT_COLS = 10
 
-/** 每个状态一帧停多久（毫秒）。越忙越快。 */
-const BAND_FRAME_MS: Readonly<Record<BandWhaleState, number>> = {
-  idle: 1600,
-  working: 400,
-  busy: 300,
+/**
+ * 每个状态的每一帧停多久（毫秒）。
+ *
+ * 早先是「每个状态一个常数」，因为那时每帧长度相同、动作是匀速的。睡觉的
+ * 呼噜不行：吸气要慢（鼾声从 `Zz` 长到 `Zzzzzz`），呼气要快（`（呼）`
+ * 是一下子出来的），呼气之后还要停一拍再补第二声。匀速播出来像机器在打鼾，
+ * 不像睡着的东西。所以改成逐帧给时长。
+ *
+ * 数组长度必须与 `BAND_WHALE_FRAMES[state]` 一致，测试钉住这一点。
+ */
+const BAND_FRAME_MS: Readonly<Record<BandWhaleState, readonly number[]>> = {
+  // 一轮 4.8 秒：吸 0.8 + 0.8 + 1.0，呼 0.6，停 0.9，再呼 0.7。
+  idle: [800, 800, 1000, 600, 900, 700],
+  // 干活与忙仍匀速，四帧一轮。
+  working: [400, 400, 400, 400],
+  busy: [300, 300, 300, 300],
 }
 
 /**
@@ -226,14 +249,24 @@ export function bandWhaleStateOf(isRunning: boolean, now: number): BandWhaleStat
  * 接着走；关掉再开不会跳回第一帧。这与 `swimOffsetFor` 的相位算法同一个
  * 思路——时间本身就是唯一的状态。
  *
+ * 帧时长可以各不相等（睡觉的呼噜要吸得慢、呼得快），所以先把每帧的时长
+ * 累加成一轮的总长，再按 `now % 总长` 落进哪一段来定帧号。全部帧等长时，
+ * 这与「`now / step` 再取模」等价。
+ *
  * @param state 当前状态
  * @param now   当前时刻（毫秒）
  * @returns 该状态下的第几帧（从 0 起）
  */
 export function bandWhaleFrameOf(state: BandWhaleState, now: number): number {
-  const frames = BAND_WHALE_FRAMES[state]
-  const step = BAND_FRAME_MS[state]
-  return Math.floor(now / step) % frames.length
+  const durations = BAND_FRAME_MS[state]
+  const period = durations.reduce((sum, ms) => sum + ms, 0)
+  // 负时刻不该发生，但取模会给出负数，夹一下比画出一个不存在的帧好。
+  let rest = ((now % period) + period) % period
+  for (let index = 0; index < durations.length; index += 1) {
+    rest -= durations[index]!
+    if (rest < 0) return index
+  }
+  return durations.length - 1
 }
 
 /** 用量条字符画的文字：当前状态 + 当前时刻对应的一帧。 */
