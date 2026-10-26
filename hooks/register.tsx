@@ -546,7 +546,7 @@ export const register: Register = (on, options) => {
   ).catch(async ($, e, next) => next(e))
 
   // ---------------- 输入框上方的用量条 ----------------
-  // 摘要与面板入口靠右；左侧是一块 10 列的字符画。条子只有一行高，所以
+  // 摘要与面板入口靠右；左侧是一块 16 列的字符画。条子只有一行高，所以
   // 画不了气泡——气泡是三行 21–46px 的字，最小可读尺寸就顶到 150px。
   // 数字本来就在摘要里。
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -600,8 +600,9 @@ export const register: Register = (on, options) => {
      * 顺带在终端上也能画（终端本来就没有 Svg）。
      *
      * 三种状态宽都是 `BAND_WHALE_TEXT_COLS` 列，所以状态切换时后面的摘要
-     * 不会左右跳。空闲时她在睡觉，`z` 一个字母一个字母地蹦出来，攒满整条
-     * 再「呼」一口气。
+     * 不会左右跳。空闲时她在睡觉，`z` 一个字母一个字母地蹦出来，攒满整格
+     * 再「呼」一口气；跑对话时鱼头 `>` 后面跟着她嘀咕的话——干活时说摸鱼，
+     * 忙时说吃白饭。
      */
     const bandState = bandWhaleStateOf(isSessionRunning, now)
     // **宽度固定成字形宽度 + 1 列右缝**，不跟着摘要长度算——
@@ -629,7 +630,7 @@ export const register: Register = (on, options) => {
         width={e.props.bodyColumns}
         gap={1}
       >
-        {/* 小鲸鱼：单行字符画，宽度固定 10 列。外面不再套跑道 Box——那层
+        {/* 小鲸鱼：单行字符画，宽度固定 16 列。外面不再套跑道 Box——那层
             是为巡游准备的可挪动空间，巡游取消后它只剩一个定宽外壳。
             字符画本身已经表达了「在不在干活」，不需要再靠位置变化。
 

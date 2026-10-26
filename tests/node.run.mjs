@@ -2213,18 +2213,18 @@ test('设置页：口径芯片整行宽度守住 70 列预算', () => {
  * `turn.start` 置真、`turn.complete` / `turn.abort` 置假（register.tsx 的
  * 模块变量 `isSessionRunning`），这里只验「给定运行状态与时刻，画出哪一幅」。
  *
- * 睡觉一档按读给的完整节奏走：`z` → `zz` → … → 攒满十个，`（呼）` 呼出来，
- * 空一拍，再补一声 `呼`。
+ * 睡觉一档按读给的完整节奏走：`z` → `zz` → … → 攒满整格，`（呼）` 呼出来，
+ * 空一拍，再补一声 `呼`。干活与忙那两档各说两句话，不再吐 `~` 泡泡。
  */
 test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   // 空闲：不管时钟走到哪儿都是 idle。
   for (const now of [0, 700, 1400, 5000, 1_000_000]) {
     assert.equal(bandWhaleStateOf(false, now), 'idle')
   }
-  // 运行中：700ms 一换。
+  // 运行中：按一轮 4.8 秒切状态（两帧 × 2.4 秒）。
   assert.equal(bandWhaleStateOf(true, 0), 'working')
-  assert.equal(bandWhaleStateOf(true, 700), 'busy')
-  assert.equal(bandWhaleStateOf(true, 1400), 'working')
+  assert.equal(bandWhaleStateOf(true, 4_800), 'busy')
+  assert.equal(bandWhaleStateOf(true, 9_600), 'working')
 
   /** 展开所有状态的每一帧，逐帧检查。 */
   const allFrames = Object.entries(BAND_WHALE_FRAMES).flatMap(([state, frames]) =>
@@ -2241,12 +2241,33 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
     )
   }
 
-  // 干活与忙那两档每帧都要有鱼头 `>`，否则读者认不出那是鲸鱼。
+  // 干活与忙那两档每帧都要有鱼头 `>`，后面跟一句她自己的话。
   // （睡觉那档只剩 z，没有鱼头——它讲的是鼾声，见下面。）
   for (const state of ['working', 'busy']) {
     for (const frame of BAND_WHALE_FRAMES[state]) {
-      assert.ok(frame.includes('>'), `${state} 每帧该有鱼头：${JSON.stringify(frame)}`)
+      assert.ok(frame.startsWith('>'), `${state} 每帧该以鱼头开头：${JSON.stringify(frame)}`)
+      // 鱼头后面必须真的有一句话，不能只有空格。
+      assert.ok(
+        frame.slice(1).trim().length > 0,
+        `${state} 每帧鱼头后面该有文字：${JSON.stringify(frame)}`,
+      )
     }
+  }
+
+  // **干活那档要说摸鱼**——这是用户要的那条（「工作间隙悄悄摸鱼中」之类）。
+  const workingText = BAND_WHALE_FRAMES.working.join('|')
+  assert.ok(workingText.includes('摸鱼'), `干活那档该说摸鱼：${workingText}`)
+  // **忙那档要说吃白饭**——沿用这个梗的第一联想。
+  const busyText = BAND_WHALE_FRAMES.busy.join('|')
+  assert.ok(busyText.includes('大白饭') || busyText.includes('再来一碗'), `忙那档该说吃：${busyText}`)
+
+  // **泡泡（`~`）已经全部去掉了。** 它原来占着这一格当装饰，读者看不出
+  // 那串波浪在说什么；现在同一位置换成了文字。
+  for (const { state, index, frame } of allFrames) {
+    assert.ok(
+      !frame.includes('~'),
+      `${state} 第 ${index} 帧还在吐泡泡：${JSON.stringify(frame)}`,
+    )
   }
 
   // **只用字体覆盖率高的字符。** 早先用过 `≋`（U+224B）与 `ᐟ`
@@ -2254,9 +2275,14 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   // 西文字体里没有字形，fallback 字体未必与等宽数字同宽——一旦被画成 2 列，
   // 整条用量条就错位。
   //
-  // 鼾声的「呼」与全角括号是唯一的中文：它们由 `displayWidth` 按 CJK 规则
-  // 各算 2 列，面板里本来就通篇中文，字体必定覆盖。
-  const allowed = new Set(['~', '>', '.', 'o', 'O', 'z', '呼', '（', '）', ' '])
+  // 汉字与全角括号由 `displayWidth` 按 CJK 规则各算 2 列，面板里本来就
+  // 通篇中文，字体必定覆盖。
+  const allowed = new Set([
+    '>', 'z', ' ',
+    '工', '作', '间', '隙', '摸', '鱼', '中', '悄',
+    '猛', '吃', '大', '白', '饭', '再', '来', '一', '碗',
+    '呼', '（', '）',
+  ])
   for (const { state, index, frame } of allFrames) {
     for (const ch of frame) {
       assert.ok(allowed.has(ch), `${state} 第 ${index} 帧用了非白名单字符 ${JSON.stringify(ch)}`)
@@ -2273,31 +2299,21 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   const firsts = Object.values(BAND_WHALE_FRAMES).map(frames => frames[0])
   assert.equal(new Set(firsts).size, 3, '三个状态的起始帧应当各不相同')
 
-  // **睡觉那档不再画鲸鱼轮廓。** 早先每帧都带一个静止的 `~)~`，既不像鲸鱼，
-  // 又把鼾声挤到左边半格。现在只有 z 在长；干活与忙仍靠 `>` 当鱼头。
-  assert.ok(
-    BAND_WHALE_FRAMES.idle.every(frame => !frame.includes('~')),
-    '睡觉那档不该再有 `~`（那个静止的括号脸已去掉）',
-  )
-  assert.ok(
-    BAND_WHALE_FRAMES.working.every(frame => frame.includes('>')),
-    '干活那档每帧都要有鱼头 `>`',
-  )
-  assert.ok(
-    BAND_WHALE_FRAMES.busy.every(frame => frame.includes('>')),
-    '忙那档每帧都要有鱼头 `>`',
-  )
-
-  // **z 是一个字母一个字母长出来的。** 连着的十拍，每拍比上一拍多一个 z，
+  // **z 是一个字母一个字母长出来的。** 连着的十六拍，每拍比上一拍多一个 z，
   // 且都在行首——读者看到的是字母从左边一个个冒出来，而不是整串换个长度。
-  const growth = BAND_WHALE_FRAMES.idle.slice(0, 10)
+  const growth = BAND_WHALE_FRAMES.idle.slice(0, BAND_WHALE_TEXT_COLS)
   growth.forEach((frame, index) => {
     const zs = frame.match(/^z+/)?.[0] ?? ''
     assert.equal(zs.length, index + 1, `第 ${index} 拍应当有 ${index + 1} 个 z：${JSON.stringify(frame)}`)
     assert.equal(frame.trim(), zs, `攒字母那几拍除 z 外不该有别的内容：${JSON.stringify(frame)}`)
   })
-  // 攒满十个 z 正好铺满整条（不含空格时宽度就是字符画宽度）。
-  assert.equal(growth[9], 'z'.repeat(BAND_WHALE_TEXT_COLS))
+  // 攒满那一拍正好铺满整格。
+  assert.equal(growth[BAND_WHALE_TEXT_COLS - 1], 'z'.repeat(BAND_WHALE_TEXT_COLS))
+  // 攒满之后紧接着就是呼气，不能一直堆在那儿。
+  assert.ok(
+    BAND_WHALE_FRAMES.idle[BAND_WHALE_TEXT_COLS].includes('（呼）'),
+    '攒满之后应当立刻呼气',
+  )
 
   // 鼾声的完整节奏都出现过：（呼）以及补的那声呼，还有中间那拍空档。
   const idleText = BAND_WHALE_FRAMES.idle.join('|')
@@ -2317,13 +2333,13 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   assert.ok(idleFrames.size > 1, '睡觉状态也该在动（打呼噜）')
 
   // 帧时长可以逐帧不同，所以周期是各帧时长之和；走满一轮回到第一帧。
-  // 睡觉这一轮 3.6 秒，接近人一次呼吸。
-  const period = 10 * 200 + 600 + 500 + 500
+  // 睡觉这一轮 4.6 秒，接近一次呼吸。
+  const period = BAND_WHALE_TEXT_COLS * 200 + 600 + 500 + 500
   assert.equal(bandWhaleGlyph('idle', period), bandWhaleGlyph('idle', 0))
   assert.equal(
     BAND_WHALE_FRAMES.idle.length,
-    13,
-    '睡觉一轮应当十三拍：十个字母 + （呼） + 空档 + 呼',
+    BAND_WHALE_TEXT_COLS + 3,
+    '睡觉一轮应当是「字母逐个长满 + （呼） + 空档 + 呼」',
   )
 
   // **帧的切换点逐个钉住。** 逐毫秒采样，记下「帧变了」的那些时刻——
@@ -2341,8 +2357,10 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   assert.deepEqual(
     switches.map(item => item.at),
     [
-      200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000,
-      2600, 3100, period,
+      ...[...Array(BAND_WHALE_TEXT_COLS).keys()].map(index => (index + 1) * 200),
+      BAND_WHALE_TEXT_COLS * 200 + 600,
+      BAND_WHALE_TEXT_COLS * 200 + 600 + 500,
+      period,
     ],
     `睡觉的换帧时刻不对：${switches.map(item => item.at).join(', ')}`,
   )
