@@ -1360,8 +1360,29 @@ export const register: Register = (on, options) => {
     // 口径在「用量条显示」组里——同一个对象的两个开关被拆成两组，读者会以为
     // 它们是两回事。现在总开关排在五个口径前面，是一棵树的两层。
     const SETTINGS_LABEL_COL = 8
+    /**
+     * 一组设置 = 一个圆角框 + 一行「标签 + 芯片」。
+     *
+     * **框只加边框，不加左右 `paddingX`。** 「用量条」那行内容本身就要 67 列；
+     * 74 列面板的页内可用是 70 列，边框吃掉 2 列后还剩 68——刚好放得下。加了
+     * padding 再吃 2 列就只剩 66，那一行立刻折行。字符界面里边框的收益是
+     * 「一眼看出这三组是三件事」，padding 的收益只是呼吸感，这里选前者。
+     *
+     * 底色与描边沿用 `theme.inset`（与模型页、上下文页的分组框同一档），
+     * 层级是「页面外框（主）> 分组框（次，压暗一档）> 内容」。
+     */
     const settingsRow = (key: string, label: string, chips: any) => (
-      <Box key={key} flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
+      <Box
+        key={key}
+        flexDirection="row"
+        gap={1}
+        alignItems="center"
+        flexWrap="wrap"
+        borderStyle="round"
+        borderColor={theme.inset.borderColor}
+        borderDimColor
+        backgroundColor={theme.inset.backgroundColor}
+      >
         {/* 标签列定宽：三组标签宽度不同（用量条 6 / 面板 4 / 立绘 8），不统一
             的话每组芯片的起始位置都不一样，读起来像三张互不相干的表。
             `SETTINGS_LABEL_COL` 取最长那个（立绘大小 = 8）。 */}
