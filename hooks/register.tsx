@@ -38,6 +38,7 @@ import {
   turnHeatSvg,
 } from './chart-art.ts'
 import {
+  contextDetailRows,
   contextParts,
   contextView,
   historyContextTurns,
@@ -852,14 +853,17 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // 上下文占比的堆叠柱状图：每根柱子是一轮，柱内按「已用 / 压缩缓冲 / 空闲」
-    // 分段堆叠。高度按窗口的 100% 算，所以柱子之间的高低差直接就是占比走势。
-    const bufferPct =
-      contextDetail && contextDetail.rawMaxTokens > 0 && contextDetail.autoCompactThreshold
-        ? ((contextDetail.rawMaxTokens - contextDetail.autoCompactThreshold) /
-            contextDetail.rawMaxTokens) *
-          100
-        : 0
+    // 上下文占比的堆叠柱状图：每根柱子是一轮，柱内按内容分类堆叠。
+    //
+    // **纵轴 100% = 自动压缩阈值**，不是窗口上限。这个口径与引擎 `/context`
+    // 一致：读者关心的是「离压缩还有多远」，窗口涨到 100% 本身什么都不会
+    // 发生，到阈值才会被砍。
+    //
+    // 因此**不需要「压缩缓冲」那一段**：换成分母之后，阈值之上的空间根本
+    // 不在图上，缓冲段也就没有可画的地方。`bufferPct = 0` 就是这个意思，
+    // 不是漏了。同理，整根柱子顶到 100% 才意味着「马上要被压缩」，这个
+    // 视觉信号比原来按窗口算时强得多。
+    const bufferPct = 0
 
     /**
      * 这一屏画的轮次：**会话日志重建的历史在前，插件启动后的记录在后。**
@@ -869,15 +873,29 @@ export const register: Register = (on, options) => {
      * 的几轮」，而窗口其实早就快满了。日志里每条 assistant 消息都带 usage，
      * 从会话开头就能重建，补的正是这一段。
      *
-     * 分母（窗口上限）只能取当前这次 breakdown 的 `rawMaxTokens`：日志里没有
-     * 它。同一场会话里窗口档位不会变，所以用当下这个值换算是成立的；换到
-     * 别的会话就不成立了，这也是只取当前会话（`$.session.id()`）的原因。
+     * ## 分母是**自动压缩阈值**，不是窗口上限
+     *
+     * 这是整页最容易搞错的一处。读者问「上下文还剩多少」，真正想知道的是
+     * 「离自动压缩还有多远」——窗口到 100% 并不会发生什么，到阈值才会被砍。
+     * 引擎的 `/context` 也是这个口径：`percentage` 按 `autoCompactThreshold`
+     * 算，而不是 `rawMaxTokens`。早先这里拿窗口上限当分母，同样一批读数会
+     * 算出小得多的占比，「快压缩了」的紧张感整个消失。
+     *
+     * 两个值都只能取**当前这次** breakdown：日志里既没有 `rawMaxTokens` 也
+     * 没有 `autoCompactThreshold`。同一场会话里这两个档位不会变，所以用
+     * 当下这一份换算是成立的；换到别的会话就不成立——这也是只取当前会话
+     * （`$.session.id()`）的原因。
      */
-    const historyContext = historyContextTurns(
-      record.data?.contextTurns,
-      contextDetail?.rawMaxTokens,
-    )
+    const contextDenominator = contextDetail?.autoCompactThreshold ?? contextDetail?.rawMaxTokens
+    const historyContext = historyContextTurns(record.data?.contextTurns, contextDenominator)
     const contextTurns = mergeContextHistory(historyContext, liveContextTurns)
+    // 逐轮明细：柱状图之上给一张可读的表——哪一轮涨了多少、什么时候被压缩。
+    const detailRows = contextDetailRows(contextTurns)
+    const isWideDetail = width >= 60
+    const DETAIL_SEQ_COL = 3
+    const DETAIL_PCT_COL = 6
+    const DETAIL_TOKENS_COL = 9
+    const DETAIL_DELTA_COL = 7
 
     // 显示最近几轮、柱子、图例、图注全由 `contextView` 一处算出：宽度决定
     // 能放几根，图注与图例跟着同一份结果走。以前这里写死 60 轮、SVG 内部
@@ -974,6 +992,42 @@ export const register: Register = (on, options) => {
                   </Box>
                 ))}
             </Box>
+            {/* 逐轮明细：柱状图只给形状，读者想问的是具体数字——哪一轮涨了
+                多少、什么时候被压缩过。压缩在图上只是一根突然变矮的柱子，
+                不标出来会被当成「这一轮用得少」，而它其实是引擎把旧内容收走了。
+                窄面板下调成两列（轮次 + 占比），列多了一定折行，反而更难读。 */}
+            {detailRows.length > 0 && (
+              <Box flexDirection="column" marginTop={1}>
+                <Box flexDirection="row" gap={1}>
+                  <Box width={DETAIL_SEQ_COL}><Text dimColor>轮</Text></Box>
+                  <Box width={DETAIL_PCT_COL}><Text dimColor>占比</Text></Box>
+                  {isWideDetail && <Box width={DETAIL_TOKENS_COL}><Text dimColor>窗口</Text></Box>}
+                  {isWideDetail && <Box width={DETAIL_DELTA_COL}><Text dimColor>变化</Text></Box>}
+                </Box>
+                {detailRows.map(row => (
+                  <Box key={`whale-ctx-row-${row.seq}`} flexDirection="row" gap={1}>
+                    <Box width={DETAIL_SEQ_COL}><Text dimColor>{row.seq}</Text></Box>
+                    <Box width={DETAIL_PCT_COL}>
+                      <Text bold={row.seq === detailRows.length}>{pct(row.percent)}</Text>
+                    </Box>
+                    {isWideDetail && (
+                      <Box width={DETAIL_TOKENS_COL}><Text dimColor>{tokens(row.tokens)}</Text></Box>
+                    )}
+                    {isWideDetail && (
+                      <Box width={DETAIL_DELTA_COL}>
+                        {/* 压缩优先于增量：那才是这一行最该被解释的事。
+                            用 `warning` 而不是红——压缩是正常机制，不是错误。 */}
+                        {row.afterCompact
+                          ? <Text color="warning">压缩</Text>
+                          : row.delta === undefined
+                            ? <Text dimColor>—</Text>
+                            : <Text dimColor>{`${row.delta > 0 ? '+' : ''}${row.delta.toFixed(1)}%`}</Text>}
+                      </Box>
+                    )}
+                  </Box>
+                ))}
+              </Box>
+            )}
           </Box>
         )}
       </Box>

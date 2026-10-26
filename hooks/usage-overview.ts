@@ -1203,24 +1203,27 @@ export function contextView(
 /**
  * 把会话日志里重建的上下文读数转成图上的柱子。
  *
- * 与 `contextTurns`（插件启动后逐轮记下的）相比，历史读数**没有窗口上限**：
- * 日志里只留下每条 assistant 消息的 token 数，`rawMaxTokens` 是引擎在
- * breakdown 里现算的，从没写进日志。所以百分比只能按一个已知上限换算。
+ * 与 `contextTurns`（插件启动后逐轮记下的）相比，历史读数**没有分母**：
+ * 日志里只留下每条 assistant 消息的 token 数，窗口上限与自动压缩阈值都是
+ * 引擎在 breakdown 里现算的，从没写进日志。所以占比只能按调用方给的那个
+ * 上限换算。
  *
  * @param history 日志重建的逐轮读数（时间顺序）
- * @param windowTokens 窗口上限；缺失时返回空数组——没有分母就画不出占比，
+ * @param denominator 分母，**应当是自动压缩阈值**（`autoCompactThreshold`），
+ *   与引擎 `/context` 的口径一致——读者关心的是「离压缩还有多远」，窗口到
+ *   100% 本身什么都不会发生。缺失时返回空数组：没有分母就画不出占比，
  *   硬猜一个（比如都按 200k）会在实际是 1M 窗口的会话上把所有柱子压成一条线。
  * @returns 与 `ContextTurn` 同形的数组，`parts` 一律没有（日志里没有分类）
  */
 export function historyContextTurns(
   history: readonly HistoricalContextTurn[] | undefined,
-  windowTokens: number | undefined,
+  denominator: number | undefined,
 ): ContextTurn[] {
   if (!history || history.length === 0) return []
-  if (!windowTokens || windowTokens <= 0) return []
+  if (!denominator || denominator <= 0) return []
   return history.map(item => ({
     seq: item.seq,
-    percent: Math.max(0, Math.min(100, (item.tokens / windowTokens) * 100)),
+    percent: Math.max(0, Math.min(100, (item.tokens / denominator) * 100)),
     tokens: item.tokens,
     at: item.at,
   }))
@@ -1247,6 +1250,51 @@ export function mergeContextHistory(
   // 本次的覆盖同刻的历史那条：它有 `parts`，图例能画出构成。
   for (const turn of live) byTime.set(turn.at, turn)
   return [...byTime.values()].sort((a, b) => a.at - b.at)
+}
+
+/**
+ * 逐轮明细：这一场会话每一次提问，窗口涨到了多少。
+ *
+ * 柱状图只给形状，读者想知道的是具体数字——尤其是**什么时候被压缩过**。
+ * 压缩在图上只是一根突然变矮的柱子，不标出来会被当成「这一轮用得少」，
+ * 而它其实是引擎把旧内容收走了，是整条曲线上最该被解释的一件事。
+ *
+ * @param turns 已按时刻排好序的逐轮读数（历史 + 本次，见 `mergeContextHistory`）
+ * @returns 每一轮一行，最近的在最后
+ */
+export function contextDetailRows(turns: readonly ContextTurn[]): ContextDetailRow[] {
+  return turns.map((turn, index) => {
+    const prev = index > 0 ? turns[index - 1] : undefined
+    // **压缩的判据是「窗口明显变小」，不是「变小」。** 差几个百分点可能只是
+    // 这一轮用完的窗口比上一轮结束时少（比如工具结果被丢掉），压缩则是
+    // 直接砍掉一大截。取掉到上一轮一半以下才算，实测该本机那次压缩是
+    // 36.6% → 18.0%（正好一半），阈值取 0.5 会漏掉，取 0.7 更稳。
+    const isCompact = prev !== undefined && turn.percent < prev.percent * 0.7
+    return {
+      seq: index + 1,
+      percent: turn.percent,
+      tokens: turn.tokens,
+      at: turn.at,
+      delta: prev === undefined ? undefined : turn.percent - prev.percent,
+      afterCompact: isCompact,
+    }
+  })
+}
+
+/** 逐轮明细的一行。 */
+export type ContextDetailRow = {
+  /** 第几次提问（从 1 起）。 */
+  seq: number
+  /** 这一轮结束时窗口的占用百分比。 */
+  percent: number
+  /** 这一轮结束时窗口里的 token 数。 */
+  tokens: number
+  /** 记录时刻，毫秒。 */
+  at: number
+  /** 比上一轮涨了多少个百分点；首轮没有。 */
+  delta?: number
+  /** 这一轮之前发生过压缩（窗口被砍掉一大截）。 */
+  afterCompact: boolean
 }
 
 /**

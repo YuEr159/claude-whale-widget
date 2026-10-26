@@ -41,6 +41,7 @@ import {
   overviewCards,
   contextPartKind,
   contextPartColor,
+  contextDetailRows,
   contextParts,
   contextStack,
   contextView,
@@ -1985,14 +1986,14 @@ test('用量条字符画：空闲静止，运行中两幅轮换且等宽', () =>
  * 会让实际 1M 窗口的会话把所有柱子压成贴着地面的一条线，读者会以为上下文
  * 一直很空。
  */
-test('历史上下文：有窗口才换算百分比，没有就整段丢掉', () => {
+test('历史上下文：按压缩阈值换算百分比，没有分母就整段丢掉', () => {
   const history = [
     { at: 1000, tokens: 50_000, output: 10, model: 'm', seq: 1 },
     { at: 2000, tokens: 100_000, output: 10, model: 'm', seq: 2 },
     { at: 3000, tokens: 200_000, output: 10, model: 'm', seq: 3 },
   ]
 
-  // 200k 窗口：25% / 50% / 100%。
+  // 200k 分母：25% / 50% / 100%。
   const fits = historyContextTurns(history, 200_000)
   assert.deepEqual(fits.map(turn => turn.percent), [25, 50, 100])
   assert.deepEqual(fits.map(turn => turn.seq), [1, 2, 3])
@@ -2000,17 +2001,33 @@ test('历史上下文：有窗口才换算百分比，没有就整段丢掉', ()
   // 历史读数没有分类构成——图例不该凭空多出分类。
   assert.ok(fits.every(turn => turn.parts === undefined), '历史读数不该带 parts')
 
-  // 1M 窗口：同样的读数只占 5% / 10% / 20%。
+  // 1M 分母：同样的读数只占 5% / 10% / 20%。
   const roomy = historyContextTurns(history, 1_000_000)
   assert.deepEqual(roomy.map(turn => turn.percent), [5, 10, 20])
 
-  // 没有上限 / 上限为 0 / 没有数据：一律空数组。
+  // **分母应当是自动压缩阈值，不是窗口上限。**
+  //
+  // 同样 200k 的读数，窗口 1M、阈值 92% 时：占窗口 20%，但占阈值 21.7%——
+  // 后者才是「离压缩还有多远」。两个值差得不多时看不出来，但 1M 窗口上
+  // 差着一个数量级的观感：按窗口算会让人以为「窗口还很空」，按阈值算才
+  // 看得出「快满了」。
+  const window = 1_000_000
+  const threshold = window * 0.92
+  const byWindow = historyContextTurns(history, window)
+  const byThreshold = historyContextTurns(history, threshold)
+  assert.ok(
+    byThreshold[2].percent > byWindow[2].percent,
+    '按阈值算出的占比必须高于按窗口算的',
+  )
+  assert.ok(Math.abs(byThreshold[2].percent - (200_000 / threshold) * 100) < 1e-9)
+
+  // 没有分母 / 分母为 0 / 没有数据：一律空数组。
   assert.deepEqual(historyContextTurns(history, undefined), [])
   assert.deepEqual(historyContextTurns(history, 0), [])
   assert.deepEqual(historyContextTurns(undefined, 200_000), [])
   assert.deepEqual(historyContextTurns([], 200_000), [])
 
-  // 超出窗口时夹到 100：柱子不能画到框外。
+  // 超出分母时夹到 100：柱子不能画到框外。
   assert.deepEqual(historyContextTurns([{ at: 1, tokens: 400_000, output: 0, model: 'm', seq: 1 }], 200_000).map(t => t.percent), [100])
 })
 
@@ -2194,4 +2211,51 @@ test('扫描：一次提问只画一根上下文柱子，取这一轮的末条�
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+/**
+ * 逐轮明细：占比、增量、压缩标记。
+ *
+ * 压缩在柱状图上只是一根突然变矮的柱子，不标出来会被当成「这一轮用得少」，
+ * 而它其实是引擎把旧内容收走了——是整条曲线上最该被解释的一件事。
+ */
+test('上下文逐轮明细：标出压缩，增量按百分点算', () => {
+  const turns = [
+    { seq: 1, percent: 12, tokens: 120_000, at: 1000 },
+    { seq: 2, percent: 18, tokens: 180_000, at: 2000 },
+    { seq: 3, percent: 40, tokens: 400_000, at: 3000 },
+    // 压缩：从 40% 掉到 18%，不到上一轮的 70%。
+    { seq: 4, percent: 18, tokens: 180_000, at: 4000 },
+    { seq: 5, percent: 22, tokens: 220_000, at: 5000 },
+  ]
+  const rows = contextDetailRows(turns)
+
+  assert.equal(rows.length, 5)
+  // 序号从 1 起，连续。
+  assert.deepEqual(rows.map(r => r.seq), [1, 2, 3, 4, 5])
+  // 首轮没有增量。
+  assert.equal(rows[0].delta, undefined)
+  // 增量是百分点之差，不是百分比变化率：18-12=6，不是 (18-12)/12。
+  assert.equal(rows[1].delta, 6)
+  assert.equal(rows[2].delta, 22)
+  // 压缩那一轮：增量为负，且被标成压缩。
+  assert.equal(rows[3].afterCompact, true, '从 40% 掉到 18% 应当标成压缩')
+  assert.ok(rows[3].delta < 0, '压缩那一轮的增量应当是负的')
+  // 压缩之后的那一轮不是压缩（只是正常增长）。
+  assert.equal(rows[4].afterCompact, false)
+
+  // **小幅回落不算压缩。** 工具结果被丢掉、这一轮没用满都会让占比略降，
+  // 那不是压缩。阈值是「掉到上一轮的 70% 以下」。
+  const mild = contextDetailRows([
+    { seq: 1, percent: 50, tokens: 500_000, at: 1 },
+    { seq: 2, percent: 45, tokens: 450_000, at: 2 },
+  ])
+  assert.equal(mild[1].afterCompact, false, '只降 10% 不该算压缩')
+
+  // 空数据与单轮：不炸，也不产生假的压缩标记。
+  assert.deepEqual(contextDetailRows([]), [])
+  const single = contextDetailRows([{ seq: 1, percent: 30, tokens: 300_000, at: 1 }])
+  assert.equal(single.length, 1)
+  assert.equal(single[0].afterCompact, false)
+  assert.equal(single[0].delta, undefined)
 })

@@ -1,7 +1,7 @@
 {
   "name": "whale-usage",
   "types": "./types/index.d.ts",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Claude 版小鲸鱼挂件：prompt 上方常驻一条，侧边面板看额度窗口、会话花费、上下文占用与本地用量",
   "author": {
     "name": "YuEr159"
