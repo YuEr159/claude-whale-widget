@@ -5,6 +5,7 @@
  * 这里不碰 `$`，只做数据整形，方便单测。
  */
 import type {
+  CompactMark,
   ContextPart,
   ContextPartKind,
   ContextTurn,
@@ -904,6 +905,8 @@ export type StackBar = {
   hasParts: boolean
   /** 这一轮之前刚发生过压缩：图上要在它左缘竖一条虚线。 */
   isAfterCompact: boolean
+  /** 压缩的引擎细节（压缩前多大、摘要多大、自动还是手动）；没有就是空。 */
+  compact?: CompactMark
 }
 
 /**
@@ -965,6 +968,7 @@ export function contextStack(
         tokens: turn.tokens,
         hasParts: (turn.parts?.filter(part => part.tokens > 0).length ?? 0) > 0,
         isAfterCompact: turn.afterCompact === true,
+        ...(turn.compact ? { compact: turn.compact } : {}),
       }
     })
 
@@ -986,6 +990,7 @@ export function contextStack(
       tokens: turn.tokens,
       hasParts: (turn.parts?.filter(part => part.tokens > 0).length ?? 0) > 0,
       isAfterCompact: turn.afterCompact === true,
+      ...(turn.compact ? { compact: turn.compact } : {}),
     }
   })
 
@@ -1075,15 +1080,36 @@ export function stackColor(
 
 /** 堆叠柱图的说明文字：`最近 24 轮 · 峰值 42%`。 */
 /**
- * 堆叠柱的说明文字：`最近 12 轮 · 峰值 46%`。
+ * 堆叠柱的说明文字：`最近 12 轮 · 峰值 46% · 1 次压缩`。
  *
  * `yMax` 只给终端用：那边没有 Svg，画不出左侧纵轴，纵轴上限只能写在文字里。
  * 桌面端已经有轴上的 `0` 与上界刻度，不必再重复一次。
+ *
+ * `compacts` 是这一屏里出现过的压缩（来自日志里的 `compact_boundary`，
+ * 带压缩前后的 token 数）。**有才写**：没有压缩的会话不该在图上多一句话，
+ * 那句话只会让读者去找一个不存在的标记。
+ *
+ * 写出最近一次的具体数字（`36.7万 → 2.8万`），因为「1 次压缩」只说了
+ * 发生过，读者真正想知道的是「砍掉了多少」——而 `postTokens` 是摘要本身
+ * 的大小（不含系统提示与工具定义），所以这里只说「压到」，不说「剩下」。
  */
-export function stackCaption(barCount: number, peak: number, yMax?: number): string {
+export function stackCaption(
+  barCount: number,
+  peak: number,
+  yMax?: number,
+  compacts?: readonly CompactMark[],
+): string {
   if (barCount === 0) return '还没有逐轮数据（跑一轮对话后出现）'
   const axis = yMax !== undefined ? ` · 纵轴 ${Math.round(yMax)}%` : ''
-  return `最近 ${barCount} 轮 · 峰值 ${Math.round(peak)}%${axis}`
+  const base = `最近 ${barCount} 轮 · 峰值 ${Math.round(peak)}%${axis}`
+  if (!compacts || compacts.length === 0) return base
+  // 取最后一次：读者最关心刚发生过的那一回，更早的只在数量里体现。
+  const last = compacts[compacts.length - 1]!
+  const detail =
+    last.preTokens > 0 && last.postTokens > 0
+      ? `（${tokens(last.preTokens)} 压到 ${tokens(last.postTokens)}）`
+      : ''
+  return `${base} · ${compacts.length} 次压缩${detail}`
 }
 
 /** 图例的一项。 */
@@ -1181,11 +1207,18 @@ export function contextView(
   peak: number
   yMax: number
   legend: StackLegendItem[]
-  /** 无障碍描述与图注共用的一句话。 */
+  /** 无障碍描述与图注共用的一句话（桌面端用，不带纵轴）。 */
   caption: string
+  /** 终端用的一句：同一句话，但补上纵轴上限——那边画不出左上角的刻度。 */
+  terminalCaption: string
 } {
   const visible = turns.slice(-Math.max(1, contextVisibleCount(chartWidth)))
   const { bars, peak, yMax } = contextStack(visible, visible.length, bufferPct)
+  // 这一屏里出现过的压缩，按时间顺序（柱子本来就是时间顺序）。
+  // 只留带引擎细节的那些——`afterCompact` 靠比例猜出来的没有数字可写。
+  const compacts = visible
+    .map(turn => turn.compact)
+    .filter((mark): mark is CompactMark => mark !== undefined)
   return {
     turns: visible,
     bars,
@@ -1196,7 +1229,8 @@ export function contextView(
     // 在「看图」的场合：桌面端图上已经有纵轴刻度（`0` 与上界），再说一遍
     // 「纵轴 75%」是同一件事的第二次陈述。终端没有 Svg、也就没有轴，那边
     // 由面板自己补 `stackCaption(..., yMax)` —— 见 `register.tsx`。
-    caption: stackCaption(bars.length, peak),
+    caption: stackCaption(bars.length, peak, undefined, compacts),
+    terminalCaption: stackCaption(bars.length, peak, yMax, compacts),
   }
 }
 
@@ -1226,6 +1260,9 @@ export function historyContextTurns(
     percent: Math.max(0, Math.min(100, (item.tokens / denominator) * 100)),
     tokens: item.tokens,
     at: item.at,
+    // 压缩标记是引擎写在日志里的确定事实，直接带上；`compact` 有值时
+    // 也一并置 `afterCompact`，这样绘图那一侧不必同时认两个字段。
+    ...(item.compact ? { afterCompact: true, compact: item.compact } : {}),
   }))
 }
 
@@ -1276,7 +1313,14 @@ export function mergeContextHistory(
       }
       if (bestIndex >= 0) {
         // 同一轮：本次那条胜出，它有构成明细。
-        rest[bestIndex] = turn
+        //
+        // **但压缩标记要保住。** 历史侧知道这一轮前面有过压缩（日志里的
+        // `compact_boundary`，还带着压缩前后的 token 数），本次侧只知道
+        // 「这一轮记下了」。整条覆盖会把那个标记抹掉，图上就少一条虚线。
+        const held = rest[bestIndex]!
+        rest[bestIndex] = held.compact
+          ? { ...turn, afterCompact: true, compact: held.compact }
+          : turn
       } else {
         rest.push(turn)
       }
@@ -1309,18 +1353,27 @@ const MERGE_WINDOW_MS = 60_000
 export function contextDetailRows(turns: readonly ContextTurn[]): ContextDetailRow[] {
   return turns.map((turn, index) => {
     const prev = index > 0 ? turns[index - 1] : undefined
-    // **压缩的判据是「窗口明显变小」，不是「变小」。** 差几个百分点可能只是
-    // 这一轮用完的窗口比上一轮结束时少（比如工具结果被丢掉），压缩则是
-    // 直接砍掉一大截。取掉到上一轮一半以下才算，实测该本机那次压缩是
+    // **压缩标记优先用引擎记录的那一份。** 历史侧能从日志里读到
+    // `compact_boundary`（`turn.compact`）或者 `session.compact` hook 置的
+    // `afterCompact`，那是确定事实。
+    //
+    // 只有两者都没有时才退回猜：判据是「窗口明显变小」。差几个百分点可能只是
+    // 这一轮用完的窗口比上一轮结束时少（比如工具结果被丢掉），压缩则是直接
+    // 砍掉一大截。取掉到上一轮七成以下才算——实测该本机那次压缩是
     // 36.6% → 18.0%（正好一半），阈值取 0.5 会漏掉，取 0.7 更稳。
-    const isCompact = prev !== undefined && turn.percent < prev.percent * 0.7
+    //
+    // 这个兜底只在**老日志**上起作用：引擎从 2026 年起就写 `compact_boundary`
+    // 了，那时候之前的会话没有这个字段。
+    const known = turn.compact !== undefined || turn.afterCompact === true
+    const guessed = prev !== undefined && turn.percent < prev.percent * 0.7
     return {
       seq: index + 1,
       percent: turn.percent,
       tokens: turn.tokens,
       at: turn.at,
       delta: prev === undefined ? undefined : turn.percent - prev.percent,
-      afterCompact: isCompact,
+      afterCompact: known || guessed,
+      ...(turn.compact ? { compact: turn.compact } : {}),
     }
   })
 }
@@ -1339,6 +1392,8 @@ export type ContextDetailRow = {
   delta?: number
   /** 这一轮之前发生过压缩（窗口被砍掉一大截）。 */
   afterCompact: boolean
+  /** 压缩的引擎细节；只在历史侧读到了 `compact_boundary` 时才有。 */
+  compact?: CompactMark
 }
 
 /**
