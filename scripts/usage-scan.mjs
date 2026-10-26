@@ -433,7 +433,19 @@ export function aggregate(root, days, cache, sessionId) {
   for (const file of files) {
     const fingerprint = `${file.mtimeMs}:${file.size}`
     const held = cache?.get(file.path)
-    if (held && held.fingerprint === fingerprint) {
+    // **当前会话的文件永远重读。** 它的上下文序列要原样回传，而缓存里
+    // 只留当前会话那一份、其余会话的清掉（见 `packCache`）；如果当前会话
+    // 的文件也命中缓存，第二次扫描就会拿到一个被清空的序列，曲线凭空变短。
+    // 这场会话只有一个文件，重读几十毫秒，远小于「曲线莫名只剩几根柱子」。
+    //
+    // 重读前要把它的 id 从 `seen` 里摘掉：这些 id 是它自己上一次扫出来的，
+    // 留着会让 `scanFile` 把每一条都当成「别的文件里已计过」而全部跳过，
+    // 结果是既有数字照旧、而上下文序列为空。
+    const isCurrentSession = sessionId && path.basename(file.path, '.jsonl') === sessionId
+    if (isCurrentSession && held) {
+      for (const id of held.seenIds) seen.delete(id)
+    }
+    if (!isCurrentSession && held && held.fingerprint === fingerprint) {
       // 没变：并进上次的结果。它见过的 message.id 也要放回 `seen`——
       // 跨文件去重靠这个集合，缺了它们后面读到的文件会重复计数。
       for (const id of held.seenIds) seen.add(id)
@@ -445,7 +457,13 @@ export function aggregate(root, days, cache, sessionId) {
     // 记下这个文件自己见过的 message.id：缓存复用时要把它们重新放回
     // `seen`，否则后读的文件会与缓存里的文件重复计数。
     const seenIds = part.seenIds
-    if (cache) cache.set(file.path, { fingerprint, part, seenIds })
+    // **别的会话的上下文序列就地丢掉**，别等 `packCache`——留在这里会让
+    // 下一次扫描的内存里也压着几十份用不上的序列。`part.contextTurns`
+    // 已经并进 `acc`（当前会话那份），这里删掉不影响返回结果。
+    const cacheTurns = part.sessionId === sessionId ? part.contextTurns : []
+    if (cache) {
+      cache.set(file.path, { fingerprint, part: { ...part, contextTurns: cacheTurns }, seenIds })
+    }
     mergeScan(acc, part)
     rescanned += 1
   }
@@ -614,8 +632,17 @@ const SEEN_IDS_BUDGET = 2_000_000
  * 最可能与「刚 fork 出来的文件」撞 id，老文件的 id 重复概率低。被清空的
  * 文件仍保留它的聚合数字，只是不再参与跨文件去重——代价是极少数老消息
  * 可能被计两次，远小于「整个面板坏掉」。
+ *
+ * **`contextTurns` 只缓存当前会话那一份。** 上下文曲线是会话级的东西，
+ * 面板只画当前这一场；把每个文件的完整序列都塞进缓存，等于同一份数据存
+ * 了几百遍——实测 400 天窗口下它单独就占 3.06 MB，加上 `seenIds` 直接
+ * 把 stdout 顶过 4 MiB，扫描永久报「输出超过 4 MiB」。别的会话的序列在
+ * 合并时就没有意义，索性不缓存。
+ *
+ * @param cache 上一次扫描留下的缓存
+ * @param sessionId 当前会话；只保留它的上下文序列，其余一律丢弃
  */
-function packCache(cache) {
+function packCache(cache, sessionId) {
   const out = []
   // 按文件修改时间排序，最老的先被裁。
   const ordered = [...cache.entries()].sort((a, b) => a[1].fingerprint.localeCompare(b[1].fingerprint))
@@ -645,7 +672,8 @@ function packCache(cache) {
       held.part.skipped,
       keepIds.has(file) ? held.seenIds : [],
       held.part.sessionId ?? '',
-      held.part.contextTurns ?? [],
+      // 只有当前会话的序列值得留；别的会话不会上屏，缓存它们纯属浪费预算。
+      held.part.sessionId === sessionId ? (held.part.contextTurns ?? []) : [],
     ])
   }
   return out
@@ -718,7 +746,7 @@ if (isMain) {
   }
   try {
     const result = aggregate(root, days, cache, sessionId)
-    process.stdout.write(JSON.stringify({ ...result, cache: packCache(cache) }))
+    process.stdout.write(JSON.stringify({ ...result, cache: packCache(cache, sessionId) }))
   } catch (error) {
     process.stdout.write(
       JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
