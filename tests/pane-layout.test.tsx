@@ -800,3 +800,121 @@ test('模型页没有图例行，颜色映射交给明细表的色块列', async
 
   await ui.unmount()
 })
+
+/**
+ * 上下文页在**屏幕上**必须有读数。
+ *
+ * 这是这一页最大的问题：柱状图只有形状，轮数、峰值、压缩次数全写在 Svg 的
+ * `<title>` 里——那是无障碍描述，引擎不会画在屏幕上。读者打开这一页看到的是
+ * 一张图 + 一行图例，**一个数字都没有**。而「现在窗口被什么占着」恰恰是这一页
+ * 唯一能回答、也最该回答的问题。
+ *
+ * 这条守三件事：
+ *   1. 「最近一轮 xx%」与构成明细是可见的 `Text`（不是 Svg 里的 title）；
+ *   2. 图注（最近 N 轮 · 峰值 xx%）可见；
+ *   3. 图例里没有骨架段（已用 / 压缩缓冲 / 空闲）——它们已经在图注里说过。
+ */
+test('上下文页在屏幕上给出读数：最近一轮占比、构成明细、图注', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.store(on, {})
+  on('state.get', { plugin: 'whale-usage', key: 'contextTurns' }, async (_$, e, next) => {
+    void next
+    return {
+      value: {
+        value: [
+          { seq: 1, percent: 20, tokens: 40_000, at: 1, windowTokens: 200_000 },
+          {
+            seq: 2, percent: 42, tokens: 84_000, at: 2, windowTokens: 200_000,
+            parts: [
+              { name: 'Messages', kind: 'messages', tokens: 47_000 },
+              { name: 'System prompt', kind: 'system', tokens: 12_000 },
+            ],
+          },
+        ],
+        version: 1,
+      },
+    }
+  })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+
+  await ui.press({ key: 'whale-tab-context' })
+  const tree = await ui.drawn()
+
+  /** 屏幕上真正会画出来的文字（不含 Svg 的 source / alt）。 */
+  const visible: string[] = []
+  const walk = (node: any) => {
+    if (!node || typeof node !== 'object') return
+    if (node.type === 'Text') {
+      for (const kid of node.children ?? []) {
+        if (typeof kid === 'string') visible.push(kid)
+        else walk(kid)
+      }
+      return
+    }
+    for (const kid of node.children ?? []) walk(kid)
+  }
+  walk(tree)
+  const text = visible.join('')
+
+  // 1. 最近一轮的占比与构成明细（降序：对话消息在前）。
+  expect(text).toContain('最近一轮')
+  expect(text).toContain('42%')
+  expect(text).toContain('对话消息')
+  expect(text).toContain('系统提示')
+  // 构成按占用降序：对话消息(4.7万) 排在 系统提示(1.2万) 之前。
+  expect(text.indexOf('对话消息')).toBeLessThan(text.indexOf('系统提示'))
+
+  // 2. 图注可见。轮数与峰值都要说出来。
+  expect(text).toContain('最近 2 轮')
+  expect(text).toContain('峰值 42%')
+
+  // 3. 图例里不该有骨架段。
+  for (const skeleton of ['已用（无构成）', '压缩缓冲', '空闲']) {
+    expect(text).not.toContain(skeleton)
+  }
+
+  await ui.unmount()
+})
+
+/**
+ * 老记录（没有 parts）时，「最近一轮」仍要给占比，但不画空的构成段。
+ *
+ * 早期记录没有 breakdown，硬要画构成那一行就会变成「最近一轮 20% · 」——
+ * 尾巴拖一个分隔符，读者以为内容被截断了。整段构成不画，百分比照给。
+ */
+test('上下文页：没有构成数据时只给占比，不画空明细', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.store(on, {})
+  on('state.get', { plugin: 'whale-usage', key: 'contextTurns' }, async (_$, e, next) => {
+    void next
+    return { value: { value: [{ seq: 1, percent: 20, tokens: 40_000, at: 1 }], version: 1 } }
+  })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+
+  await ui.press({ key: 'whale-tab-context' })
+  const json = JSON.stringify(await ui.drawn())
+  // 没有构成就不出现这一行（不是画成「最近一轮 20% ·」）。
+  expect(json).not.toContain('最近一轮')
+  // 图注仍在——它是这一屏的形状说明，与有没有 breakdown 无关。
+  expect(json).toContain('最近 1 轮')
+
+  await ui.unmount()
+})

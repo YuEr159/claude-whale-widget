@@ -37,6 +37,9 @@ import {
   contextParts,
   contextStack,
   stackLegendOf,
+  latestPartsText,
+  LEGEND_SKELETON_KINDS,
+  CONTEXT_PART_LABELS,
   rasterizeStacks,
   rasterizeTurnBars,
   turnBars,
@@ -1072,6 +1075,60 @@ test('图例只列出现过的分类，顺序固定', () => {
 
   const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
   expect(stackLegendOf(legacy.bars).map(item => item.kind)).toEqual(['used', 'buffer'])
+})
+
+/**
+ * 「最近一轮构成」那一行文字。
+ *
+ * 上下文页原先**整页零数字**：柱状图只有形状，所有读数都写在 Svg 的
+ * `<title>` 里（无障碍描述，屏幕上看不见）。这一行是补上来的第一个数字，
+ * 所以它必须：说得出「谁占得最多」（按 token 降序），没有构成时干脆不画
+ * （返回空串，而不是画一句「无构成」占一行）。
+ */
+test('最近一轮构成：按占用降序排成一行，没有构成时为空', () => {
+  const turn = {
+    seq: 7,
+    percent: 42,
+    tokens: 84_000,
+    at: 0,
+    parts: [
+      { name: 'System prompt', kind: 'system' as const, tokens: 12_000 },
+      { name: 'Messages', kind: 'messages' as const, tokens: 47_000 },
+      { name: 'MCP tools', kind: 'mcp' as const, tokens: 3_900 },
+    ],
+  }
+  const text = latestPartsText(turn)
+  // 降序：对话消息(4.7万) → 系统提示(1.2万) → MCP 工具(3900)。
+  expect(text).toBe(' · 对话消息 4.7万 · 系统提示 1.2万 · MCP 工具 3900')
+  // 每一段都以分隔符开头：调用方把它直接接在「最近一轮 42%」后面。
+  expect(text.startsWith(' · ')).toBe(true)
+
+  // 没有构成（老记录）：空串，调用方整行不画。
+  expect(latestPartsText({ seq: 1, percent: 20, tokens: 1000, at: 0 })).toBe('')
+  // 空数组与 undefined 同理。
+  expect(latestPartsText({ seq: 1, percent: 20, tokens: 1000, at: 0, parts: [] })).toBe('')
+  expect(latestPartsText(undefined)).toBe('')
+  // 零 token 的项不进这一行（它与「没这一类」是同一件事）。
+  expect(
+    latestPartsText({
+      seq: 1, percent: 20, tokens: 0, at: 0,
+      parts: [{ name: 'Memory files', kind: 'memory' as const, tokens: 0 }],
+    }),
+  ).toBe('')
+})
+
+/**
+ * 图例里的骨架段（已用 / 压缩缓冲 / 空闲）要能被识别出来剔掉。
+ *
+ * 面板把「高度」交给图注一句话、把「颜色」留给分类图例。这条守的是那个
+ * 集合本身：漏一个（比如忘了 `free`），图例就会重新冒出「空闲」这种读者
+ * 根本不需要解释的格子。
+ */
+test('图例骨架段集合覆盖已用/缓冲/空闲，且不含任何内容分类', () => {
+  expect([...LEGEND_SKELETON_KINDS].sort()).toEqual(['buffer', 'free', 'used'])
+  for (const part of CONTEXT_PART_LABELS) {
+    expect(LEGEND_SKELETON_KINDS.has(part.kind)).toBe(false)
+  }
 })
 
 test('金额一律带估算标记，零与缺失值除外', () => {

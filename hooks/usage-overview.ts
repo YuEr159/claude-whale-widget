@@ -1093,6 +1093,42 @@ export type StackLegendItem = {
 }
 
 /**
+ * 图例里属于「骨架」的段：它们解释的是柱子整体的高度，不是柱内的分类。
+ *
+ * 面板把图例拆成两处说：高度（轮数、峰值）由图注一句话概括，颜色（分类）
+ * 留在图例里。骨架段若也列进图例，等于把图注说过的话再说一遍。
+ */
+export const LEGEND_SKELETON_KINDS: ReadonlySet<StackSegment['kind']> = new Set([
+  'used',
+  'buffer',
+  'free',
+])
+
+/**
+ * 最近一轮的构成，排成一行注解：`· 对话消息 4.7万 · 系统提示 1.3万 · …`。
+ *
+ * 为什么需要它：上下文页原先是**整页零数字**——柱状图只有形状，轮数、峰值
+ * 这些读数全写在 Svg 的 `<title>`（无障碍描述）里，屏幕上看不见。读者打开
+ * 这一页最想问的是「现在窗口被什么占着」，而这是唯一能回答它的地方。
+ *
+ * 按 token 降序，与图例的固定顺序不同：这里回答的是「谁占得最多」，排序本身
+ * 就是信息；图例要保持跨屏稳定，所以那边按分类表排。
+ *
+ * 没有构成数据（老记录）时返回空串——调用方据此整行不画，而不是画一句
+ * 「无构成」。
+ *
+ * @param turn 最近一轮；`undefined` 时返回空串
+ */
+export function latestPartsText(turn: ContextTurn | undefined): string {
+  if (!turn?.parts || turn.parts.length === 0) return ''
+  const used = turn.parts.filter(part => part.tokens > 0).sort((a, b) => b.tokens - a.tokens)
+  if (used.length === 0) return ''
+  const labelOf = (kind: ContextPartKind): string =>
+    CONTEXT_PART_LABELS.find(item => item.kind === kind)?.label ?? kind
+  return used.map(part => ` · ${labelOf(part.kind)} ${tokens(part.tokens)}`).join('')
+}
+
+/**
  * 上下文柱状图一个槽位的最小宽度（CSS 像素）。
  *
  * 槽宽 = 柱宽 + 缝。1.4px 的槽对应 1px 柱子 + 0.4px 缝——1px 是这根柱子
@@ -1155,7 +1191,11 @@ export function contextView(
     peak,
     yMax,
     legend: stackLegendOf(bars, isLight),
-    caption: stackCaption(bars.length, peak, yMax),
+    // **不带 `yMax`。** 这句话既做屏幕上的图注、也做 Svg 的 `alt`，两者都
+    // 在「看图」的场合：桌面端图上已经有纵轴刻度（`0` 与上界），再说一遍
+    // 「纵轴 75%」是同一件事的第二次陈述。终端没有 Svg、也就没有轴，那边
+    // 由面板自己补 `stackCaption(..., yMax)` —— 见 `register.tsx`。
+    caption: stackCaption(bars.length, peak),
   }
 }
 
