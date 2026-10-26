@@ -1237,19 +1237,31 @@ export function historyContextTurns(
  * 的那轮，日志里也已经写进去了），所以按时刻去重——保留后出现的那条，
  * 它带着分类构成，信息更全。
  *
- * 任何一边为空时直接返回另一边，不做无谓的合并。
+ * ## 序号在合并之后重新编
+ *
+ * 两侧的 `seq` **各从 1 开始**：历史是日志里第几轮，本次是插件装上后第几轮。
+ * 直接接起来就会出现「…19, 20, 21, 1, 2, 3」——图上的横坐标正是 `seq`，
+ * 读者会看到标着 1 的柱子排在标着 21 的后面，整条时间轴读不通。
+ *
+ * 所以合并后按位置重编一遍：全表唯一、严格递增，与横轴和明细表同一个口径。
+ * 牺牲的是「这是会话的第几轮」这个绝对信息——但两侧本来就没有共同基准，
+ * 编不出真的绝对轮次，不如给一条连续可读的轴。
  */
 export function mergeContextHistory(
   history: readonly ContextTurn[],
   live: readonly ContextTurn[],
 ): ContextTurn[] {
-  if (history.length === 0) return [...live]
-  if (live.length === 0) return [...history]
-  const byTime = new Map<number, ContextTurn>()
-  for (const turn of history) byTime.set(turn.at, turn)
-  // 本次的覆盖同刻的历史那条：它有 `parts`，图例能画出构成。
-  for (const turn of live) byTime.set(turn.at, turn)
-  return [...byTime.values()].sort((a, b) => a.at - b.at)
+  const merged = (() => {
+    if (history.length === 0) return [...live]
+    if (live.length === 0) return [...history]
+    const byTime = new Map<number, ContextTurn>()
+    for (const turn of history) byTime.set(turn.at, turn)
+    // 本次的覆盖同刻的历史那条：它有 `parts`，图例能画出构成。
+    for (const turn of live) byTime.set(turn.at, turn)
+    return [...byTime.values()].sort((a, b) => a.at - b.at)
+  })()
+  // 合并后重编号：横轴与明细表都靠它，必须是 1..N 的连续整数。
+  return merged.map((turn, index) => ({ ...turn, seq: index + 1 }))
 }
 
 /**
