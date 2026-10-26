@@ -17,7 +17,7 @@ import type {
   ModelDayCell,
   TurnDay,
 } from '../types'
-import { displayWidth, tokens, usd } from './format.ts'
+import { axisTokens, displayWidth, tokens, usd } from './format.ts'
 import { usdEstimate } from './provenance.ts'
 
 /** 概览页的一张指标卡。 */
@@ -957,59 +957,35 @@ export function contextStack(
   turns: ContextTurn[],
   maxBars = 24,
   bufferPct = 0,
-  options: { yMax?: number | 'auto' } = {},
-): { bars: StackBar[]; peak: number; yMax: number } {
+  options: { yMax?: number | 'auto'; yMaxTokens?: number } = {},
+): { bars: StackBar[]; peak: number; yMax: number; yMaxTokens: number } {
   const recent = turns.slice(-Math.max(1, maxBars))
   const clamped = (value: number) => Math.max(0, Math.min(100, value))
 
-  // 先算出每轮「已用 + 缓冲」的合计，用来定纵轴；分段本身在同一遍里生成。
-  const rows = recent.map(turn => {
-    const used = clamped(turn.percent)
-    const buffer = clamped(bufferPct)
-    // 已用与缓冲不能相加超过 100%，否则柱子在视觉上会溢出。
-    const shownBuffer = Math.min(buffer, Math.max(0, 100 - used))
-    return { turn, used, shownBuffer }
-  })
+  // **柱高按 token 绝对量画，不再按百分比。** 纵轴换成 token 之后，
+  // 「这一轮窗口里有多少」与「压缩阈值在哪」用的是同一把尺子：1M 窗口里
+  // 放 300K 就是 30%，压缩阈值 400K 就是 40%，两个数字直接可比。
+  // 百分比仍然留在 `percent` 里（读数与图注要用），只是不再决定柱高。
+  const peakTokens = recent.reduce((top, turn) => Math.max(top, Math.max(0, turn.tokens)), 0)
+  const explicitMax = options.yMaxTokens
+  // 纵轴上限：给了就用（通常是压缩阈值），否则按峰值留一成头。
+  // 下限 1 避免全是 0 时除出巨大高度。
+  const yMaxTokens = explicitMax !== undefined && explicitMax > 0
+    ? explicitMax
+    // `+1e-6` 抵掉浮点误差：`450000 * 1.1` 算出 `495000.0000000001`，
+    // 直接 `ceil` 会多出一个 token，刻度就从 `495K` 变成 `495K`（无害）但
+    // 测试与「1.1 倍」的语义会差一。
+    : Math.max(1, Math.ceil(peakTokens * 1.1 - 1e-6))
 
-  const rawPeak = rows.reduce((top, row) => Math.max(top, row.used + row.shownBuffer), 0)
-  const isAuto = (options.yMax ?? 'auto') === 'auto'
-
-  if (isAuto) {
-    // 纵轴上限取峰值的 1.1 倍再向上取整到 5 的倍数：最高的柱子顶到画布
-    // 九成左右，留一点头，读数不会被裁在边上。下限 10% 避免全是 0 时
-    // 除出巨大的相对高度。
-    const ceiling = Math.max(10, Math.ceil((rawPeak * 1.1) / 5) * 5)
-    const yMax = Math.min(100, ceiling)
-
-    const bars = rows.map(({ turn, used, shownBuffer }) => {
-      const segments = partSegments(turn, used, yMax)
-      if (shownBuffer > 0) segments.push({ ratio: shownBuffer / yMax, kind: 'buffer' })
-      return {
-        label: String(turn.seq),
-        segments: segments.filter(segment => segment.ratio > 0),
-        percent: used,
-        tokens: turn.tokens,
-        hasParts: (turn.parts?.filter(part => part.tokens > 0).length ?? 0) > 0,
-        isAfterCompact: turn.afterCompact === true,
-        ...(turn.compact ? { compact: turn.compact } : {}),
-      }
-    })
-
-    const peak = bars.reduce((top, bar) => (bar.percent > top ? bar.percent : top), 0)
-    return { bars, peak, yMax }
-  }
-
-  const yMax = Math.max(1, Math.min(100, options.yMax as number))
-  const bars = rows.map(({ turn, used, shownBuffer }) => {
-    const free = Math.max(0, 100 - used - shownBuffer)
-    const segments = partSegments(turn, used, yMax)
-    if (shownBuffer > 0) segments.push({ ratio: shownBuffer / yMax, kind: 'buffer' })
-    // 固定纵轴时才画空闲段（旧行为）：它把柱子补满，便于横向比「用了多少」。
-    if (free > 0 && yMax >= 100) segments.push({ ratio: free / yMax, kind: 'free' })
+  // 每根柱子先算「已用」占纵轴的比例；有构成时再按内容细分。
+  const bars = recent.map(turn => {
+    const used = Math.max(0, turn.tokens)
+    const ratio = yMaxTokens > 0 ? Math.min(1, used / yMaxTokens) : 0
+    const segments = partSegments(turn, ratio)
     return {
       label: String(turn.seq),
       segments: segments.filter(segment => segment.ratio > 0),
-      percent: used,
+      percent: clamped(turn.percent),
       tokens: turn.tokens,
       hasParts: (turn.parts?.filter(part => part.tokens > 0).length ?? 0) > 0,
       isAfterCompact: turn.afterCompact === true,
@@ -1017,8 +993,10 @@ export function contextStack(
     }
   })
 
+  // `peak` 仍以百分比口径给出：图注那句「峰值 46%」说的是窗口占了多满，
+  // 与柱高（token 绝对量）不是一回事，不能混用。
   const peak = bars.reduce((top, bar) => (bar.percent > top ? bar.percent : top), 0)
-  return { bars, peak, yMax }
+  return { bars, peak, yMax: yMaxTokens, yMaxTokens }
 }
 
 /**
@@ -1026,14 +1004,17 @@ export function contextStack(
  *
  * 用 token 占比而不是「percent 平均分」：一次请求里系统提示几十 k、
  * 对话消息几百 k，平均分会把它们画成一样宽，正好抹掉要看的差别。
+ *
+ * @param usedRatio 这一轮的「已用」占纵轴的比例（0–1），由调用方按 token
+ *   绝对量算好——分段只知道怎么分，不该再管纵轴是什么单位。
  */
-function partSegments(turn: ContextTurn, used: number, yMax: number): StackSegment[] {
+function partSegments(turn: ContextTurn, usedRatio: number): StackSegment[] {
   const parts = turn.parts?.filter(part => part.tokens > 0) ?? []
-  if (parts.length === 0) return [{ ratio: used / yMax, kind: 'used' }]
+  if (parts.length === 0) return [{ ratio: usedRatio, kind: 'used' }]
   const partTotal = parts.reduce((sum, part) => sum + part.tokens, 0)
-  if (partTotal <= 0) return [{ ratio: used / yMax, kind: 'used' }]
+  if (partTotal <= 0) return [{ ratio: usedRatio, kind: 'used' }]
   return parts.map(part => ({
-    ratio: (part.tokens / partTotal) * (used / yMax),
+    ratio: (part.tokens / partTotal) * usedRatio,
     kind: part.kind,
   }))
 }
@@ -1119,20 +1100,51 @@ export function stackColor(
 export function stackCaption(
   barCount: number,
   peak: number,
-  yMax?: number,
+  yMaxTokens?: number,
   compacts?: readonly CompactMark[],
+  /**
+   * 「压缩点 40%」——阈值换算成模型窗口的百分比，与「峰值 46%」同一个尺度。
+   * 空串省略。
+   */
+  compactAt?: string,
 ): string {
   if (barCount === 0) return '还没有逐轮数据（跑一轮对话后出现）'
-  const axis = yMax !== undefined ? ` · 纵轴 ${Math.round(yMax)}%` : ''
+  // 终端那一路要带纵轴上限：那边画不出 Svg 的左上角刻度，`M/K` 只能写在
+  // 文字里。桌面端的轴顶已经有 `400K` 这个刻度，图注不再复述。
+  const axis = yMaxTokens !== undefined ? ` · 纵轴 ${axisTokens(yMaxTokens)}` : ''
   const base = `最近 ${barCount} 轮 · 峰值 ${Math.round(peak)}%${axis}`
-  if (!compacts || compacts.length === 0) return base
+  const point = compactAt ? ` · ${compactAt}` : ''
+  if (!compacts || compacts.length === 0) return `${base}${point}`
   // 取最后一次：读者最关心刚发生过的那一回，更早的只在数量里体现。
   const last = compacts[compacts.length - 1]!
   const detail =
     last.preTokens > 0 && last.postTokens > 0
       ? `（${tokens(last.preTokens)} 压到 ${tokens(last.postTokens)}）`
       : ''
-  return `${base} · ${compacts.length} 次压缩${detail}`
+  return `${base}${point} · ${compacts.length} 次压缩${detail}`
+}
+
+/**
+ * 「离压缩还有多远」：把阈值换算成同一个窗口口径下的百分比。
+ *
+ * 柱子现在按**模型完整窗口**画（1M 里放 300K = 30%），压缩阈值也要换成
+ * 同一把尺子才读得懂：阈值 400K 在 1M 窗口里就是 40%，那么「占到 30%」
+ * 与「压缩点在 40%」一眼就能比。早先两者都用阈值当分母，就分不出这层意思了。
+ *
+ * 只在阈值**确实小于窗口**时返回——阈值等于窗口（或比它还大）时「压缩点」
+ * 就是窗口顶，说「占满会压缩」是废话，图注里不必多一句。
+ *
+ * @param autoCompactThreshold 压缩触发的 token 数
+ * @param windowTokens 分母，与柱子同源（`contextDenominator`）
+ */
+export function compactLine(
+  autoCompactThreshold: number | undefined,
+  windowTokens: number | undefined,
+): string {
+  if (autoCompactThreshold === undefined || autoCompactThreshold <= 0) return ''
+  if (windowTokens === undefined || windowTokens <= 0) return ''
+  if (autoCompactThreshold >= windowTokens) return ''
+  return `压缩点 ${Math.round((autoCompactThreshold / windowTokens) * 100)}%`
 }
 
 /** 图例的一项。 */
@@ -1223,12 +1235,21 @@ export function contextView(
   chartWidth: number,
   bufferPct: number,
   isLight: boolean | null,
+  /**
+   * 自动压缩阈值与分母（都是 token 数）。
+   *
+   * 给了两件事：纵轴上限取**阈值**（柱子按 token 绝对量画，顶到轴顶就是
+   * 「马上要被压缩」），图注里补一句「压缩点 40%」（阈值换算到模型窗口的
+   * 同一个尺度，与柱子的百分比读数可比）。
+   */
+  compactAt?: { threshold: number | undefined; window: number | undefined },
 ): {
   /** 真正要画的那几轮，已按宽度裁好，贴住最新一端。 */
   turns: ContextTurn[]
   bars: StackBar[]
   peak: number
-  yMax: number
+  /** 纵轴上限，**token 数**（不是百分比）。 */
+  yMaxTokens: number
   legend: StackLegendItem[]
   /** 无障碍描述与图注共用的一句话（桌面端用，不带纵轴）。 */
   caption: string
@@ -1236,24 +1257,32 @@ export function contextView(
   terminalCaption: string
 } {
   const visible = turns.slice(-Math.max(1, contextVisibleCount(chartWidth)))
-  const { bars, peak, yMax } = contextStack(visible, visible.length, bufferPct)
+  // 纵轴上限取自动压缩阈值：柱子按 token 绝对量画，顶到轴顶就是「马上要被
+  // 压缩」。拿不到阈值才退回按峰值自适应。
+  const { bars, peak, yMaxTokens } = contextStack(visible, visible.length, bufferPct, {
+    ...(compactAt?.threshold === undefined ? {} : { yMaxTokens: compactAt.threshold }),
+  })
   // 这一屏里出现过的压缩，按时间顺序（柱子本来就是时间顺序）。
   // 只留带引擎细节的那些——`afterCompact` 靠比例猜出来的没有数字可写。
   const compacts = visible
     .map(turn => turn.compact)
     .filter((mark): mark is CompactMark => mark !== undefined)
+  // 压缩点换算到与「峰值」同一个尺度（模型窗口的百分比）。阈值本身是
+  // token 数，直接印出来读者得自己做除法；换算成百分比之后，与「峰值 46%」
+  // 一眼可比。注意纵轴刻度用的是 token（`axisTokens`），两者分工不同。
+  const compactAtText = compactLine(compactAt?.threshold, compactAt?.window)
   return {
     turns: visible,
     bars,
     peak,
-    yMax,
+    yMaxTokens,
     legend: stackLegendOf(bars, isLight),
-    // **不带 `yMax`。** 这句话既做屏幕上的图注、也做 Svg 的 `alt`，两者都
-    // 在「看图」的场合：桌面端图上已经有纵轴刻度（`0` 与上界），再说一遍
-    // 「纵轴 75%」是同一件事的第二次陈述。终端没有 Svg、也就没有轴，那边
-    // 由面板自己补 `stackCaption(..., yMax)` —— 见 `register.tsx`。
-    caption: stackCaption(bars.length, peak, undefined, compacts),
-    terminalCaption: stackCaption(bars.length, peak, yMax, compacts),
+    // **不带纵轴上限。** 这句话既做屏幕上的图注、也做 Svg 的 `alt`，两者都
+    // 在「看图」的场合：桌面端图上已经有纵轴刻度（`0` 与上限），再说一遍
+    // 是同一件事的第二次陈述。终端没有 Svg、也就没有轴，那边由面板自己补
+    // `stackCaption(..., yMaxTokens)` —— 见 `register.tsx`。
+    caption: stackCaption(bars.length, peak, undefined, compacts, compactAtText),
+    terminalCaption: stackCaption(bars.length, peak, yMaxTokens, compacts, compactAtText),
   }
 }
 

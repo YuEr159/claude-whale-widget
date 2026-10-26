@@ -236,7 +236,7 @@ export type Prefs = {
   /** 是否在每轮结束后弹出本轮消耗提示（默认关，避免每轮打断）。 */
   isTurnCostOn: boolean  /** 本地数据多久重新扫描一次；0 表示只在手动刷新时扫。 */
   scanIntervalMs: number
-  /** 面板看哪一页：用量概览 / 模型分布 / 本会话上下文占比 / 设置。 */
+  /** 面板看哪一页：用量概览 / 模型分布 / 本会话上下文占用 / 设置。 */
   panelPage: 'overview' | 'models' | 'context' | 'settings'
   /** 轮次热图的色深口径：当天轮次，还是当天消息数。 */
   heatMetric: HeatMetric

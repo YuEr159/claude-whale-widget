@@ -44,6 +44,25 @@ export function tokens(value: number | undefined | null): string {
 }
 
 /**
+ * 图表纵轴刻度用的 token 数：`1M` / `400K` / `12K`。
+ *
+ * 与 `tokens` 的「万 / 亿」不是一套：**纵轴刻度要短**，左边那 26px 的槽位
+ * 放不下「36.7万」这种五字读数；而且刻度本来就是给人估算量级的，`400K`
+ * 比 `40.0万` 更快读。正文里的绝对量仍走 `tokens`——那里口语化的「万」更自然。
+ *
+ * 取整规则：≥1M 保留一位小数（`1.5M`），≥1K 取整（`400K`），再小直接给数字。
+ * 整数值不拖 `.0`：`1M` 而不是 `1.0M`。
+ */
+export function axisTokens(value: number | undefined | null): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return '—'
+  const abs = Math.abs(value)
+  const trim = (scaled: number): string => String(Math.round(scaled * 10) / 10)
+  if (abs >= 1e6) return `${trim(value / 1e6)}M`
+  if (abs >= 1e3) return `${Math.round(value / 1e3)}K`
+  return String(Math.round(value))
+}
+
+/**
  * 距离重置还有多久：`2h13m` / `45m` / `刚刚`。
  * 入参是 ISO 8601 字符串；解析不了就返回空串。
  */

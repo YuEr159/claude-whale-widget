@@ -730,25 +730,28 @@ test('模型页过滤引擎内部标识', () => {
 })
 
 test('上下文堆叠柱：每轮一根，段内比例受夹取', () => {
+  // 柱高按 token 绝对量画；`percent` 只作为读数保留。
   const turns = [
-    { seq: 1, percent: 20, tokens: 1000, at: 0 },
-    { seq: 2, percent: 55, tokens: 2000, at: 1 },
-    { seq: 3, percent: 90, tokens: 3000, at: 2 },
+    { seq: 1, percent: 20, tokens: 200_000, at: 0 },
+    { seq: 2, percent: 55, tokens: 550_000, at: 1 },
+    { seq: 3, percent: 90, tokens: 900_000, at: 2 },
   ]
-  const { bars, peak, yMax } = contextStack(turns, 24, 10)
+  const { bars, peak, yMaxTokens } = contextStack(turns, 24, 0)
   expect(bars).toHaveLength(3)
   expect(peak).toBe(90)
   expect(bars[0]?.percent).toBe(20)
-  // 纵轴自适应：峰值 90+10=100 → ×1.1 取整到 5 的倍数 → 夹到 100。
-  expect(yMax).toBe(100)
-  // 柱子高度是「已用 + 缓冲」占纵轴的比例，不再恒为 1。
-  for (const bar of bars) {
-    const total = bar.segments.reduce((sum, s) => sum + s.ratio, 0)
+  // 没给阈值：纵轴取峰值 900K 的 1.1 倍 = 990K。
+  expect(yMaxTokens).toBe(990_000)
+  // 柱高是 token 占纵轴的比例，不再恒为 1。
+  const heights = bars.map(bar => bar.segments.reduce((sum, s) => sum + s.ratio, 0))
+  expect(Math.abs(heights[0] - 200_000 / 990_000) < 1e-9).toBe(true)
+  expect(Math.abs(heights[2] - 900_000 / 990_000) < 1e-9).toBe(true)
+  for (const total of heights) {
     expect(total).toBeLessThanOrEqual(1 + 1e-9)
     expect(total).toBeGreaterThan(0)
   }
-  // 已用超过 100 时被夹住，缓冲段不溢出
-  const over = contextStack([{ seq: 9, percent: 130, tokens: 1, at: 0 }], 5, 10)
+  // `percent` 超过 100 时被夹住（读数不能溢出）。
+  const over = contextStack([{ seq: 9, percent: 130, tokens: 1, at: 0 }], 5, 0)
   expect(over.bars[0]?.percent).toBe(100)
 })
 
@@ -1032,49 +1035,49 @@ test('上下文分类：按行名归一，只取已用行', () => {
 })
 
 test('有构成时按内容分类堆叠，缺构成的老记录退回单色', () => {
-  const { bars, yMax } = contextStack([
+  const { bars, yMaxTokens } = contextStack([
     {
       seq: 1,
       percent: 50,
-      tokens: 1000,
+      tokens: 400_000,
       at: 0,
       parts: [
         { name: 'Messages', kind: 'messages', tokens: 300_000 },
         { name: 'System prompt', kind: 'system', tokens: 100_000 },
       ],
     },
-    { seq: 2, percent: 20, tokens: 500, at: 1 },
-  ], 24, 10)
+    { seq: 2, percent: 20, tokens: 200_000, at: 1 },
+  ], 24, 0)
 
-  // 峰值 50+10=60 → ×1.1=66 → 取整到 5 的倍数 = 70。
-  expect(yMax).toBe(70)
+  // 没给阈值：纵轴取峰值 400K 的 1.1 倍 = 440K。
+  expect(yMaxTokens).toBe(440_000)
   expect(bars[0]?.hasParts).toBe(true)
   expect(bars[1]?.hasParts).toBe(false)
-  // 自适应纵轴下不画空闲段，它会把柱子重新补满、抵消自适应的意义。
-  expect(bars[0]?.segments.map(s => s.kind)).toEqual(['messages', 'system', 'buffer'])
-  expect(bars[1]?.segments.map(s => s.kind)).toEqual(['used', 'buffer'])
+  // 新几何里不再有缓冲段与空闲段：纵轴顶就是压缩阈值。
+  expect(bars[0]?.segments.map(s => s.kind)).toEqual(['messages', 'system'])
+  expect(bars[1]?.segments.map(s => s.kind)).toEqual(['used'])
 
-  // 300k / 400k 的已用部分 = 50% × 0.75 = 37.5%，再除以纵轴 70%。
-  expect(Math.abs((bars[0]?.segments[0]?.ratio ?? 0) - 0.375 * (100 / 70)) < 1e-9).toBe(true)
+  // 300k / 400k 的已用部分 = 整根的 75%，再除以纵轴 440K。
+  expect(Math.abs((bars[0]?.segments[0]?.ratio ?? 0) - 0.75 * (400_000 / 440_000)) < 1e-9).toBe(true)
 })
 
 test('图例只列出现过的分类，顺序固定', () => {
   const { bars } = contextStack([{
     seq: 1,
     percent: 60,
-    tokens: 1,
+    tokens: 9,
     at: 0,
     parts: [
       { name: 'Messages', kind: 'messages', tokens: 5 },
       { name: 'System prompt', kind: 'system', tokens: 3 },
       { name: 'MCP tools', kind: 'mcp', tokens: 1 },
     ],
-  }], 24, 20)
-  // 自适应纵轴下不画空闲段，所以图例里也没有它。
-  expect(stackLegendOf(bars).map(item => item.kind)).toEqual(['system', 'mcp', 'messages', 'buffer'])
+  }], 24, 0)
+  // 纵轴就是压缩阈值，缓冲段没有容身之处，所以图例里也没有它。
+  expect(stackLegendOf(bars).map(item => item.kind)).toEqual(['system', 'mcp', 'messages'])
 
-  const legacy = contextStack([{ seq: 1, percent: 30, tokens: 1, at: 0 }], 24, 10)
-  expect(stackLegendOf(legacy.bars).map(item => item.kind)).toEqual(['used', 'buffer'])
+  const legacy = contextStack([{ seq: 1, percent: 30, tokens: 100_000, at: 0 }], 24, 0)
+  expect(stackLegendOf(legacy.bars).map(item => item.kind)).toEqual(['used'])
 })
 
 /**
