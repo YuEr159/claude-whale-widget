@@ -566,15 +566,28 @@ test('模型名归并：同一款模型的几种写法合成一行', () => {
 })
 
 test('模型明细：归并后金额相加，全无价格才是 null', () => {
-  const rows = modelDetailRows([
-    // 同一款 Flash 的两个写法：各自的估算值要加起来。
-    { model: 'deepseek-flash', isPriced: true, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.15, messages: 10 },
-    { model: 'DeepSeek-Flash', isPriced: true, input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0, cost: 0.6, messages: 5 },
-    // 没有价格的模型：金额是 null，不是 0。
-    { model: 'qwen3.8-27b', isPriced: false, input: 500, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 1 },
-    // 占位标识不进表。
-    { model: 'auto', isPriced: false, input: 900, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 9 },
-  ])
+  // 明细表从逐日数据按窗口重建（与图同源）；`byModel` 只用来判断价格。
+  const rows = modelDetailRows(
+    [{
+      day: '2026-10-20',
+      models: [
+        // 同一款 Flash 的两个写法：各自的估算值要加起来。
+        { model: 'deepseek-flash', input: 1_000_000, output: 0, cost: 0.15 },
+        { model: 'DeepSeek-Flash', input: 0, output: 1_000_000, cost: 0.6 },
+        // 没有价格的模型：金额是 null，不是 0。
+        { model: 'qwen3.8-27b', input: 500, output: 100, cost: 0 },
+      ],
+    }],
+    30,
+    [
+      { model: 'deepseek-flash', isPriced: true, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.15, messages: 10 },
+      { model: 'DeepSeek-Flash', isPriced: true, input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0, cost: 0.6, messages: 5 },
+      // 没有价格的模型：金额是 null，不是 0。
+      { model: 'qwen3.8-27b', isPriced: false, input: 500, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 1 },
+      // 占位标识不进表。
+      { model: 'auto', isPriced: false, input: 900, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 9 },
+    ],
+  )
 
   assert.equal(rows.length, 2, '两个 Flash 写法应当合成一行，占位标识被过滤')
   const flash = rows.find(row => row.model === 'DeepSeek Flash')
@@ -587,6 +600,54 @@ test('模型明细：归并后金额相加，全无价格才是 null', () => {
   const qwen = rows.find(row => row.model === 'Qwen 27B')
   assert.ok(qwen)
   assert.equal(qwen.cost, null, '没有公开价格的模型不该记成 0')
+})
+
+/**
+ * 明细表与堆叠图必须**同窗口、同排序**。
+ *
+ * 这是一条真实缺陷的回归：表曾直接读 `byModel`（扫描层固定 400 天的全量），
+ * 图读 `modelDaily` 并按「范围」（30 / 60 / 180 / 365 天）裁剪。读者把范围
+ * 切到 30 天，柱子变了、表纹丝不动，而两块长在同一个标题下——等于同时给出
+ * 两套互相矛盾的数字，费用尤其离谱（表多算了 370 天）。
+ *
+ * 这条用「老数据只在窗口外」的夹具把两种口径的差异放大到必然可见：
+ * 30 天窗口里只有 A，而 400 天全量里 B 更多。若表仍读全量，B 会排到第一。
+ */
+test('模型明细与堆叠图同窗口：窗口外的模型不进表，行序与段序一致', () => {
+  const daily = [
+    // 30 天窗口之外、365 天窗口之内：B 的用量远大于窗口内的 A。
+    // 日期不能取在 365 天边界上——窗口是「以最新一天为锚、往前共 365 天」，
+    // 恰好 365 天前的那一天落在窗口外，这一点本身就是 `modelWindowDates`
+    // 的边界语义，不该拿来做夹具。
+    { day: '2026-04-01', models: [{ model: 'claude-opus-5-5', input: 90_000_000, output: 10_000_000, cost: 300 }] },
+    // 30 天窗口内：只有 A。
+    { day: '2026-10-20', models: [{ model: 'DeepSeek Flash', input: 1_000_000, output: 100_000, cost: 0.8 }] },
+  ]
+  const byModel = [
+    { model: 'claude-opus-5-5', isPriced: true, input: 90_000_000, output: 10_000_000, cacheRead: 0, cacheWrite: 0, cost: 300, messages: 40 },
+    { model: 'DeepSeek Flash', isPriced: true, input: 1_000_000, output: 100_000, cacheRead: 0, cacheWrite: 0, cost: 0.8, messages: 3 },
+  ]
+
+  const stack = modelStackBars(daily, 30, 6, 'day')
+  const rows = modelDetailRows(daily, 30, byModel)
+
+  assert.deepEqual(rows.map(row => row.model), ['DeepSeek Flash'], '窗口外的模型不该出现在表里')
+  assert.deepEqual(rows.map(row => row.model), stack.models, '表的行序必须与图的段序一致')
+
+  // 同一份数据、拉宽到 365 天后，表与图一起把老数据收进来，顺序仍然一致。
+  const wideStack = modelStackBars(daily, 365, 6, 'week')
+  const wideRows = modelDetailRows(daily, 365, byModel)
+  assert.deepEqual(wideRows.map(row => row.model), wideStack.models)
+  assert.equal(wideRows[0].model, 'claude-opus-5-5', '全窗口下用量最大的应排第一')
+
+  // 未收录价格的判断与窗口无关：qwen 在窗口里没有用量，也不该凭空出现。
+  const unpriced = modelDetailRows(
+    [{ day: '2026-10-20', models: [{ model: 'qwen3.8-27b', input: 5, output: 1, cost: 0 }] }],
+    30,
+    [{ model: 'qwen3.8-27b', isPriced: false, input: 5, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 1 }],
+  )
+  assert.equal(unpriced.length, 1)
+  assert.equal(unpriced[0].cost, null)
 })
 
 test('显示宽度：中文占两格，英文占一格', () => {

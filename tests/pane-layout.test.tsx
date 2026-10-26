@@ -668,3 +668,135 @@ test('概览卡片框比外层大框暗一档', async ($, on) => {
 
   await ui.unmount()
 })
+
+/**
+ * 页内分组框都压暗一档（模型页的图框、表框，上下文页的图框）。
+ *
+ * 概览卡片早已压暗（上一条用例），但这三处漏了——它们和外层大框同色同
+ * 粗细，读者看不出「这是页内的一块」。规则 6 的层级应当是：外层框（主）
+ * > 页内分组框（次）> 内容。
+ *
+ * 用例从 `$.state.scan` 注入一份扫描数据：没有数据时模型页只画一句
+ * 「还没有统计数据」，框根本不存在，断言会空过。
+ */
+const SCAN_FIXTURE = {
+  isRunning: false,
+  lastRunAt: Date.parse('2026-10-20T12:00:00Z'),
+  error: undefined,
+  data: {
+    files: 1,
+    overview: {
+      sessions: 1, activeDays: 1, peakHour: 12, peakHourMessages: 3,
+      favoriteModel: 'DeepSeek Flash', favoriteModelMessages: 3,
+      totalMessages: 3, totalTokens: 2_100_000,
+    },
+    turnsDaily: [],
+    modelDaily: [
+      { day: '2026-10-20', models: [{ model: 'DeepSeek Flash', input: 1_000_000, output: 100_000, cost: 0.8 }] },
+    ],
+    windowDays: 30,
+    today: { day: '2026-10-20', tokens: 1_100_000, messages: 3, sessions: 1, cost: 1 },
+    total: { tokens: 1_100_000, messages: 3, sessions: 1, cost: 1 },
+    daily: [],
+    byModel: [
+      { model: 'DeepSeek Flash', isPriced: true, input: 1_000_000, output: 100_000, cacheRead: 0, cacheWrite: 0, cost: 0.8, messages: 3 },
+    ],
+    skippedDuplicates: 0,
+  },
+}
+
+test('模型页与上下文页的分组框都比外层大框暗一档', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  on('state.get', { plugin: 'whale-usage', key: 'scan' }, async (_$, e, next) => {
+    void next
+    return { value: { value: SCAN_FIXTURE, version: 1 } }
+  })
+  // 上下文页的图框只有「有逐轮数据」时才画；空列表时整页只有一句提示，
+  // 框根本不存在，下面的断言会空过。
+  on('state.get', { plugin: 'whale-usage', key: 'contextTurns' }, async (_$, e, next) => {
+    void next
+    return {
+      value: {
+        value: [{ seq: 1, percent: 42, tokens: 84_000, at: Date.parse('2026-10-20T11:00:00Z') }],
+        version: 1,
+      },
+    }
+  })
+  // 上下文页的图框只有真画了图才存在，所以引擎读数也要给。
+  // `on(...)` 必须在 `$.ui.mount` 之前——挂载之后注册的钩子不会被底下看到。
+  on('session.usage', (async () => ({
+    value: {
+      context: { tokens: 84_000, window: 200_000, percent: 42 },
+      rateLimits: [],
+      cost: { usd: 1 },
+    },
+  })) as never)
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+
+  function collectBordered(node: any, out: any[] = []): any[] {
+    if (!node || typeof node !== 'object') return out
+    if (node.type === 'Box' && node.props?.borderStyle) out.push(node)
+    for (const kid of node.children ?? []) collectBordered(kid, out)
+    return out
+  }
+
+  await ui.press({ key: 'whale-tab-models' })
+  // 第一个带框的是页面外层大框（`userMessageBackground` 底），它要保持原
+  // 亮度——层级是「外层框（主）> 页内分组框（次）」。只断言页内的那些。
+  const dimmable = (list: any[]) => list.filter(b => b.props.backgroundColor !== 'userMessageBackground')
+  const modelsBoxes = collectBordered(await ui.drawn())
+  // 图框 + 表框都在，且都压暗了。
+  expect(dimmable(modelsBoxes).length).toBeGreaterThanOrEqual(2)
+  for (const box of dimmable(modelsBoxes)) expect(box.props.borderDimColor).toBe(true)
+
+  // 上下文页的图框同理。
+  await ui.press({ key: 'whale-tab-context' })
+  const contextBoxes = dimmable(collectBordered(await ui.drawn()))
+  expect(contextBoxes.length).toBeGreaterThanOrEqual(1)
+  for (const box of contextBoxes) expect(box.props.borderDimColor).toBe(true)
+
+  await ui.unmount()
+})
+
+/**
+ * 模型页不再有图例行。
+ *
+ * 图例曾把「色块 + 模型名」列一遍，而正下方的明细表第一列说的是同一件事
+ * （还多给了数字）。前 6 名的顺序与颜色在两处完全一致（同一个
+ * `stack.models`、同一个排序键），所以那一行只是把同一份映射说了第二遍，
+ * 按规则 5 删掉。这条守的是「别又加回来」。
+ */
+test('模型页没有图例行，颜色映射交给明细表的色块列', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  on('state.get', { plugin: 'whale-usage', key: 'scan' }, async (_$, e, next) => {
+    void next
+    return { value: { value: SCAN_FIXTURE, version: 1 } }
+  })
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+
+  await ui.press({ key: 'whale-tab-models' })
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree).not.toContain('whale-mlegend')
+  // 明细表的色块列还在——删的是图例，不是颜色映射本身。
+  expect(tree).toContain('whale-mrow')
+
+  await ui.unmount()
+})

@@ -333,6 +333,34 @@ export type ModelStackBar = {
 }
 
 /**
+ * 「范围」控件选出的窗口：从扫描数据最新的一天往回数 `windowDays` 天，
+ * 返回**按时间升序**排列的日键。
+ *
+ * 堆叠图与明细表必须共用这一份窗口。两个函数各算一遍的话，任何一处口径
+ * 改动（锚点取「今天」还是「数据里最新的一天」、边界含不含）都会让两块的
+ * 统计范围悄悄分叉——而它们长在同一个标题下，读者没有理由怀疑它们说的
+ * 不是同一段时间。
+ *
+ * 锚点取**数据里最新的一天**，不是「今天」：某天完全没用量时扫描不补零值
+ * 日，以今天为锚点会让整个窗口前移，把最新的数据挤出窗口。
+ *
+ * `windowDays <= 0` 或锚点无法解析时返回 `undefined`。
+ */
+function modelWindowDates(days: ModelDay[], windowDays: number): string[] | undefined {
+  if (windowDays <= 0) return undefined
+  const anchor = days.length > 0 ? days[days.length - 1]!.day : localDayKey(new Date())
+  const anchorDate = new Date(`${anchor}T00:00:00`)
+  if (Number.isNaN(anchorDate.getTime())) return undefined
+  const dates: string[] = []
+  for (let offset = windowDays - 1; offset >= 0; offset -= 1) {
+    const date = new Date(anchorDate)
+    date.setDate(date.getDate() - offset)
+    dates.push(localDayKey(date))
+  }
+  return dates
+}
+
+/**
  * 把逐日逐模型用量折成堆叠柱。
  *
  * 段序按**窗口内的总量**降序固定下来，不按天各自排序：同一天的柱子之间要能
@@ -352,7 +380,8 @@ export function modelStackBars(
   keep = MODEL_STACK_KEEP,
   grain: ModelGrain = 'day',
 ): { bars: ModelStackBar[]; models: string[]; peak: number; yMax: number } {
-  if (windowDays <= 0) return { bars: [], models: [], peak: 0, yMax: 0 }
+  const windowDates = modelWindowDates(days, windowDays)
+  if (!windowDates) return { bars: [], models: [], peak: 0, yMax: 0 }
 
   // 归并后再按天聚合：同一天里同一款模型可能有两三个写法。
   const byDay = new Map<string, Map<string, number>>()
@@ -370,26 +399,20 @@ export function modelStackBars(
     }
   }
 
-  const anchor = days.length > 0 ? days[days.length - 1]!.day : localDayKey(new Date())
-  const anchorDate = new Date(`${anchor}T00:00:00`)
-  if (Number.isNaN(anchorDate.getTime())) return { bars: [], models: [], peak: 0, yMax: 0 }
-
   // 按粒度分桶：桶键取这一天 / 这一周 / 这一个月里**最早的一天**，图注与
   // tooltip 都按它显示。桶内的各模型 token 直接相加——柱高是「这段时间
   // 一共用了多少」，不是日均值：读者问的是「这一周花了多少」，而日均会把
   // 「这周用了七天」和「这周只用了一天」画成一样高。
   const ordered: Array<{ day: string; cells: Map<string, number> }> = []
   const buckets = new Map<string, Map<string, number>>()
-  for (let offset = windowDays - 1; offset >= 0; offset -= 1) {
-    const date = new Date(anchorDate)
-    date.setDate(date.getDate() - offset)
-    const key = bucketKeyOf(date, grain)
+  for (const day of windowDates) {
+    const key = bucketKeyOf(new Date(`${day}T00:00:00`), grain)
     let bucket = buckets.get(key)
     if (!bucket) {
       bucket = new Map()
       buckets.set(key, bucket)
     }
-    const dayCells = byDay.get(localDayKey(date))
+    const dayCells = byDay.get(day)
     if (!dayCells) continue
     for (const [model, value] of dayCells) {
       bucket.set(model, (bucket.get(model) ?? 0) + value)
@@ -494,11 +517,16 @@ export type ModelDetailRow = {
   cost: number | null
   /** 归并进来的原始写法，用于提示这一行代表哪几个 id。 */
   aliases: string[]
-  messages: number
 }
 
 /**
  * 模型页下方的明细行。
+ *
+ * **窗口与上面那张堆叠图完全一致**：两者都从 `modelDaily` 取数，都被
+ * 「范围」控件（30 / 60 / 180 / 365 天）裁到同一个窗口。早先这张表直接
+ * 读 `byModel`——那是扫描层 400 天的全量汇总，与图不是一个口径：读者把
+ * 「范围」切到 30 天，柱子变了，表纹丝不动，而两块又长在同一个标题下，
+ * 看起来就像一个数字版、一个形状版。表比图多算 370 天，费用尤其离谱。
  *
  * 先把同一款模型的几种写法归并（见 `canonicalModelName`），再逐行给出
  * 输入 / 输出与金额。归并后金额是把各写法的估算值相加——每个写法各按自己的
@@ -506,28 +534,57 @@ export type ModelDetailRow = {
  *
  * 输入口径与柱子的 `input` 一致（含缓存读写），这样柱子的段高与这一行的
  * 数字能对上；分开写「缓存」会让读者在两套口径之间换算。
+ *
+ * **有没有公开价格是模型的属性，与窗口无关**，所以 `isPriced` 仍回查
+ * 全量的 `byModel`：`modelDaily` 的 cell 只有 token 与金额，未收录价格时
+ * 金额记 0，光看 cell 分不清「免费」和「没价」。
+ *
+ * @param days   逐日逐模型用量（与图同一份）
+ * @param windowDays 范围控件选的窗口，与图同一个值
+ * @param models 全量逐模型汇总，只用来判断哪些模型有公开价格
  */
-export function modelDetailRows(models: LocalModel[]): ModelDetailRow[] {
-  const merged = new Map<string, ModelDetailRow>()
+export function modelDetailRows(
+  days: ModelDay[],
+  windowDays: number,
+  models: LocalModel[],
+): ModelDetailRow[] {
+  const windowDates = modelWindowDates(days, windowDays)
+  if (!windowDates) return []
+  const window = new Set(windowDates)
+
+  // 窗口内每个模型有没有公开价格：任一种写法在价格表里就算有。
+  const priced = new Map<string, boolean>()
   for (const entry of models) {
     if (isPlaceholderModel(entry.model)) continue
     const name = canonicalModelName(entry.model)
-    let row = merged.get(name)
-    if (!row) {
-      row = { model: name, input: 0, output: 0, cost: null, aliases: [], messages: 0 }
-      merged.set(name, row)
-    }
-    row.input += entry.input + entry.cacheRead + entry.cacheWrite
-    row.output += entry.output
-    row.messages += entry.messages
-    if (entry.isPriced) row.cost = (row.cost ?? 0) + entry.cost
-    if (!row.aliases.includes(entry.model)) row.aliases.push(entry.model)
+    priced.set(name, (priced.get(name) ?? false) || entry.isPriced)
   }
-  return [...merged.values()]
-    // 有价格但这一款其实没用过（0 输入 0 输出）：金额算出来是 $0，画上去
-    // 会让人以为「免费」，其实是「没有数据」。这种情况按未收录处理。
-    .map(row => (row.cost !== null && row.input + row.output === 0 ? { ...row, cost: null } : row))
-    .sort((a, b) => b.input + b.output - (a.input + a.output))
+
+  const merged = new Map<string, ModelDetailRow>()
+  for (const item of days) {
+    if (!window.has(item.day)) continue
+    for (const cell of item.models) {
+      if (isPlaceholderModel(cell.model)) continue
+      const input = Math.max(0, cell.input)
+      const output = Math.max(0, cell.output)
+      // 与图一样跳过零用量：图里没有的模型，表里也不该凭空多出一行。
+      if (input + output <= 0) continue
+      const name = canonicalModelName(cell.model)
+      let row = merged.get(name)
+      if (!row) {
+        row = { model: name, input: 0, output: 0, cost: null, aliases: [] }
+        merged.set(name, row)
+      }
+      row.input += input
+      row.output += output
+      if (priced.get(name)) row.cost = (row.cost ?? 0) + Math.max(0, cell.cost)
+      if (!row.aliases.includes(cell.model)) row.aliases.push(cell.model)
+    }
+  }
+
+  // 排序键与图完全一致（输入 + 输出），前 `MODEL_STACK_KEEP` 名的顺序
+  // 因此与图的段序、颜色一一对应。
+  return [...merged.values()].sort((a, b) => b.input + b.output - (a.input + a.output))
 }
 
 /** 概览底部那一行总计：`共 47.3亿 tok · $12.34`。 */

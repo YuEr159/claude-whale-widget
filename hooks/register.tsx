@@ -840,6 +840,7 @@ export const register: Register = (on, options) => {
             flexDirection="column"
             borderStyle="round"
             borderColor={theme.inset.borderColor}
+            borderDimColor
             backgroundColor={theme.inset.backgroundColor}
             paddingX={1}
           >
@@ -1110,10 +1111,19 @@ export const register: Register = (on, options) => {
     // 这种看着有 30 根、其实只有 5 根的错配。
     const grain = modelGrainFor(prefsNow.historyDays)
     const stack = modelStackBars(data?.modelDaily ?? [], prefsNow.historyDays, MODEL_STACK_KEEP, grain)
-    const modelDetails = modelDetailRows(data?.byModel ?? [])
+    // 明细表与图**同窗口、同源、同排序键**：两者都从 `modelDaily` 按
+    // `historyDays` 取数。早先表读的是 `byModel`（扫描层固定 400 天的
+    // 全量），读者把「范围」切到 30 天时柱子变了、表不动，两块又长在
+    // 同一个标题下，等于给出了两套互相矛盾的数字。
+    const modelDetails = modelDetailRows(
+      data?.modelDaily ?? [],
+      prefsNow.historyDays,
+      data?.byModel ?? [],
+    )
     const modelChartWidth = Math.max(80, Math.min(width * 8 - 16, 900))
-    // 柱内段序、图例、下方每行的色块共用这一份映射：颜色与模型的对应
-    // 一旦错位，读者就会把 A 的花费读成 B 的。
+    // 柱内段序与下方每行的色块共用这一份映射：颜色与模型的对应一旦错位，
+    // 读者就会把 A 的花费读成 B 的。明细表的行序与图的段序同键排序，所以
+    // 前 `MODEL_STACK_KEEP` 名一一对应；超出部分在表里是灰色 chip。
     const modelColorOf = (name: string): string => {
       if (name === '其他') return chart.parts.other ?? '#7C8394'
       const index = stack.models.indexOf(name)
@@ -1181,14 +1191,20 @@ export const register: Register = (on, options) => {
               <Text>逐模型用量</Text>
               {modelRange}
             </Box>
-            {/* 图、图例、图注一起装进一块圆角：它们说的是同一件事（这一段
-                时间每个模型用了多少），分开铺在页面底色上会像是三块碰巧挨着
-                的内容。标题与「范围」留在外面——那是这一页的名字与控件，
-                不属于图本身。 */}
+            {/* 图与图注装进一块圆角：它们说的是同一件事（这一段时间每个
+                模型用了多少），分开铺在页面底色上会像是两块碰巧挨着的内容。
+                标题与「范围」留在外面——那是这一页的名字与控件，不属于图本身。
+
+                **没有图例行。** 图例曾在图下再列一遍「色块 + 模型名」，可
+                正下方那张明细表的第一列（色块 + 名字）说的是同一件事，而且
+                还多给了数字。前 `MODEL_STACK_KEEP` 名的顺序、颜色在两处完全
+                一致（同一个 `stack.models`、同一个排序键），多出来的那一行
+                只是把同一份映射说了第二遍——按规则 5「宁可少说一句」删掉。 */}
             <Box
               flexDirection="column"
               borderStyle="round"
               borderColor={theme.inset.borderColor}
+              borderDimColor
               backgroundColor={theme.inset.backgroundColor}
               paddingX={1}
               marginTop={1}
@@ -1203,22 +1219,17 @@ export const register: Register = (on, options) => {
               ) : (
                 <Text dimColor>{modelStackCaption(stack.bars, grain)}</Text>
               )}
-              <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
-                {stack.models.map(model => (
-                  <Box key={`whale-mlegend-${model}`} flexDirection="row" gap={1}>
-                    <Text color={modelColorOf(model)}>■</Text>
-                    <Text dimColor>{clip(model, 18)}</Text>
-                  </Box>
-                ))}
-              </Box>
               <Text dimColor>{modelStackCaption(stack.bars, grain)}</Text>
             </Box>
             {/* 明细表单独一块圆角：它和图是两种读法（形状 vs 具体数字），
-                分开才看得出是两张表，而不是一张图拖了一条尾巴。 */}
+                分开才看得出是两张表，而不是一张图拖了一条尾巴。边框与图那块
+                同样压暗一档——页内分组框都比外层大框低一级（见
+                `DESIGN-PROMPT.md` 规则 6 与概览卡片的做法）。 */}
             <Box
               flexDirection="column"
               borderStyle="round"
               borderColor={theme.inset.borderColor}
+              borderDimColor
               backgroundColor={theme.inset.backgroundColor}
               paddingX={1}
               marginTop={1}

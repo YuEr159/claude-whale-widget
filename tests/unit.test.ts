@@ -813,12 +813,29 @@ test('模型名归并：同一款模型的几种写法合成一行', () => {
 })
 
 test('模型明细：归并后金额相加，全无价格才是 null', () => {
-  const rows = modelDetailRows([
-    { model: 'deepseek-flash', isPriced: true, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.15, messages: 10 },
-    { model: 'DeepSeek-Flash', isPriced: true, input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0, cost: 0.6, messages: 5 },
-    { model: 'qwen3.8-27b', isPriced: false, input: 500, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 1 },
-    { model: 'auto', isPriced: false, input: 900, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 9 },
-  ])
+  // 明细表现在从逐日数据按窗口重建（与图同源）。`byModel` 只用来判断
+  // 哪些模型有公开价格——那是模型属性，与窗口无关。
+  const rows = modelDetailRows(
+    [
+      {
+        day: '2026-10-20',
+        models: [
+          // 同一款 Flash 的两个写法：各自的估算值要加起来。
+          { model: 'deepseek-flash', input: 1_000_000, output: 0, cost: 0.15 },
+          { model: 'DeepSeek-Flash', input: 0, output: 1_000_000, cost: 0.6 },
+          // 没有价格的模型：金额是 null，不是 0。
+          { model: 'qwen3.8-27b', input: 500, output: 100, cost: 0 },
+        ],
+      },
+    ],
+    30,
+    [
+      { model: 'deepseek-flash', isPriced: true, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.15, messages: 10 },
+      { model: 'DeepSeek-Flash', isPriced: true, input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0, cost: 0.6, messages: 5 },
+      { model: 'qwen3.8-27b', isPriced: false, input: 500, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 1 },
+      { model: 'auto', isPriced: false, input: 900, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, messages: 9 },
+    ],
+  )
 
   expect(rows).toHaveLength(2)
   const flash = rows.find(row => row.model === 'DeepSeek Flash')
@@ -849,11 +866,19 @@ test('显示宽度：中文占两格，英文占一格', () => {
  */
 test('模型明细表：列宽放得下最长的读数，且表头与数据行对齐', () => {
   // 造一组「短长混排」的数据：最短 4 格、最长 7 格。
-  const rows = modelDetailRows([
+  const byModel = [
     { model: 'DeepSeek Flash', isPriced: true, input: 2_150_000_000, output: 6_779_000, cacheRead: 0, cacheWrite: 0, cost: 18.39, messages: 9 },
     { model: 'claude-opus-5-5', isPriced: true, input: 1_400_000, output: 120_000, cacheRead: 0, cacheWrite: 0, cost: 8.5, messages: 3 },
     { model: 'qwen3.8-27b', isPriced: true, input: 80_000, output: 9_000, cacheRead: 0, cacheWrite: 0, cost: 0.31, messages: 1 },
-  ])
+  ]
+  const rows = modelDetailRows(
+    [{
+      day: '2026-10-20',
+      models: byModel.map(entry => ({ model: entry.model, input: entry.input, output: entry.output, cost: entry.cost })),
+    }],
+    30,
+    byModel,
+  )
 
   for (const panelWidth of [60, 100, 140]) {
     const layout = detailTableLayout(rows, panelWidth)
@@ -911,10 +936,18 @@ test('模型明细表：列宽放得下最长的读数，且表头与数据行�
  *      压缩，每行按各自的折行点断开，四列又歪了。
  */
 test('模型明细表：四列分区正好铺满页框内的可用宽度', () => {
-  const rows = modelDetailRows([
+  const byModel = [
     { model: 'DeepSeek Flash', isPriced: true, input: 2_150_000_000, output: 6_779_000, cacheRead: 0, cacheWrite: 0, cost: 18.39, messages: 9 },
     { model: 'qwen3.8-27b', isPriced: true, input: 80_000, output: 9_000, cacheRead: 0, cacheWrite: 0, cost: 0.31, messages: 1 },
-  ])
+  ]
+  const rows = modelDetailRows(
+    [{
+      day: '2026-10-20',
+      models: byModel.map(entry => ({ model: entry.model, input: entry.input, output: entry.output, cost: entry.cost })),
+    }],
+    30,
+    byModel,
+  )
 
   for (const panelWidth of [50, 60, 80, 100, 140]) {
     const layout = detailTableLayout(rows, panelWidth)
