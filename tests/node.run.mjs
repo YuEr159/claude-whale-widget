@@ -44,6 +44,8 @@ import {
   contextParts,
   contextStack,
   contextView,
+  historyContextTurns,
+  mergeContextHistory,
   stackCaption,
   stackColor,
   stackLegendOf,
@@ -1972,5 +1974,92 @@ test('用量条字符画：空闲静止，运行中两幅轮换且等宽', () =>
   // 每一幅都带水面波纹，读者才认得出是鲸鱼而不是一串符号。
   for (const glyph of Object.values(BAND_WHALE_GLYPHS)) {
     assert.ok(glyph.includes('≋'), `字符画应当带水面：${JSON.stringify(glyph)}`)
+  }
+})
+
+/**
+ * 历史上下文：日志重建的读数 → 图上的柱子。
+ *
+ * 日志里没有窗口上限（`rawMaxTokens` 只存在于 breakdown），所以百分比只能
+ * 按当前这次的窗口换算。没有分母时**必须返回空**，不能猜一个——猜 200k
+ * 会让实际 1M 窗口的会话把所有柱子压成贴着地面的一条线，读者会以为上下文
+ * 一直很空。
+ */
+test('历史上下文：有窗口才换算百分比，没有就整段丢掉', () => {
+  const history = [
+    { at: 1000, tokens: 50_000, output: 10, model: 'm', seq: 1 },
+    { at: 2000, tokens: 100_000, output: 10, model: 'm', seq: 2 },
+    { at: 3000, tokens: 200_000, output: 10, model: 'm', seq: 3 },
+  ]
+
+  // 200k 窗口：25% / 50% / 100%。
+  const fits = historyContextTurns(history, 200_000)
+  assert.deepEqual(fits.map(turn => turn.percent), [25, 50, 100])
+  assert.deepEqual(fits.map(turn => turn.seq), [1, 2, 3])
+  assert.deepEqual(fits.map(turn => turn.at), [1000, 2000, 3000])
+  // 历史读数没有分类构成——图例不该凭空多出分类。
+  assert.ok(fits.every(turn => turn.parts === undefined), '历史读数不该带 parts')
+
+  // 1M 窗口：同样的读数只占 5% / 10% / 20%。
+  const roomy = historyContextTurns(history, 1_000_000)
+  assert.deepEqual(roomy.map(turn => turn.percent), [5, 10, 20])
+
+  // 没有上限 / 上限为 0 / 没有数据：一律空数组。
+  assert.deepEqual(historyContextTurns(history, undefined), [])
+  assert.deepEqual(historyContextTurns(history, 0), [])
+  assert.deepEqual(historyContextTurns(undefined, 200_000), [])
+  assert.deepEqual(historyContextTurns([], 200_000), [])
+
+  // 超出窗口时夹到 100：柱子不能画到框外。
+  assert.deepEqual(historyContextTurns([{ at: 1, tokens: 400_000, output: 0, model: 'm', seq: 1 }], 200_000).map(t => t.percent), [100])
+})
+
+/**
+ * 历史与本次记录的接缝。
+ *
+ * 两者记的是同一场会话：历史覆盖到插件装上之前，本次接在后面。接缝处可能
+ * 有一两轮重叠（`turn.complete` 记下那轮时，日志里也已经写进去了），所以
+ * 按时刻去重，并且**保留本次那条**——它带着分类构成，图例能画出内容分类。
+ */
+test('上下文接线：历史在前、本次在后，同一时刻取信息更全的那条', () => {
+  const history = [
+    { seq: 1, percent: 20, tokens: 1000, at: 100 },
+    { seq: 2, percent: 30, tokens: 1500, at: 200 },
+  ]
+  const live = [
+    // 与历史末项同刻，但带构成：应当胜出。
+    { seq: 5, percent: 31, tokens: 1550, at: 200, parts: [{ kind: 'system', tokens: 300 }] },
+    { seq: 6, percent: 40, tokens: 2000, at: 300 },
+  ]
+
+  const merged = mergeContextHistory(history, live)
+  assert.equal(merged.length, 3, '重叠的一轮只该留一条')
+  assert.deepEqual(merged.map(turn => turn.at), [100, 200, 300], '必须按时刻排序')
+  // 同刻那条取自 `live`：percent 与 parts 都是它的。
+  assert.equal(merged[1].percent, 31)
+  assert.ok(merged[1].parts && merged[1].parts.length === 1, '同刻应保留带构成的那条')
+
+  // 任何一边为空时直接返回另一边。
+  assert.deepEqual(mergeContextHistory([], live), live)
+  assert.deepEqual(mergeContextHistory(history, []), history)
+  assert.deepEqual(mergeContextHistory([], []), [])
+})
+
+/** 历史接上之后，整条曲线能一路画到会话开头——这是这个改动的全部意义。 */
+test('上下文接线：接缝不断档，整条曲线覆盖到会话开头', () => {
+  const history = Array.from({ length: 100 }, (_, i) => ({
+    seq: i + 1, percent: 10 + i * 0.5, tokens: 20_000 + i * 1000, at: 1000 + i * 1000,
+  }))
+  const live = Array.from({ length: 5 }, (_, i) => ({
+    seq: 101 + i, percent: 60 + i, tokens: 120_000 + i * 1000, at: 1000 + 100 * 1000 + i * 1000,
+  }))
+
+  const merged = mergeContextHistory(history, live)
+  assert.equal(merged.length, 105)
+  assert.equal(merged[0].at, 1000, '第一条必须是会话最早那一轮')
+  assert.equal(merged[merged.length - 1].at, live[live.length - 1].at, '末条必须是最新一轮')
+  // 时刻严格递增：图上不会出现一根柱子压着另一根。
+  for (let i = 1; i < merged.length; i += 1) {
+    assert.ok(merged[i].at > merged[i - 1].at, `第 ${i} 条的时刻没有递增`)
   }
 })

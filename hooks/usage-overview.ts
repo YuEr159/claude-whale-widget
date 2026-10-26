@@ -8,6 +8,7 @@ import type {
   ContextPart,
   ContextPartKind,
   ContextTurn,
+  HistoricalContextTurn,
   LocalDay,
   LocalModel,
   LocalOverview,
@@ -1197,6 +1198,55 @@ export function contextView(
     // 由面板自己补 `stackCaption(..., yMax)` —— 见 `register.tsx`。
     caption: stackCaption(bars.length, peak),
   }
+}
+
+/**
+ * 把会话日志里重建的上下文读数转成图上的柱子。
+ *
+ * 与 `contextTurns`（插件启动后逐轮记下的）相比，历史读数**没有窗口上限**：
+ * 日志里只留下每条 assistant 消息的 token 数，`rawMaxTokens` 是引擎在
+ * breakdown 里现算的，从没写进日志。所以百分比只能按一个已知上限换算。
+ *
+ * @param history 日志重建的逐轮读数（时间顺序）
+ * @param windowTokens 窗口上限；缺失时返回空数组——没有分母就画不出占比，
+ *   硬猜一个（比如都按 200k）会在实际是 1M 窗口的会话上把所有柱子压成一条线。
+ * @returns 与 `ContextTurn` 同形的数组，`parts` 一律没有（日志里没有分类）
+ */
+export function historyContextTurns(
+  history: readonly HistoricalContextTurn[] | undefined,
+  windowTokens: number | undefined,
+): ContextTurn[] {
+  if (!history || history.length === 0) return []
+  if (!windowTokens || windowTokens <= 0) return []
+  return history.map(item => ({
+    seq: item.seq,
+    percent: Math.max(0, Math.min(100, (item.tokens / windowTokens) * 100)),
+    tokens: item.tokens,
+    at: item.at,
+  }))
+}
+
+/**
+ * 把历史序列与本次会话记下的轮次接成一条。
+ *
+ * **历史在前、本次在后。** 两者记的是同一场会话：历史覆盖到插件装上之前的
+ * 全部轮次，本次接在它后面。接缝处可能有一两轮重叠（`turn.complete` 记下
+ * 的那轮，日志里也已经写进去了），所以按时刻去重——保留后出现的那条，
+ * 它带着分类构成，信息更全。
+ *
+ * 任何一边为空时直接返回另一边，不做无谓的合并。
+ */
+export function mergeContextHistory(
+  history: readonly ContextTurn[],
+  live: readonly ContextTurn[],
+): ContextTurn[] {
+  if (history.length === 0) return [...live]
+  if (live.length === 0) return [...history]
+  const byTime = new Map<number, ContextTurn>()
+  for (const turn of history) byTime.set(turn.at, turn)
+  // 本次的覆盖同刻的历史那条：它有 `parts`，图例能画出构成。
+  for (const turn of live) byTime.set(turn.at, turn)
+  return [...byTime.values()].sort((a, b) => a.at - b.at)
 }
 
 /**

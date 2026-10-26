@@ -40,7 +40,9 @@ import {
 import {
   contextParts,
   contextView,
+  historyContextTurns,
   latestPartsText,
+  mergeContextHistory,
   modelDetailRows,
   detailTableLayout,
   CHIP_COLUMN,
@@ -253,8 +255,13 @@ export const register: Register = (on, options) => {
         // 脚本，脚本把更新后的缓存放在输出里回传。日志是只追加的，一次扫描里
         // 绝大多数文件都不会再变，所以第二次起只需重读刚写过的几个文件。
         // 缓存只活在这个模块的内存里，不落盘（见 PRIVACY.md）。
+        //
+        // 第四个参数是**当前会话的 id**：上下文窗口是会话级的东西，脚本据此
+        // 只回传这一场对话的逐轮占用曲线。这个 id 就是 transcript 的文件名，
+        // 与脚本自己从文件名取到的是同一个值。
+        const sessionId = await $.session.id().catch(() => '')
         const result = await $.process.run(
-          ['node', `${$.plugin.root}/scripts/usage-scan.mjs`, root, String(days)],
+          ['node', `${$.plugin.root}/scripts/usage-scan.mjs`, root, String(days), sessionId],
           { timeoutMs: 120_000, stdin: scanCache.length > 0 ? JSON.stringify(scanCache) : '' },
         )
         if (result.exitCode !== 0) {
@@ -673,7 +680,7 @@ export const register: Register = (on, options) => {
     // 与用量条、气泡共用同一个口径函数。
     const sessionCostOfPrices = sessionCostOf(byModel)
     const heldContextTurns = await $.state.get({ plugin: 'whale-usage', key: 'contextTurns' } as const)
-    const contextTurns = heldContextTurns.value ?? []
+    const liveContextTurns = heldContextTurns.value ?? []
     // 用量条口径：与用量条那一侧共用 `bandMetricsOf`，两处不会再分叉。
     const metrics = bandMetricsOf(prefsNow, DEFAULT_PREFS.bandMetrics)
     // 圆角框的底色跟着主题走。主题在一次会话里基本不变，而面板打开时会
@@ -841,14 +848,33 @@ export const register: Register = (on, options) => {
             contextDetail.rawMaxTokens) *
           100
         : 0
+
+    /**
+     * 这一屏画的轮次：**会话日志重建的历史在前，插件启动后的记录在后。**
+     *
+     * 为什么要有历史：`contextTurns` 只从插件装上那一刻开始记，而一场会话
+     * 常常在插件加载前就已经跑了很久——读者打开上下文页，看到的却是「刚开始
+     * 的几轮」，而窗口其实早就快满了。日志里每条 assistant 消息都带 usage，
+     * 从会话开头就能重建，补的正是这一段。
+     *
+     * 分母（窗口上限）只能取当前这次 breakdown 的 `rawMaxTokens`：日志里没有
+     * 它。同一场会话里窗口档位不会变，所以用当下这个值换算是成立的；换到
+     * 别的会话就不成立了，这也是只取当前会话（`$.session.id()`）的原因。
+     */
+    const historyContext = historyContextTurns(
+      record.data?.contextTurns,
+      contextDetail?.rawMaxTokens,
+    )
+    const contextTurns = mergeContextHistory(historyContext, liveContextTurns)
+
     // 显示最近几轮、柱子、图例、图注全由 `contextView` 一处算出：宽度决定
     // 能放几根，图注与图例跟着同一份结果走。以前这里写死 60 轮、SVG 内部
     // 又按宽度裁一次，窄画布下就会出现「图注说 60 轮、图上 34 根」。
     //
     // **上限 900px 而不是 640px**：640 是模型页立图时期留下的数，对上下文
-    // 柱状图来说偏窄——96 列以上的面板会空出 112～784px 一条死区（右侧整
-    // 块什么都不画）。柱状图按 CSS 像素布局、面板按字符格，两套单位之间没
-    // 有换算，所以「填满」只能靠这个上限把常见宽度兜住；140 列以上再封顶
+    // 柱状图来说偏窄——96 列以上的面板会空出 112～784px 一条死区（右侧整块
+    // 什么都不画）。柱状图按 CSS 像素布局、面板按字符格，两套单位之间没有
+    // 换算，所以「填满」只能靠这个上限把常见宽度兜住；140 列以上再封顶
     // 900px，因为那时柱子已经到 60 根上限（`CONTEXT_MAX_BARS`），再宽只是
     // 让每根柱子变胖，读不出更多轮。
     const chartWidth = Math.max(80, Math.min(width * 8 - 16, 900))

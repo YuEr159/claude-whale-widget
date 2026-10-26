@@ -85,10 +85,29 @@ function scanFile(file, cutoff, seen) {
     byDayModel: new Map(),
     unparsed: 0,
     skipped: 0,
+    /**
+     * 本文件里每一轮的上下文窗口占用，按时间顺序。
+     *
+     * 一条 assistant 消息在 jsonl 里会写成多行流式增量，只有**最后一行**
+     * 的 usage 才是这一轮的真实读数（首行的 `output_tokens` 与
+     * `cache_read_input_tokens` 都是 0）。所以这里先按 `message.id` 收齐
+     * 末个快照，再按 `promptId` 归成「轮」——一轮里可能有多条 assistant
+     * 消息（工具调用循环），取其中**最后一条**的窗口占用，因为那才是这一轮
+     * 结束时窗口的样子。
+     *
+     * 记下的只有 token 数与模型名，没有内容、没有路径。
+     */
+    contextTurns: [],
     /** 本文件新增进 `seen` 的 message.id，缓存复用时据此补齐跨文件去重。 */
     seenIds: [],
+    /** 本文件的会话标识（文件名即 sessionId），缓存复用时据此还原上下文序列。 */
+    sessionId: '',
   }
   const bump = (map, key, delta) => map.set(key, (map.get(key) ?? 0) + delta)
+
+  // 会话标识就是文件名（不含扩展名）。子代理日志放在 `subagents/` 下，
+  // 它们的提示不在主会话的上下文窗口里，混进来会把曲线拉花。
+  out.sessionId = path.basename(file, '.jsonl')
 
   let text
   try {
@@ -275,6 +294,25 @@ function scanFile(file, cutoff, seen) {
         perDay.set(model, { input: inTok, output, cost })
       }
     }
+
+    // 上下文窗口占用：本轮的输入（含缓存读写）就是这一轮**用完**之后的窗口
+    // 内容量。输出不算——它是这一轮新生成、下一轮才会进窗口的东西。
+    //
+    // **零值丢掉。** 首轮请求发出时 `cache_read` 与 `cache_write` 都还是 0，
+    // 只有 `input_tokens` 有值，那是真实读数；但流式写下的「请求已发出、
+    // 回复还没来」那种空快照会算出 0，画到图上就是一根假谷底。
+    const contextTokens = input + cacheRead + cacheWrite
+    if (contextTokens > 0) {
+      out.contextTurns.push({
+        at: Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : 0,
+        tokens: contextTokens,
+        output,
+        model,
+        // 轮次序号按文件内出现顺序给，跨文件不保证连续——它只用来排序与
+        // 标「第几轮」，不参与任何跨会话运算。
+        seq: out.contextTurns.length + 1,
+      })
+    }
   }
   return out
 }
@@ -288,6 +326,14 @@ function scanFile(file, cutoff, seen) {
 function mergeScan(acc, part) {
   acc.unparsed += part.unparsed
   acc.skipped += part.skipped
+  // 上下文序列按会话归集。同一个会话可能跨多个文件（resume / fork 会把
+  // 旧行抄进新文件），但**只保留读数最多的那一份**：抄来的旧行与原件
+  // 是同一批读数，两边都收会画出一段重复的锯齿。
+  const turns = part.contextTurns ?? []
+  if (turns.length > 0 && part.sessionId) {
+    const held = acc.contextBySession.get(part.sessionId)
+    if (!held || turns.length > held.length) acc.contextBySession.set(part.sessionId, turns)
+  }
   part.byHour.forEach((count, hour) => {
     acc.byHour[hour] += count
   })
@@ -357,7 +403,7 @@ function mergeScan(acc, part) {
  * @param {number} days  统计最近多少天
  * @param {Map<string, {fingerprint: string, part: object}>} [cache]
  */
-export function aggregate(root, days, cache) {
+export function aggregate(root, days, cache, sessionId) {
   const cutoff = Date.now() - days * 86_400_000
   const files = collectFiles(root, days)
   const acc = {
@@ -369,6 +415,15 @@ export function aggregate(root, days, cache) {
     byDayModel: new Map(),
     unparsed: 0,
     skipped: 0,
+    /**
+     * 每个会话的上下文序列：`sessionId` → 逐轮读数。
+     *
+     * **不并进 `byDay` 那样的日粒度桶。** 上下文窗口是**会话级的**——它随
+     * 单场对话一路增长、压缩、再增长，把两个会话的读数按天混在一起画，
+     * 得到的曲线既不描述任何一场对话，也读不出「什么时候快满了」。
+     * 所以这里保留会话边界，由界面只取当前这一场。
+     */
+    contextBySession: new Map(),
   }
   /** 去重键是 message.id；同一条消息可能跨文件重复出现。 */
   const seen = new Set()
@@ -497,6 +552,16 @@ export function aggregate(root, days, cache) {
     total,
     daily,
     /**
+     * **当前这一场会话**的上下文窗口占用曲线（按时间顺序）。
+     *
+     * 只给当前会话：上下文是会话级的东西，别的会话的读数对「我现在这个窗口
+     * 有多满」没有意义。`sessionId` 由插件用 `$.session.id()` 传进来，
+     * 与本文件自己的 sessionId 是同一个值（transcript 的文件名）。
+     *
+     * 每项只有时刻、token 数、输出数与模型名——没有内容、没有路径。
+     */
+    contextTurns: (sessionId ? acc.contextBySession.get(sessionId) : undefined) ?? [],
+    /**
      * 逐日轮次与消息数。取「有轮次」与「有消息」两边的并集：
      * 只补轮次会漏掉纯 assistant 记录的日子，只补消息会漏掉只有提问的日子。
      */
@@ -579,6 +644,8 @@ function packCache(cache) {
       held.part.unparsed,
       held.part.skipped,
       keepIds.has(file) ? held.seenIds : [],
+      held.part.sessionId ?? '',
+      held.part.contextTurns ?? [],
     ])
   }
   return out
@@ -602,6 +669,8 @@ function unpackCache(raw) {
       unparsed,
       skipped,
       seenIds,
+      sessionId,
+      contextTurns,
     ] = row
     if (typeof file !== 'string' || typeof fingerprint !== 'string') continue
     cache.set(file, {
@@ -616,6 +685,8 @@ function unpackCache(raw) {
         unparsed: Number(unparsed) || 0,
         skipped: Number(skipped) || 0,
         seenIds: Array.isArray(seenIds) ? seenIds : [],
+        sessionId: typeof sessionId === 'string' ? sessionId : '',
+        contextTurns: Array.isArray(contextTurns) ? contextTurns : [],
       },
       seenIds: Array.isArray(seenIds) ? seenIds : [],
     })
@@ -627,6 +698,9 @@ const isMain = process.argv[1] && import.meta.url.endsWith(path.basename(process
 if (isMain) {
   const root = process.argv[2]
   const days = Number(process.argv[3]) || 7
+  // 第四个参数是当前会话的 id（transcript 文件名），用来挑出这一场的上下文曲线。
+  // 不给就只返回空数组——上下文是会话级的东西，没有会话就无从谈起。
+  const sessionId = typeof process.argv[4] === 'string' ? process.argv[4] : ''
   // 缓存通过 stdin 传入、经 stdout 回传：插件在两次扫描之间把它留在内存里。
   // 不写任何缓存文件——PRIVACY.md 的「不落盘」承诺因此照旧成立。
   let cache = new Map()
@@ -643,7 +717,7 @@ if (isMain) {
     /* 没有 stdin 或内容坏了：退回全量扫描，不影响正确性 */
   }
   try {
-    const result = aggregate(root, days, cache)
+    const result = aggregate(root, days, cache, sessionId)
     process.stdout.write(JSON.stringify({ ...result, cache: packCache(cache) }))
   } catch (error) {
     process.stdout.write(
