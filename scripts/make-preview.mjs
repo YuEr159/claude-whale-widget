@@ -55,10 +55,25 @@ const cards = STATES.map(state => {
 }).join('')
 
 // 人设页单独展示一行；台词跟着情绪走，这里把五种都列出来。
+//
+// **第二行给的是某个具体时刻的菜**，不是情绪那档的默认句——上屏时主角行
+// 由 `dishOf(now)` 按时段替换，预览若还印默认值，读者会以为它永远是那句。
+// 每个情绪挑一个它真正出现的钟点，预览就与面板里看到的一致。
+const MOOD_HOUR = { idle: 7, working: 10, busy: 13, tired: 22, sleep: 3 }
+const atHour = hour => new Date(2026, 9, 26, hour, 30, 0, 0).getTime()
 const traitRows = ['idle', 'working', 'busy', 'tired', 'sleep']
   .map(mood => {
-    const [a, b, c] = whaleTraitOf(mood)
+    const [a, b, c] = whaleTraitOf(mood, atHour(MOOD_HOUR[mood]))
     return `<tr><td style="padding:2px 10px 2px 0;color:#889">${mood}</td><td style="padding:2px 10px;color:#333">${a}</td><td style="padding:2px 10px;color:#2F4F8F;font-weight:700">${b}</td><td style="padding:2px 0;color:#889">${c}</td></tr>`
+  })
+  .join('')
+
+// 一天里的菜：九个时段各一行，方便核对早中晚确实不一样。
+const dishRows = [0, 6, 9, 11, 12, 14, 17, 18, 21]
+  .map((hour, index, list) => {
+    const to = list[index + 1] ?? 24
+    const label = `${String(hour).padStart(2, '0')}:00–${String(to).padStart(2, '0')}:00`
+    return `<tr><td style="padding:2px 10px 2px 0;color:#889">${label}</td><td style="padding:2px 0;color:#333">${whaleTraitOf('working', atHour(hour))[1]}</td></tr>`
   })
   .join('')
 
@@ -67,8 +82,10 @@ const html = `<!doctype html><meta charset=utf-8><title>小鲸鱼挂件预览</t
 <body style="margin:0;padding:18px;background:#f4f6fb;font-family:system-ui">
 <h2 style="font-size:15px;margin:0 0 10px">五种状态（面板尺寸）</h2>
 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:1180px">${cards}</div>
-<h2 style="font-size:15px;margin:24px 0 10px">气泡人设页（按情绪轮播）</h2>
+<h2 style="font-size:15px;margin:24px 0 10px">气泡人设页（按情绪轮播，主角行是当下馋的那一口）</h2>
 <table style="font:13px system-ui;border-collapse:collapse">${traitRows}</table>
+<h2 style="font-size:15px;margin:24px 0 10px">一天里想吃的（主角行按时段换）</h2>
+<table style="font:13px system-ui;border-collapse:collapse">${dishRows}</table>
 <h2 style="font-size:15px;margin:24px 0 10px">输入框上方的用量条</h2>
 <div style="display:flex;align-items:center;gap:10px;max-width:620px;background:#fff;border:1px solid #e3e8f2;border-radius:8px;padding:8px 12px">
 <span style="flex:1"></span>

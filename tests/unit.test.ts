@@ -7,7 +7,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { costOf, priceOf } from '../hooks/pricing'
 import { clip, countdown, displayWidth, pct, tokens, usd } from '../hooks/format'
-import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, freshnessOf, toUsageView } from '../hooks/usage-view'
+import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, dishOf, freshnessOf, toUsageView, whaleTraitOf } from '../hooks/usage-view'
 import {
   addModelSpend,
   countPatchLines,
@@ -198,6 +198,60 @@ test('情绪随一天里的时间变化，与额度无关', () => {
   expect(moods.size).toBe(5)
   // 五档具体是哪五档，也一并钉住——只数个数的话，把两档对调仍然会过。
   expect([...moods].sort()).toEqual(['busy', 'idle', 'sleep', 'tired', 'working'])
+})
+
+/**
+ * 「想吃什么」按更细的时段走：比情绪多出几段（饭前、傍晚单独成段），
+ * 因为「这一顿馋什么」的节奏跟「她此刻在做什么」不是同一件事。
+ *
+ * 两边都用本地时区构造，边界同为左闭右开。
+ */
+test('鲸鱼娘想吃的东西随一天里的钟点变', () => {
+  const at = (hour: number, minute = 0) => new Date(2026, 9, 26, hour, minute, 0).getTime()
+
+  expect(dishOf(at(0))).toBe('想吃夜宵')
+  expect(dishOf(at(5, 59))).toBe('想吃夜宵') // 临界
+  expect(dishOf(at(6))).toBe('豆浆油条')
+  expect(dishOf(at(9))).toBe('小笼包')
+  expect(dishOf(at(11))).toBe('快开饭了') // 11 点单独一段：等不及了
+  expect(dishOf(at(12))).toBe('大白饭')
+  expect(dishOf(at(14))).toBe('想吃下午茶')
+  expect(dishOf(at(17))).toBe('想吃晚饭') // 17 点单独一段：等下班
+  expect(dishOf(at(18))).toBe('再来一碗')
+  expect(dishOf(at(21))).toBe('想吃宵夜')
+  expect(dishOf(at(23, 59))).toBe('想吃宵夜')
+
+  // 九个时段各一句，相邻不重复——否则「换了一顿」看不出来。
+  const starts = [0, 6, 9, 11, 12, 14, 17, 18, 21]
+  const byStart = starts.map(hour => dishOf(at(hour)))
+  for (let index = 1; index < byStart.length; index += 1) {
+    expect(byStart[index] === byStart[index - 1]).toBe(false)
+  }
+  expect(new Set(byStart).size).toBe(starts.length)
+
+  // 同一时刻永远同一句。
+  expect(dishOf(at(15))).toBe(dishOf(at(15)))
+})
+
+test('台词的主角行由时刻决定，另两行仍归情绪', () => {
+  const at = (hour: number) => new Date(2026, 9, 26, hour, 30, 0).getTime()
+
+  const withTime = whaleTraitOf('busy', at(12))
+  expect(withTime[0]).toBe(whaleTraitOf('busy')[0])
+  expect(withTime[2]).toBe(whaleTraitOf('busy')[2])
+  expect(withTime[1]).toBe(dishOf(at(12)))
+
+  // 不给时刻就沿用情绪那档的默认值：预览脚本与旧调用不受影响。
+  expect(whaleTraitOf('busy')).toEqual(['胃口特别大', '再来一碗', '偷吃 Token'])
+
+  // 同一情绪在不同时段说不同的菜——这才是这次要的行为。
+  expect(whaleTraitOf('idle', at(7))[1]).not.toBe(whaleTraitOf('idle', at(16))[1])
+
+  // 人设页真的把时刻传下去了：第二行等于那个时刻的菜。
+  const page = bubblePages(toUsageView({}), at(15), { mood: 'working' })
+    .find(item => item.id === 'whale')
+  expect(page).toBeDefined()
+  expect(page!.lines[1]).toBe(dishOf(at(15)))
 })
 
 test('usage 视图挑出 5h/7d 两个窗口', () => {
