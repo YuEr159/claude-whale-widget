@@ -464,11 +464,13 @@ export const register: Register = (on, options) => {
       const liveView = toUsageView(live)
       const percent = liveView.contextPercent
       if (percent !== undefined) {
+        // **不算输出。** 输出是这一轮新生成的东西，要下一轮才会进窗口——
+        // 把它算进「窗口占用」是重复计一次。历史侧（日志重建）也是这个口径，
+        // 两边必须一致，否则接缝处同样的窗口会高低差一截。
         const usedTokens =
           usage.input_tokens +
           usage.cache_read_input_tokens +
-          usage.cache_creation_input_tokens +
-          usage.output_tokens
+          usage.cache_creation_input_tokens
         // 只有当轮的构成：`live` 是这一轮结束时的窗口快照。
         // 走面板同一个解析函数，形状不对就当作没有构成，不另写一套判空。
         const liveDetail = toContextDetail(liveView.breakdown)
