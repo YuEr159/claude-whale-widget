@@ -147,6 +147,19 @@ function scanFile(file, cutoff, seen) {
   let turnIndex = 0
   /** 每一轮提问在窗口里留下的最后一个读数，按 `turnIndex` 索引。 */
   const contextByTurn = new Map()
+  /**
+   * 压缩边界：`{ at, trigger, preTokens, postTokens }`。
+   *
+   * 引擎压缩完会往日志里写一行 `type: "system"` / `subtype: "compact_boundary"`，
+   * 带着 `compactMetadata`：压缩前多大、压缩后多小、丢了累计多少 token、
+   * 花了多久、是自动还是手动。这是**引擎自己记下的确定事实**，比
+   * 「占比跌了三成就猜是压缩」可靠得多——实测有一次压缩只跌了一半
+   * （36.6% → 18.0%），按比例猜会漏掉。
+   *
+   * 边界本身不带轮次号，所以要事后按时间对齐到第一条读数不早于它的轮次
+   * （见循环之后的配对）。
+   */
+  const compactBounds = []
 
   let start = 0
   while (start < text.length) {
@@ -156,15 +169,33 @@ function scanFile(file, cutoff, seen) {
     start = end + 1
     if (line.length === 0) continue
     // 便宜的预筛：99% 的行既不含 usage 也不是 user 行，先跳过大半，
-    // 省掉 JSON.parse 的开销。
+    // 省掉 JSON.parse 的开销。压缩边界行是第三种要留意的：它既没有
+    // `usage` 也不是 `user`，不在这里放行就永远读不到。
     const hasUsage = line.includes('"usage"')
     const hasUser = line.includes('"type":"user"')
-    if (!hasUsage && !hasUser) continue
+    const hasCompact = line.includes('"compact_boundary"')
+    if (!hasUsage && !hasUser && !hasCompact) continue
     let row
     try {
       row = JSON.parse(line)
     } catch {
       out.unparsed += 1
+      continue
+    }
+    // 压缩边界：只记时间和元数据。轮次归属在循环之后按时刻配对。
+    if (row?.type === 'system' && row?.subtype === 'compact_boundary') {
+      const meta = row.compactMetadata
+      if (meta && typeof meta === 'object') {
+        const at = Date.parse(row.timestamp)
+        if (Number.isFinite(at) && !(at < cutoff)) {
+          compactBounds.push({
+            at,
+            trigger: typeof meta.trigger === 'string' ? meta.trigger : '',
+            preTokens: Number(meta.preTokens) || 0,
+            postTokens: Number(meta.postTokens) || 0,
+          })
+        }
+      }
       continue
     }
     // 轮次：一条用户真正输入的消息算一轮。
@@ -178,6 +209,11 @@ function scanFile(file, cutoff, seen) {
     // 第 3 条是后补的：实测本机被判成轮次的 1665 行里有 683 行（41%）其实
     // 是工具结果，全在 `subagents/agent-*.jsonl` 里。轮次因此几乎翻倍，
     // 热图的「轮次」口径比「消息数」还高。
+    //
+    // 第 4 条（`isCompactSummary`）同样是后补的：压缩时引擎会把摘要写成一条
+    // `type: "user"` 的消息，**它带 `promptId`**，前三条全拦不住。那条摘要
+    // 不是读者提的问题，算成一轮就会在「轮次」热图上凭空多一格，上下文曲线
+    // 也会在压缩处多出一根没有对应提问的柱子。
     if (row?.type === 'user') {
       const content = row.message?.content
       const hasToolResultContent =
@@ -185,7 +221,8 @@ function scanFile(file, cutoff, seen) {
       const isToolResult =
         row.toolUseResult !== undefined ||
         row.promptId === undefined ||
-        hasToolResultContent
+        hasToolResultContent ||
+        row.isCompactSummary === true
       if (!isToolResult) {
         const day = dayKey(row.timestamp)
         const stamp = Date.parse(row.timestamp)
@@ -339,9 +376,33 @@ function scanFile(file, cutoff, seen) {
 
   // 归组结果按时刻排序后写进 `out`：`turnIndex` 只保证文件内递增，
   // 而同一场的消息可能分散在多个文件里（resume / fork）。
-  out.contextTurns = [...contextByTurn.values()]
-    .sort((a, b) => a.at - b.at)
-    .map((item, index) => ({ ...item, seq: index + 1 }))
+  const ordered = [...contextByTurn.values()].sort((a, b) => a.at - b.at)
+
+  // ------------------- 把压缩边界对到具体的轮次 -------------------
+  //
+  // 边界只带时刻，所以配对规则是：**第一条读数不早于边界的轮次**，就是
+  // 「压缩之后的那一轮」——压缩之后引擎立刻重发请求，那一轮的读数就是
+  // 压缩后的真实体积。
+  //
+  // 为什么不用「时间最接近」：同一轮里工具调用会写出几十条消息，紧挨着
+  // 边界的那条可能属于**压缩之前那一轮**的最后一次往返。用 `>=` 单向找，
+  // 才不会把标记挂到前一根柱子上。
+  //
+  // 配对不上的边界（压缩之后会话就结束了、或者读数被日期窗口裁掉）直接
+  // 丢掉：挂不上就不标，比标错位置好。
+  if (compactBounds.length > 0) {
+    for (const bound of compactBounds) {
+      const hit = ordered.find(turn => turn.at >= bound.at)
+      if (!hit) continue
+      hit.compact = {
+        trigger: bound.trigger,
+        preTokens: bound.preTokens,
+        postTokens: bound.postTokens,
+      }
+    }
+  }
+
+  out.contextTurns = ordered.map((item, index) => ({ ...item, seq: index + 1 }))
   return out
 }
 

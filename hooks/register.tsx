@@ -55,7 +55,6 @@ import {
   overviewFooter,
   rasterizeStacks,
   rasterizeTurnBars,
-  stackCaption,
   stackColor,
   turnBars,
   turnBarsCaption,
@@ -972,7 +971,7 @@ export const register: Register = (on, options) => {
                 `contextView`），不会各说各的。
                 终端那一路加 `yMax`：那边没有 Svg、也就没有纵轴刻度，上限只能
                 写在文字里；桌面端的轴顶已经标了上界。 */}
-            <Text dimColor>{Svg ? contextScreen.caption : stackCaption(contextScreen.bars.length, contextScreen.peak, contextScreen.yMax)}</Text>
+            <Text dimColor>{Svg ? contextScreen.caption : contextScreen.terminalCaption}</Text>
             {/* 图例只列「分类」：骨架段已经在图注里说过了（「12 轮」「峰值
                 56%」），再加上「已用（无构成）」「压缩缓冲」两格只是把同一
                 件事说了两遍。分类才是柱内那些颜色真正需要解释的东西。 */}

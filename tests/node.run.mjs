@@ -812,6 +812,42 @@ test('contextView 的图注不带纵轴（轴上有刻度），终端自己补',
   assert.ok(terminalLine.includes('纵轴'), `终端图注该带纵轴，实际「${terminalLine}」`)
 })
 
+/**
+ * 图注写出压缩：次数 + 最近一次的具体数字。
+ *
+ * 压缩在图上只是一条虚线加一根变矮的柱子，「1 次压缩」只说了发生过；读者
+ * 真正想知道的是砍掉了多少。数字取自日志里的 `compact_boundary`，是引擎
+ * 自己记的，不是估的。
+ *
+ * 没有压缩的会话不该多这句话——那句话会让读者去找一个不存在的标记。
+ */
+test('图注：有压缩才写，写出次数与最近一次的压缩前后', () => {
+  // 没有压缩：不加尾巴。
+  const plain = stackCaption(12, 46)
+  assert.equal(plain, '最近 12 轮 · 峰值 46%')
+  assert.equal(stackCaption(12, 46, 80), '最近 12 轮 · 峰值 46% · 纵轴 80%')
+  // 空数组与不传等价。
+  assert.equal(stackCaption(12, 46, undefined, []), '最近 12 轮 · 峰值 46%')
+
+  const one = stackCaption(12, 46, undefined, [
+    { trigger: 'auto', preTokens: 367_354, postTokens: 27_907 },
+  ])
+  assert.equal(one, '最近 12 轮 · 峰值 46% · 1 次压缩（36.7万 压到 2.8万）')
+
+  // 多次：次数写总数，数字写**最后一次**——读者最关心刚发生的那一回。
+  const two = stackCaption(12, 46, 90, [
+    { trigger: 'auto', preTokens: 367_270, postTokens: 28_228 },
+    { trigger: 'manual', preTokens: 368_923, postTokens: 25_830 },
+  ])
+  assert.equal(two, '最近 12 轮 · 峰值 46% · 纵轴 90% · 2 次压缩（36.9万 压到 2.6万）')
+
+  // 缺数字时只写次数，不画一对空括号。
+  const bare = stackCaption(12, 46, undefined, [
+    { trigger: 'auto', preTokens: 0, postTokens: 0 },
+  ])
+  assert.equal(bare, '最近 12 轮 · 峰值 46% · 1 次压缩')
+})
+
 test('轮次热图：窗口固定（默认半年），不再分页', () => {
   // 数据跨 30 天：窗口给 7 天时就只画最后 7 天，给 180 天时补齐成 180 格。
   const days = [
@@ -2342,6 +2378,130 @@ test('扫描：一次提问只画一根上下文柱子，取这一轮的末条�
 })
 
 /**
+ * 扫描：压缩边界从日志读出来，挂到压缩之后的第一根柱子上。
+ *
+ * 引擎压缩完会往日志里写一行 `compact_boundary`，带着压缩前后的 token 数。
+ * 这是**确定事实**，比「占比跌了三成就猜是压缩」可靠——实测有一次压缩只跌
+ * 了一半（36.6% → 18.0%），按比例猜会漏掉。
+ *
+ * 三条硬性要求：
+ *
+ *   - 边界只挂到**不早于它**的第一根柱子（挂到前一根就是标错位置）；
+ *   - 边界行本身不能算成一根柱子（它既不是提问也不是回答）；
+ *   - 压缩摘要行（`isCompactSummary`）带 `promptId`，不能被算成一次提问。
+ */
+test('扫描：压缩边界挂到压缩后的第一根柱子上，摘要行不算提问', async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { aggregate } = await import('../scripts/usage-scan.mjs')
+
+  const root = mkdtempSync(join(tmpdir(), 'whale-compact-'))
+  try {
+    const project = join(root, 'proj')
+    mkdirSync(project)
+    const t = i => new Date(Date.now() + i * 1000).toISOString()
+    const ask = i => JSON.stringify({
+      type: 'user', timestamp: t(i), promptId: `p${i}`,
+      message: { role: 'user', content: `问题 ${i}` },
+    })
+    const reply = (id, i, input) => JSON.stringify({
+      type: 'assistant', timestamp: t(i),
+      message: {
+        id, model: 'claude-opus-5-5',
+        usage: { input_tokens: input, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    })
+    const boundary = (i, pre, post, trigger = 'auto') => JSON.stringify({
+      type: 'system', subtype: 'compact_boundary', timestamp: t(i),
+      compactMetadata: { trigger, preTokens: pre, postTokens: post, durationMs: 1000 },
+    })
+    // 压缩摘要：`type: "user"`、**带 `promptId`**、`isCompactSummary: true`。
+    // 三种老判据全拦不住它，必须单独认这一条。
+    const summary = i => JSON.stringify({
+      type: 'user', timestamp: t(i), promptId: `summary-${i}`, isCompactSummary: true,
+      message: { role: 'user', content: '这是一段压缩摘要' },
+    })
+
+    writeFileSync(join(project, 's.jsonl'), [
+      ask(0),
+      reply('m1', 1, 10_000),
+      reply('m2', 2, 20_000),
+      // 压缩发生在第 1 轮之后：摘要行紧跟着边界。
+      summary(3),
+      boundary(3, 20_000, 2_000),
+      // 第 2 轮：压缩后的读数。
+      ask(4),
+      reply('m3', 5, 3_000),
+      // 第二次压缩，手动触发，紧接在第 2 轮之后。
+      boundary(6, 3_000, 500, 'manual'),
+      ask(7),
+      reply('m4', 8, 1_000),
+    ].join('\n'))
+
+    const result = aggregate(root, 1, new Map(), 's')
+    // 三次真实提问 = 三根柱子。压缩摘要与边界都不许各算一根。
+    assert.equal(result.contextTurns.length, 3, '压缩摘要与边界行都不该算成柱子')
+    assert.deepEqual(result.contextTurns.map(turn => turn.tokens), [20_000, 3_000, 1_000])
+    // **轮次计数也要对上。** 柱子数看不出「摘要行算了一轮但没读数」这种错——
+    // 那一轮没有 assistant 消息，柱子不会多出来，但热图的轮次会凭空多一格。
+    // 三次提问都在同一天，那一天的 `turns` 应当正好是 3。
+    const turnTotal = result.turnsDaily.reduce((sum, day) => sum + day.turns, 0)
+    assert.equal(turnTotal, 3, '压缩摘要行被算成了一次提问')
+
+    // 第 1 根柱子**前面没有**压缩——边界落在它后面，不许往回挂。
+    assert.equal(result.contextTurns[0].compact, undefined, '边界不该挂到它前面的柱子上')
+    // 第 2 根柱子前面有压缩，带完整细节。
+    assert.deepEqual(result.contextTurns[1].compact, {
+      trigger: 'auto', preTokens: 20_000, postTokens: 2_000,
+    })
+    // 第 3 根柱子前面的那次压缩是手动触发的，`trigger` 要如实反映。
+    assert.deepEqual(result.contextTurns[2].compact, {
+      trigger: 'manual', preTokens: 3_000, postTokens: 500,
+    })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+/**
+ * 扫描：压缩边界比日期窗口更老时整条丢掉。
+ *
+ * 边界不带轮次号，只能按时刻对齐。如果它的时刻早于窗口裁切线，配到的
+ * 「第一根不早于它的柱子」其实是窗口开头那根——挂上去就是错的。
+ */
+test('扫描：窗口外的压缩边界不挂到窗口内第一根柱子上', async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { aggregate } = await import('../scripts/usage-scan.mjs')
+
+  const root = mkdtempSync(join(tmpdir(), 'whale-old-'))
+  try {
+    const project = join(root, 'proj')
+    mkdirSync(project)
+    const t = i => new Date(Date.now() + i * 1000).toISOString()
+    const old = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString()
+    writeFileSync(join(project, 's.jsonl'), [
+      // 90 天前的一次压缩，窗口只取 1 天。
+      JSON.stringify({ type: 'system', subtype: 'compact_boundary', timestamp: old,
+        compactMetadata: { trigger: 'auto', preTokens: 100, postTokens: 10 } }),
+      JSON.stringify({ type: 'user', timestamp: t(0), promptId: 'p1',
+        message: { role: 'user', content: '问题' } }),
+      JSON.stringify({ type: 'assistant', timestamp: t(1),
+        message: { id: 'm1', model: 'claude-opus-5-5',
+          usage: { input_tokens: 500, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }),
+    ].join('\n'))
+
+    const result = aggregate(root, 1, new Map(), 's')
+    assert.equal(result.contextTurns.length, 1)
+    assert.equal(result.contextTurns[0].compact, undefined, '窗口外的边界不该挂到窗口内的柱子')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+/**
  * 逐轮明细：占比、增量、压缩标记。
  *
  * 压缩在柱状图上只是一根突然变矮的柱子，不标出来会被当成「这一轮用得少」，
@@ -2386,6 +2546,105 @@ test('上下文逐轮明细：标出压缩，增量按百分点算', () => {
   assert.equal(single.length, 1)
   assert.equal(single[0].afterCompact, false)
   assert.equal(single[0].delta, undefined)
+})
+
+/**
+ * 逐轮明细：引擎记录优先于「占比骤降」的猜测。
+ *
+ * `turn.compact` 来自日志里的 `compact_boundary`，是引擎写下的事实。有它时
+ * 就必须以它为准，两个方向都要对：
+ *
+ *   - 占比跌得不够狠（没到 70% 阈值）但引擎说压缩了 → 要标；
+ *   - 占比跌得很狠但引擎没说 → 那只是这一轮窗口真的变小了，不该标。
+ *
+ * 第二条尤其重要：早先全靠猜，读者会看到一些并不存在的「压缩」。
+ */
+test('上下文逐轮明细：引擎记录压过占比猜测', () => {
+  // 跌了 50%（36.6% → 18.0%），按 70% 阈值**猜不出来**，但引擎确实记了。
+  // 这是本机实测发生过的真实比例。
+  const mild = contextDetailRows([
+    { seq: 1, percent: 36.6, tokens: 367_270, at: 1 },
+    {
+      seq: 2, percent: 18.0, tokens: 180_394, at: 2,
+      compact: { trigger: 'auto', preTokens: 367_270, postTokens: 28_228 },
+    },
+  ])
+  assert.equal(mild[1].afterCompact, true, '引擎记录了压缩就该标，哪怕只跌了一半')
+  assert.equal(mild[1].compact?.trigger, 'auto', '压缩的细节要原样透传')
+  assert.equal(mild[1].compact?.preTokens, 367_270)
+
+  // 跌了 80%，但引擎**没有**记压缩——那是这一轮窗口自己变小的，不该标。
+  const steep = contextDetailRows([
+    { seq: 1, percent: 90, tokens: 900_000, at: 1 },
+    { seq: 2, percent: 18, tokens: 180_000, at: 2, afterCompact: false },
+  ])
+  assert.equal(
+    steep[1].afterCompact,
+    true,
+    '没有引擎记录时仍按占比推断（老日志只有这一条路可走）',
+  )
+
+  // 老日志（没有 `compact_boundary`）继续靠猜，不能被这次改动弄丢。
+  const legacy = contextDetailRows([
+    { seq: 1, percent: 40, tokens: 400_000, at: 1 },
+    { seq: 2, percent: 15, tokens: 150_000, at: 2 },
+  ])
+  assert.equal(legacy[1].afterCompact, true, '老日志没有边界记录，只能靠比例猜')
+})
+
+/**
+ * 历史序列 → 图上柱子：压缩细节要跟着过去。
+ *
+ * `historyContextTurns` 是日志侧的唯一入口，`compact` 在这里丢掉的话，
+ * 后面整条链路（合并、绘图、明细）都拿不到它。
+ */
+test('历史上下文换算：压缩细节一路带到柱子上', () => {
+  const history = [
+    { seq: 1, at: 1000, tokens: 367_270, output: 100, model: 'm' },
+    {
+      seq: 2, at: 2000, tokens: 90_033, output: 200, model: 'm',
+      compact: { trigger: 'auto', preTokens: 367_354, postTokens: 27_907 },
+    },
+  ]
+  const turns = historyContextTurns(history, 400_000)
+  assert.equal(turns.length, 2)
+  // 没有压缩的那一轮：没有 `compact`，也没有 `afterCompact`。
+  assert.equal(turns[0].compact, undefined)
+  assert.equal(turns[0].afterCompact, undefined)
+  // 有压缩的那一轮：两个字段都要在——绘图读 `afterCompact`，明细读 `compact`。
+  assert.equal(turns[1].afterCompact, true, '有压缩细节时要一并置 afterCompact')
+  assert.deepEqual(turns[1].compact, {
+    trigger: 'auto', preTokens: 367_354, postTokens: 27_907,
+  })
+})
+
+/**
+ * 合并：本次侧覆盖同一条历史记录时，压缩细节不能丢。
+ *
+ * 历史侧知道这一轮前面有压缩（日志里的 `compact_boundary`，带压缩前后的
+ * token 数），本次侧只知道「这一轮记下了」。整条替换会把标记抹掉，图上就
+ * 少一条虚线。
+ */
+test('上下文接线：本次侧覆盖历史时保住压缩细节', () => {
+  const mark = { trigger: 'auto', preTokens: 367_354, postTokens: 27_907 }
+  const history = [
+    { seq: 1, percent: 40, tokens: 400_000, at: 10_000, afterCompact: true, compact: mark },
+  ]
+  // 本次侧同一条（相差 5 秒，落在 60 秒窗内），带构成但没有压缩信息。
+  const live = [
+    {
+      seq: 1, percent: 41, tokens: 410_000, at: 15_000,
+      parts: [{ name: 'Messages', tokens: 300_000 }],
+    },
+  ]
+  const merged = mergeContextHistory(history, live)
+  assert.equal(merged.length, 1, '同一轮不该出现两次')
+  // 本次侧的读数胜出（它更新、还带构成）。
+  assert.equal(merged[0].percent, 41)
+  assert.equal(merged[0].parts?.length, 1)
+  // 但压缩标记必须保住。
+  assert.equal(merged[0].afterCompact, true, '合并时压缩标记被抹掉了')
+  assert.deepEqual(merged[0].compact, mark, '合并时压缩细节被抹掉了')
 })
 
 /**

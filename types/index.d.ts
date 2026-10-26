@@ -83,8 +83,19 @@ export type ContextTurn = {
    * 压缩是两轮之间的动作，落到图上就是「这根柱子前面竖一条虚线」：压缩后
    * 上下文会骤降，读者看到柱子突然变矮时，得能知道那是压缩造成的，而不是
    * 自己少用了。
+   *
+   * 本次会话（`turn.complete` 记下的）由引擎的 `session.compact` hook 置位；
+   * 历史侧（日志重建的）由 `compact_boundary` 行置位。两条路最后汇到同一个
+   * 字段，图不必知道它从哪来。
    */
   afterCompact?: boolean
+  /**
+   * 压缩的引擎细节：压缩前多大、摘要多大、自动还是手动。
+   *
+   * 只有历史侧（日志重建）有——`session.compact` hook 只告诉「压缩发生了」，
+   * 拿不到这几个数。所以本次侧记下的轮次这个字段为空，是正常情况。
+   */
+  compact?: CompactMark
 }
 
 /** 上下文中一类内容的占用。 */
@@ -158,6 +169,23 @@ export type LocalUsage = {
   sessionId?: string
 }
 
+/**
+ * 一次压缩的引擎记录。
+ *
+ * 来自会话日志里的 `compact_boundary` 行，是引擎自己写下的事实，不是从
+ * 占比变化反推的猜测。`preTokens` 是压缩前窗口里的 token 数，`postTokens`
+ * 是压缩后**摘要**的大小——注意它不含系统提示与工具定义，所以压缩后第一轮
+ * 的实际读数会比它大好几倍，两者不能直接相比。
+ */
+export type CompactMark = {
+  /** 触发方式：`auto`（到了自动压缩阈值）或 `manual`（手动 `/compact`）。 */
+  trigger: string
+  /** 压缩前窗口里的 token 数。 */
+  preTokens: number
+  /** 压缩后摘要的 token 数（不含系统提示与工具定义）。 */
+  postTokens: number
+}
+
 /** 从会话日志重建的一轮上下文读数。只有数字与模型名，没有内容。 */
 export type HistoricalContextTurn = {
   /** 记录时刻，毫秒。 */
@@ -169,6 +197,12 @@ export type HistoricalContextTurn = {
   model: string
   /** 会话内递增的序号，只用于排序与标「第几轮」。 */
   seq: number
+  /**
+   * 这一轮之前刚发生过一次压缩；带引擎记录的细节。
+   *
+   * 日志里没有这个字段就说明这一轮前面没有压缩——不是「不知道」。
+   */
+  compact?: CompactMark
 }
 
 /** 本地扫描的运行时记录：结果、错误、最近一次扫描时间。 */

@@ -63,11 +63,15 @@
 
 | 字段 | 用途 |
 |---|---|
-| `type` | 只处理 `assistant` 行 |
+| `type` | 只处理 `assistant` 行、真正的 `user` 提问，以及压缩边界行（见下） |
 | `timestamp` | 按天归组 |
 | `message.id` | 同一条消息在流式写入时会重复多行，用它去重 |
 | `message.model` | 区分模型；按价格表决定是否计价 |
 | `message.usage` | 四个 token 计数 |
+| `promptId` / `toolUseResult` / `isCompactSummary` | 只用来判「这一行是不是读者真的提了个问题」，不取值 |
+| `subtype` / `compactMetadata` | **只在 `subtype === 'compact_boundary'` 的 `system` 行上读**：取 `trigger`、`preTokens`、`postTokens` 三个值，用来在上下文图上标出「这一轮前面被压缩过」 |
+
+压缩边界那三个值同样是纯数字加一个 `auto` / `manual` 的枚举，不含任何文本。
 
 **明确不读：**
 
@@ -93,14 +97,16 @@
   "today": { "day": "2026-10-20", "input": 0, "output": 0, "cost": 0, "messages": 0 },
   "total": { "input": 0, "output": 0, "cost": 0, "messages": 0 },
   "byModel": [{ "model": "claude-opus-5-5", "cost": 0 }],
-  "contextTurns": [{ "at": 1792957409950, "tokens": 90874, "output": 468, "model": "claude-opus-5-5", "seq": 1 }]
+  "contextTurns": [{ "at": 1792957409950, "tokens": 90874, "output": 468, "model": "claude-opus-5-5", "seq": 1,
+                     "compact": { "trigger": "auto", "preTokens": 367270, "postTokens": 28228 } }]
 }
 ```
 
 里面没有路径、没有会话 id、没有任何文本。`contextTurns` 是**当前这一场会话**
 逐轮的上下文占用（每轮一条，只有时刻、token 数与模型名）；它由日志里每条
 `assistant` 消息的 `message.usage` 换算而来，插件据它把上下文页的曲线一直
-画到会话开头，而不是只画自己启动之后的几轮。
+画到会话开头，而不是只画自己启动之后的几轮。`compact` 只在那一轮前面确实
+发生过压缩时出现，三个字段都来自引擎写的 `compact_boundary` 行，没有文本。
 
 **为什么要用 Node 脚本：** 单个日志文件可能有上百 MB，而插件自己的文件读取接口
 单次上限是 4 MiB，无法直接读。脚本全程只做「读一行 → 累加 → 丢弃」，不缓存原文。
