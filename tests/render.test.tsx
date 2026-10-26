@@ -132,13 +132,21 @@ test('页签与口径按钮自己就是那块方块：外面没有带边框的 B
     const button = path![path!.length - 1]
     // 是 Button，不是 Box。
     expect(button.type).toBe('Button')
-    // 按钮**外面不套任何带边框的 Box**。唯一允许有边框的祖先是页签与其他页
-    // 共用的那个大框（页签本来就是它的内容）；除此之外一律不许有边框——
-    // 那正是过去那层「看着是框、点不动」的壳。
-    const outers = path!.slice(0, -1).filter(node => node.props?.borderStyle !== undefined)
-    expect(outers.length).toBeLessThanOrEqual(1)
-    if (outers.length === 1) {
-      expect(outers[0].props.borderStyle).toBe('round')
+    // 按钮外面允许两类带边框的 Box：
+    //   1. 页签与其他页共用的那个大外框（页签本来就是它的内容）；
+    //   2. **设置页的分组框**——它包的是「标签 + 一组芯片」，是一组设置的
+    //      容器，不是按钮自己的外壳。
+    // **禁止**的是第三种：只包着一个按钮的带边框 Box。那正是过去那层
+    // 「看着是框、点不动」的壳——边框落在按钮命中区之外，读者以为整块能点。
+    // 区分方式：分组框里有按钮之外的东西（标签、其他芯片），外壳没有。
+    for (const outer of path!.slice(0, -1)) {
+      if (outer.props?.borderStyle === undefined) continue
+      expect(outer.props.borderStyle).toBe('round')
+      const childCount = (outer.children ?? []).filter(
+        (kid: any) => kid && typeof kid === 'object',
+      ).length
+      // 外壳只包一个孩子；分组框至少包两个（标签 + 芯片组）。
+      expect(childCount).toBeGreaterThan(1)
     }
     // 按钮自己有一块底色：未选中时也是一块方块，不是只剩文字。
     const text = (button.children ?? []).find((kid: any) => kid && typeof kid === 'object')

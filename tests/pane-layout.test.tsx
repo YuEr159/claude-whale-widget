@@ -1016,3 +1016,52 @@ test('设置页：三组标签列等宽，芯片起点对齐', async ($, on) => 
 
   await ui.unmount()
 })
+
+/**
+ * 设置页的每一组都装在自己的圆角框里。
+ *
+ * 三组设置（用量条 / 面板 / 立绘大小）说的是三件互不相干的事，只靠 `gap`
+ * 分隔时读起来像一整片文字。加框之后每一组的边界是画出来的，读者一眼看得出
+ * 「这是三件事」。
+ *
+ * 框的样式必须与页面其它分组框一致（`theme.inset` 底色 + `borderDimColor`），
+ * 层级是「页面外框（主）> 分组框（次，压暗一档）> 内容」——这是全项目统一的
+ * 两层结构，设置页不该自成一套。
+ */
+test('设置页：三组各有一个压暗的圆角分组框', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
+  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.store(on, {})
+
+  const ui = await $.ui.mount({
+    plugin: 'whale-usage',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'whale',
+    props: props(140),
+    viewport: { columns: 160, rows: 50 },
+  })
+  await ui.press({ key: 'whale-tab-settings' })
+  const tree = await ui.drawn() as any
+
+  /** 分组框 = 带边框、且直接孩子里有定宽标签 Box 的 row Box。 */
+  const groups: any[] = []
+  const walk = (n: any) => {
+    if (!n || typeof n !== 'object') return
+    if (n.type === 'Box' && n.props?.borderStyle) {
+      const kids = (n.children ?? []).filter((k: any) => k && typeof k === 'object')
+      if (kids.some((k: any) => k.type === 'Box' && k.props?.width === 8)) groups.push(n)
+    }
+    for (const k of n.children ?? []) walk(k)
+  }
+  walk(tree)
+
+  expect(groups.length).toBe(3)
+  for (const group of groups) {
+    expect(group.props.borderStyle).toBe('round')
+    expect(group.props.borderDimColor).toBe(true)
+    expect(group.props.paddingX).toBeUndefined()
+  }
+
+  await ui.unmount()
+})
