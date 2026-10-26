@@ -70,25 +70,37 @@ export function toUsageView(usage: unknown): UsageView {
 
   // ---------------- 上下文占比：统一到「自动压缩阈值」口径 ----------------
   //
+  // ## 分母
+  //
   // 引擎给了**两套互不相等的**数值，类型声明里明说
   // 「`breakdown` measures against the compaction window (`rawMaxTokens`),
   //  which may be smaller than `window`」：
   //
   //   - `context.percent` = `tokens / window`（状态栏那套，分母是完整窗口）
-  //   - `breakdown.percentage` = `totalTokens / rawMaxTokens`（/context 那套，
-  //     分母是**压缩窗口**，而 `autoCompactThreshold` 又是压缩真正触发的点）
+  //   - `breakdown.percentage` = `totalTokens / rawMaxTokens`（/context 那套）
   //
-  // 面板的柱状图按阈值算——读者关心的是「离自动压缩还有多远」，窗口涨到
-  // 100% 本身什么都不会发生。早先泡泡与用量条直接用引擎的 `percent`，
-  // 同一场会话会出现「泡泡说 28%、图上说 30.4%」的两套数字。这里统一：
-  // **只要拿得到 breakdown，就算阈值口径**，让所有出口说同一件事。
+  // 读者关心的是「离自动压缩还有多远」——窗口涨到 100% 本身什么都不会
+  // 发生，到阈值才会被砍。所以分母取 `autoCompactThreshold`（压缩真正触发
+  // 的点），其次 `rawMaxTokens`（压缩窗口），都没有才退回引擎的 `percent`。
   //
-  // 拿不到 breakdown 时（调用方没请求，或宿主没绑定会话）退回引擎的
-  // `percent`——那时至少还有一个真实读数，比空着好。
+  // ## 分子：**实际计费输入**，不是引擎的估算
+  //
+  // 这是最容易搞错的一处。`breakdown.totalTokens` 是引擎**本地估算**出来的，
+  // 把系统提示、工具定义、记忆文件逐类加起来；而 `context.tokens` 是
+  // `usage` 里 API **实际计数**的输入（未缓存 + 缓存写 + 缓存读）。引擎自己
+  // 在类型声明里写了 `its totalTokens need not equal tokens`——两者本来就不等。
+  //
+  // 历史侧（日志重建）**拿不到估算值**：`breakdown` 是引擎现算的，日志里
+  // 从不写它，只有每条 assistant 消息的 `usage`。所以整条曲线统一用计费
+  // 口径——否则同一轮会出现两根柱子（一根估算、一根计费，占比还不一样），
+  // 读者完全无法理解。
+  //
+  // 代价：这个百分比与引擎 `/context` 面板的读数不完全一致（后者用估算）。
+  // 换来的是**我们自己这条曲线自洽**——它要回答的是「窗口随时间怎么涨」，
+  // 而计费口径恰好是唯一在历史与实时两侧都拿得到的量。
   const breakdown = context?.breakdown as
     | { totalTokens?: unknown; autoCompactThreshold?: unknown; rawMaxTokens?: unknown }
     | undefined
-  const totalTokens = typeof breakdown?.totalTokens === 'number' ? breakdown.totalTokens : undefined
   const threshold =
     typeof breakdown?.autoCompactThreshold === 'number' && breakdown.autoCompactThreshold > 0
       ? breakdown.autoCompactThreshold
@@ -99,9 +111,12 @@ export function toUsageView(usage: unknown): UsageView {
       : undefined
   // 阈值优先，其次压缩窗口；两者都没有才退回引擎的完整窗口口径。
   const denominator = threshold ?? rawMax
+  // 分子：计费口径的输入 token。与历史侧（`input + cacheRead + cacheWrite`）
+  // 完全同源，所以接缝处两根柱子不会高低跳。
+  const billedInput = typeof context?.tokens === 'number' ? context.tokens : undefined
   const contextPercent =
-    denominator !== undefined && totalTokens !== undefined
-      ? Math.max(0, Math.min(100, (totalTokens / denominator) * 100))
+    denominator !== undefined && billedInput !== undefined
+      ? Math.max(0, Math.min(100, (billedInput / denominator) * 100))
       : typeof context?.percent === 'number'
         ? context.percent
         : undefined
