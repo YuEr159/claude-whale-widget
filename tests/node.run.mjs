@@ -2287,3 +2287,71 @@ test('上下文逐轮明细：标出压缩，增量按百分点算', () => {
   assert.equal(single[0].afterCompact, false)
   assert.equal(single[0].delta, undefined)
 })
+
+/**
+ * 上下文占比：有 breakdown 时统一到「自动压缩阈值」口径。
+ *
+ * 引擎给了两套互不相等的数值，类型声明里明说
+ * 「`breakdown` measures against the compaction window (`rawMaxTokens`),
+ *  which may be smaller than `window`」：
+ *
+ *   - `context.percent` = tokens / window（状态栏那套）
+ *   - `breakdown.percentage` = totalTokens / rawMaxTokens（/context 那套）
+ *
+ * 面板的柱状图按阈值算（读者关心「离压缩还有多远」）。早先泡泡与用量条直接
+ * 用引擎的 `percent`，同一场会话会出现「泡泡说 28%、图上说 30.4%」。
+ */
+test('上下文占比：有 breakdown 就按自动压缩阈值算，泡泡与用量条同源', () => {
+  // 窗口 1M，压缩阈值 921_600（92%），当前用了 300_000。
+  const usage = {
+    rateLimits: [],
+    context: {
+      tokens: 300_000,
+      window: 1_000_000,
+      percent: 30, // 引擎按完整窗口给的：30%
+      breakdown: { totalTokens: 300_000, rawMaxTokens: 1_000_000, autoCompactThreshold: 921_600 },
+    },
+  }
+  const view = toUsageView(usage)
+
+  // **阈值口径**：300k / 921.6k ≈ 32.6%，而不是引擎的 30%。
+  assert.ok(Math.abs(view.contextPercent - (300_000 / 921_600) * 100) < 1e-9)
+  assert.ok(view.contextPercent > 30, '按阈值算应当比按完整窗口算更大')
+  assert.equal(view.contextDenominator, 921_600, '分母应当报出阈值')
+
+  // 泡泡与用量条都从这里取，所以两条出口说的是同一个数。
+  const pages = bubblePages(view, { totals: { turns: 0, ms: 0, linesAdded: 0, linesRemoved: 0 } }, 0)
+  const contextPage = pages.find(page => page.id === 'context')
+  assert.ok(contextPage, '应当有上下文页')
+  assert.equal(contextPage.lines[1], pct(view.contextPercent))
+  assert.equal(bandSummary(view, ['cost'], 0), `上下文 ${pct(view.contextPercent)}`)
+
+  // 没有阈值时退回压缩窗口（rawMaxTokens）。
+  const noThreshold = toUsageView({
+    rateLimits: [],
+    context: {
+      tokens: 300_000, window: 1_000_000, percent: 30,
+      breakdown: { totalTokens: 300_000, rawMaxTokens: 800_000 },
+    },
+  })
+  assert.equal(noThreshold.contextDenominator, 800_000)
+  assert.ok(Math.abs(noThreshold.contextPercent - (300_000 / 800_000) * 100) < 1e-9)
+
+  // 连 breakdown 都没有：退回引擎的完整窗口口径——至少还有一个真实读数。
+  const noBreakdown = toUsageView({
+    rateLimits: [],
+    context: { tokens: 300_000, window: 1_000_000, percent: 30 },
+  })
+  assert.equal(noBreakdown.contextPercent, 30)
+  assert.equal(noBreakdown.contextDenominator, undefined)
+
+  // 超出阈值时夹到 100：柱子与百分比都不能溢出。
+  const over = toUsageView({
+    rateLimits: [],
+    context: {
+      tokens: 1_200_000, window: 1_000_000,
+      breakdown: { totalTokens: 1_200_000, rawMaxTokens: 1_000_000, autoCompactThreshold: 921_600 },
+    },
+  })
+  assert.equal(over.contextPercent, 100, '超过阈值应当夹到 100%')
+})

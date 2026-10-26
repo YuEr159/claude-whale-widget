@@ -886,7 +886,10 @@ export const register: Register = (on, options) => {
      * 当下这一份换算是成立的；换到别的会话就不成立——这也是只取当前会话
      * （`$.session.id()`）的原因。
      */
-    const contextDenominator = contextDetail?.autoCompactThreshold ?? contextDetail?.rawMaxTokens
+    // 分母与 `view.contextPercent` 同源：`toUsageView` 已经把「阈值优先、
+    // 其次压缩窗口」这套选择收在一处，这里直接取，别再算第二遍——两处各算
+    // 一遍迟早会分叉（这正是先前「泡泡 28%、图上 30.4%」的成因）。
+    const contextDenominator = view.contextDenominator
     const historyContext = historyContextTurns(record.data?.contextTurns, contextDenominator)
     const contextTurns = mergeContextHistory(historyContext, liveContextTurns)
 

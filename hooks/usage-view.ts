@@ -24,6 +24,12 @@ export type UsageView = {
   contextPercent?: number
   contextTokens?: number
   contextWindow?: number
+  /**
+   * `contextPercent` 实际用的分母：自动压缩阈值（首选）、压缩窗口，或
+   * 引擎的完整窗口（拿不到 breakdown 时的兜底）。界面用它说清「这个百分比
+   * 是相对什么算的」——同一个 30% 在两种分母下含义完全不同。
+   */
+  contextDenominator?: number
   /** 调用时传了 `{ breakdown }` 才有：上下文按分项的明细，形状见 usage-detail.ts。 */
   breakdown?: unknown
 }
@@ -62,14 +68,54 @@ export function toUsageView(usage: unknown): UsageView {
   const context = source.context
   const cost = source.cost
 
+  // ---------------- 上下文占比：统一到「自动压缩阈值」口径 ----------------
+  //
+  // 引擎给了**两套互不相等的**数值，类型声明里明说
+  // 「`breakdown` measures against the compaction window (`rawMaxTokens`),
+  //  which may be smaller than `window`」：
+  //
+  //   - `context.percent` = `tokens / window`（状态栏那套，分母是完整窗口）
+  //   - `breakdown.percentage` = `totalTokens / rawMaxTokens`（/context 那套，
+  //     分母是**压缩窗口**，而 `autoCompactThreshold` 又是压缩真正触发的点）
+  //
+  // 面板的柱状图按阈值算——读者关心的是「离自动压缩还有多远」，窗口涨到
+  // 100% 本身什么都不会发生。早先泡泡与用量条直接用引擎的 `percent`，
+  // 同一场会话会出现「泡泡说 28%、图上说 30.4%」的两套数字。这里统一：
+  // **只要拿得到 breakdown，就算阈值口径**，让所有出口说同一件事。
+  //
+  // 拿不到 breakdown 时（调用方没请求，或宿主没绑定会话）退回引擎的
+  // `percent`——那时至少还有一个真实读数，比空着好。
+  const breakdown = context?.breakdown as
+    | { totalTokens?: unknown; autoCompactThreshold?: unknown; rawMaxTokens?: unknown }
+    | undefined
+  const totalTokens = typeof breakdown?.totalTokens === 'number' ? breakdown.totalTokens : undefined
+  const threshold =
+    typeof breakdown?.autoCompactThreshold === 'number' && breakdown.autoCompactThreshold > 0
+      ? breakdown.autoCompactThreshold
+      : undefined
+  const rawMax =
+    typeof breakdown?.rawMaxTokens === 'number' && breakdown.rawMaxTokens > 0
+      ? breakdown.rawMaxTokens
+      : undefined
+  // 阈值优先，其次压缩窗口；两者都没有才退回引擎的完整窗口口径。
+  const denominator = threshold ?? rawMax
+  const contextPercent =
+    denominator !== undefined && totalTokens !== undefined
+      ? Math.max(0, Math.min(100, (totalTokens / denominator) * 100))
+      : typeof context?.percent === 'number'
+        ? context.percent
+        : undefined
+
   return {
     fiveHour: pick('five_hour'),
     sevenDay: pick('seven_day'),
     limits,
     costUsd: typeof cost?.usd === 'number' ? cost.usd : undefined,
-    contextPercent: typeof context?.percent === 'number' ? context.percent : undefined,
+    contextPercent,
     contextTokens: typeof context?.tokens === 'number' ? context.tokens : undefined,
     contextWindow: typeof context?.window === 'number' ? context.window : undefined,
+    /** 实际用来换算占比的分母（阈值 / 压缩窗口 / 完整窗口），供界面说明。 */
+    contextDenominator: denominator,
     breakdown: context?.breakdown,
   }
 }
@@ -325,9 +371,18 @@ export function bubblePages(
   }
 
   // 2. 上下文：主角是占用百分比，另两行给出绝对量与窗口大小。
+  //
+  // 第一行写「距压缩」而不是「本会话上下文」：`contextPercent` 的分母是
+  // **自动压缩阈值**（见 `toUsageView`），这个百分比回答的是「离被砍还有
+  // 多远」，不是「窗口用了多少成」。两句话在 1M 窗口 + 92% 阈值时会差出
+  // 七八个百分点，写错标签就等于把那个更重要的含义藏起来了。
+  //
+  // 拿不到 breakdown 时退回的是引擎的完整窗口口径，那时说「距压缩」就不对，
+  // 所以按 `contextDenominator` 有没有值分别写。
   if (view.contextPercent !== undefined) {
+    const isThreshold = view.contextDenominator !== undefined
     const lines = [
-      '本会话上下文',
+      isThreshold ? '距压缩' : '本会话上下文',
       pct(view.contextPercent),
       // 绝对量那一行以前写「124.0万 / 200.0万」，21px 下需要 211px，而第三行
       // 只有 198px。只留已用量，窗口大小本来就在面板里，气泡这一页不必复述。
