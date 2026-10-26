@@ -627,7 +627,7 @@ export const register: Register = (on, options) => {
             设计规则只用于「增加的行数」——挪来当装饰会让读者在条子上看到
             同一个颜色表达两件事。状态差异由字形承担（见 `BAND_WHALE_GLYPHS`）。 */}
         <Box key="whale-band-whale" width={BAND_WHALE_COLS}>
-          <Text>{bandWhaleGlyph(bandState)}</Text>
+          <Text>{bandWhaleGlyph(bandState, now)}</Text>
         </Box>
         <Box key="whale-band-spacer" flexGrow={1} />
         <Text dimColor>{summary}</Text>

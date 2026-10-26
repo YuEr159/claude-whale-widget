@@ -24,7 +24,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { BAND_WHALE_GLYPHS, BAND_WHALE_TEXT_COLS, WHALE_MAX_WIDTH, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
+import { BAND_WHALE_FRAMES, BAND_WHALE_TEXT_COLS, WHALE_MAX_WIDTH, bandWhaleGlyph, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   canonicalModelName,
@@ -1957,7 +1957,7 @@ test('设置页：口径芯片整行宽度守住 70 列预算', () => {
  * `turn.start` 置真、`turn.complete` / `turn.abort` 置假（register.tsx 的
  * 模块变量 `isSessionRunning`），这里只验「给定运行状态与时刻，画出哪一幅」。
  */
-test('用量条字符画：空闲静止，运行中两幅轮换且等宽', () => {
+test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   // 空闲：不管时钟走到哪儿都是 idle。
   for (const now of [0, 700, 1400, 5000, 1_000_000]) {
     assert.equal(bandWhaleStateOf(false, now), 'idle')
@@ -1966,16 +1966,59 @@ test('用量条字符画：空闲静止，运行中两幅轮换且等宽', () =>
   assert.equal(bandWhaleStateOf(true, 0), 'working')
   assert.equal(bandWhaleStateOf(true, 700), 'busy')
   assert.equal(bandWhaleStateOf(true, 1400), 'working')
-  // 两幅必须真的不同，否则「轮换」是假的。
-  assert.notEqual(BAND_WHALE_GLYPHS.working, BAND_WHALE_GLYPHS.busy)
-  // 三种状态宽都是 5 列：状态切换时后面的摘要不会左右跳。
-  for (const [state, glyph] of Object.entries(BAND_WHALE_GLYPHS)) {
-    assert.equal(displayWidth(glyph), BAND_WHALE_TEXT_COLS, `${state} 宽度应是 ${BAND_WHALE_TEXT_COLS} 列`)
+
+  /** 展开所有状态的每一帧，逐帧检查。 */
+  const allFrames = Object.entries(BAND_WHALE_FRAMES).flatMap(([state, frames]) =>
+    frames.map((frame, index) => ({ state, index, frame })),
+  )
+
+  // **每一帧都恰好 `BAND_WHALE_TEXT_COLS` 列。** 这是唯一硬性约束：
+  // 宽度一变，后面的摘要文字就会左右跳；状态切换时尤其明显。
+  for (const { state, index, frame } of allFrames) {
+    assert.equal(
+      displayWidth(frame),
+      BAND_WHALE_TEXT_COLS,
+      `${state} 第 ${index} 帧宽度应是 ${BAND_WHALE_TEXT_COLS} 列：${JSON.stringify(frame)}`,
+    )
   }
-  // 每一幅都带水面波纹，读者才认得出是鲸鱼而不是一串符号。
-  for (const glyph of Object.values(BAND_WHALE_GLYPHS)) {
-    assert.ok(glyph.includes('≋'), `字符画应当带水面：${JSON.stringify(glyph)}`)
+
+  // 每一帧都画着鲸鱼本体（`~)~` 的波浪轮廓），否则读者认不出那是鲸鱼。
+  for (const { state, index, frame } of allFrames) {
+    assert.ok(frame.includes(')~'), `${state} 第 ${index} 帧该有鲸鱼轮廓：${JSON.stringify(frame)}`)
   }
+
+  // **只用字体覆盖率高的半角字符。** 早先用过 `≋`（U+224B）与 `ᐟ`
+  // （U+141F，加拿大音节文字）：Unicode 标准里都是 1 列宽，但后者在多数
+  // 西文字体里没有字形，fallback 字体未必与等宽数字同宽——一旦被画成 2 列，
+  // 整条用量条就错位。
+  const allowed = new Set(['~', ')', '>', '.', 'o', 'O', ' '])
+  for (const { state, index, frame } of allFrames) {
+    for (const ch of frame) {
+      assert.ok(allowed.has(ch), `${state} 第 ${index} 帧用了非白名单字符 ${JSON.stringify(ch)}`)
+    }
+  }
+
+  // **每个状态内部必须真的在动。** 一帧定格的「动画」等于没有动画。
+  for (const [state, frames] of Object.entries(BAND_WHALE_FRAMES)) {
+    assert.ok(frames.length > 1, `${state} 至少要有两帧才谈得上动画`)
+    assert.ok(new Set(frames).size > 1, `${state} 的帧全一样，等于静止`)
+  }
+
+  // 三个状态的第一帧互不相同：状态一换，读者立刻看得出来。
+  const firsts = Object.values(BAND_WHALE_FRAMES).map(frames => frames[0])
+  assert.equal(new Set(firsts).size, 3, '三个状态的起始帧应当各不相同')
+
+  // 帧序列随时刻推进：同一状态在不同时刻给出不同帧。
+  const idleFrames = new Set(
+    [0, 1600, 3200, 4800].map(now => bandWhaleGlyph('idle', now)),
+  )
+  assert.ok(idleFrames.size > 1, '静止状态也该在动（吐泡泡）')
+
+  // 相位由墙钟取模，不记状态：同一时刻永远给同一帧。
+  assert.equal(bandWhaleGlyph('idle', 5000), bandWhaleGlyph('idle', 5000))
+  // 周期整除时回到第一帧。
+  const period = 1600 * BAND_WHALE_FRAMES.idle.length
+  assert.equal(bandWhaleGlyph('idle', period), bandWhaleGlyph('idle', 0))
 })
 
 /**
