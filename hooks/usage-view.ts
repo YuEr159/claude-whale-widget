@@ -321,8 +321,8 @@ export type BubblePage = {
 const WHALE_TRAITS: Record<WhaleMood, readonly [string, string, string]> = {
   // 早晨还没开工，在摸鱼。第三行取 B 站原话「摸鱼」。
   idle: ['探索未至之境', '吃白饭', '摸鱼中'],
-  // 上午与下午：长思考 + 惦记吃饭。第二行用「想吃饭」而不是「思考中」，
-  // 因为「思考」已经由第三行的「已思考 4s」说清楚了，中间那行留给角色。
+  // 上午与下午：长思考 + 惦记吃饭。第二行是「想吃什么」的默认值——
+  // 真正上屏时由 `dishOf(now)` 按时段替换，见 `DISH_SCHEDULE`。
   working: ['内心 OS 很长', '想吃饭', '已思考 4s'],
   // 午饭与晚饭：胃口大。第二行是 B 站热评里的「喂饭」视角
   // （「啥也不干就喂大肥鱼」），这里换成她自己的口吻「再来一碗」。
@@ -333,9 +333,68 @@ const WHALE_TRAITS: Record<WhaleMood, readonly [string, string, string]> = {
   sleep: ['DeepSleep', '吃饱了', '做梦吃米饭'],
 }
 
-/** 某个情绪下鲸鱼娘的三行台词；每一行都已按气泡的可用宽度裁剪过。 */
-export function whaleTraitOf(mood: WhaleMood): readonly [string, string, string] {
-  return WHALE_TRAITS[mood]
+/**
+ * 一天里她想吃的东西：本地钟点 → 主角行那句话。
+ *
+ * ## 为什么单独一张表，不并进 `DAY_SCHEDULE`
+ *
+ * `DAY_SCHEDULE` 回答的是「她此刻是什么状态」（睡着 / 摸鱼 / 干活 / 吃撑），
+ * 每档对应一整套三行台词；这张表只回答「这一顿想吃什么」，颗粒度更细——
+ * 光「上午」这一段就能再分成「刚起床想喝豆浆」和「快中午惦记小笼包」。
+ * 两件事各有各的节奏，塞进同一张表会让任何一边改动都要动另一边。
+ *
+ * ## 文案规则
+ *
+ * 主角行是 46px 的视觉重心，**最多放得下 5 个汉字**（可用 271px）。
+ * `tests/node.run.mjs` 里有一条测试按椭圆方程逐条量过，超了会被描边压住。
+ * 所以这里全是 3–5 字的口语短句，不写完整的「我想吃……」。
+ *
+ * ## 边界
+ *
+ * 左闭右开（`[before, to)`），与 `DAY_SCHEDULE` 同一个约定。用**本地时间**：
+ * 人看的是自己的钟。
+ */
+const DISH_SCHEDULE: ReadonlyArray<{ before: number; dish: string }> = [
+  { before: 6, dish: '想吃夜宵' }, // 00:00–05:59 深夜，梦里也在找吃的
+  { before: 9, dish: '豆浆油条' }, // 06:00–08:59 清晨，最经典的早饭
+  { before: 11, dish: '小笼包' }, // 09:00–10:59 上午，还没到饭点就开始想
+  { before: 12, dish: '快开饭了' }, // 11:00–11:59 饭前，等不及了
+  { before: 14, dish: '大白饭' }, // 12:00–13:59 午饭，正题
+  { before: 17, dish: '想吃下午茶' }, // 14:00–16:59 下午，嘴馋
+  { before: 18, dish: '想吃晚饭' }, // 17:00–17:59 傍晚，等下班
+  { before: 21, dish: '再来一碗' }, // 18:00–20:59 晚饭，胃口大
+  { before: 24, dish: '想吃宵夜' }, // 21:00–23:59 夜里，又饿了
+]
+
+/**
+ * 当前时刻 → 想吃的东西。按**本地时区**取钟点。
+ *
+ * @param now 毫秒级 Unix 时间戳
+ */
+export function dishOf(now: number): string {
+  const hour = new Date(now).getHours()
+  for (const slot of DISH_SCHEDULE) {
+    if (hour < slot.before) return slot.dish
+  }
+  // `getHours()` 只返回 0–23，`before: 24` 一定兜住。
+  return '想吃宵夜'
+}
+
+/**
+ * 某个情绪下鲸鱼娘的三行台词；每一行都已按气泡的可用宽度裁剪过。
+ *
+ * @param mood 当前情绪，决定整套台词的底色
+ * @param now  给了就用 `dishOf(now)` 替换主角行——「想吃什么」随一天里的
+ *   时段变，而情绪（睡着 / 摸鱼 / 干活）只管另外两行。不给就沿用情绪那档
+ *   的默认句子，调用方（预览脚本、测试）不必造一个时刻。
+ */
+export function whaleTraitOf(
+  mood: WhaleMood,
+  now?: number,
+): readonly [string, string, string] {
+  const base = WHALE_TRAITS[mood]
+  if (now === undefined) return base
+  return [base[0], dishOf(now), base[2]]
 }
 
 /** 轮播用到的额外事实；不传就只剩额度与花费两页。 */
@@ -465,7 +524,10 @@ export function bubblePages(
   // ——它不表达任何读数，存在的意义是让轮播里有一页像角色在说话，而不是
   // 一串数字。排最后还有一个好处：数据页的次序与数量不受它影响，读者看惯的
   // 「额度 → 上下文 → 本会话 → 本地」不会因为它在中间而被拆开。
-  pages.push({ id: 'whale', lines: whaleTraitOf(facts.mood ?? 'idle') })
+  //
+  // 传 `now` 进去：主角行（第二行）会换成这个钟点她馋的那一口（`dishOf`），
+  // 一天的早中晚各不相同；另外两行仍由情绪决定。
+  pages.push({ id: 'whale', lines: whaleTraitOf(facts.mood ?? 'idle', now) })
 
   // 一页都没有（首次打开、还没扫到任何数据）：上面那页台词仍然在，泡泡不会空。
   return pages

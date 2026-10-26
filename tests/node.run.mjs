@@ -14,7 +14,7 @@ import { test } from 'node:test'
 
 import { costOf, isEnginePriced, priceOf } from '../hooks/pricing.ts'
 import { clip, countdown, displayWidth, pct, tokens, usd } from '../hooks/format.ts'
-import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, freshnessOf, toUsageView, whaleTraitOf } from '../hooks/usage-view.ts'
+import { BAND_METRIC_OPTIONS, bandDiffText, bandSummary, bubblePages, dishOf, freshnessOf, toUsageView, whaleTraitOf } from '../hooks/usage-view.ts'
 import {
   addModelSpend,
   countPatchLines,
@@ -1816,6 +1816,67 @@ test('人设页的每句台词都放得进气泡椭圆', () => {
   // 台词确实跟着情绪走——五个情绪不该冒出同一句话。
   const firstLines = ['idle', 'working', 'busy', 'tired', 'sleep'].map(m => whaleTraitOf(m)[0])
   assert.equal(new Set(firstLines).size, firstLines.length)
+
+  // **主角行按时段换菜**：情绪定的那套在这里只兜底，上屏的是 `dishOf(now)`。
+  // 所以宽度也要按 24 个整点逐一两遍——九个时段的文案不一样，只量五档
+  // 情绪那几句会让某道菜悄悄撑破气泡。取每个整点的中点（`hour:30`）构造
+  // **本地**时间，`getHours()` 一定落回该整点，不受运行机器的时区影响。
+  for (let hour = 0; hour < 24; hour += 1) {
+    const at = new Date(2026, 9, 26, hour, 30, 0, 0).getTime()
+    const { y, size } = rows[1]
+    const line = whaleTraitOf('working', at)[1]
+    const halfWidth = RX * Math.sqrt(Math.max(0, 1 - ((y - CY) / RY) ** 2))
+    const available = halfWidth * 2
+    assert.ok(
+      widthOf(line, size) <= available,
+      `${hour} 点的菜「${line}」估算宽 ${widthOf(line, size).toFixed(0)}px，超过主角行可用的 ${available.toFixed(0)}px`,
+    )
+  }
+})
+
+test('鲸鱼娘想吃的东西随一天里的钟点变', () => {
+  // 固定一个本地日，避免用 UTC 字符串——`dishOf` 按本地时区取钟点，
+  // 在不同时区的机器上 `new Date('...Z')` 会落到别的时段。
+  const at = hour => new Date(2026, 9, 26, hour, 30, 0, 0).getTime()
+
+  // 九个时段各给一句，且**相邻时段不重复**——读者在整点前后翻到这一页，
+  // 要能看出「换了一顿」，而不是同一句话挂一整天。比较的是每个时段的
+  // 起点，不是逐小时（0–5 点同属深夜那段，逐小时比必然撞车）。
+  const starts = [0, 6, 9, 11, 12, 14, 17, 18, 21]
+  const byStart = starts.map(hour => dishOf(at(hour)))
+  for (let index = 1; index < byStart.length; index += 1) {
+    assert.notEqual(
+      byStart[index], byStart[index - 1],
+      `${starts[index]} 点与 ${starts[index - 1]} 点的菜重复了（都是「${byStart[index]}」）`,
+    )
+  }
+
+  // 边界是左闭右开：整点属于后一段。列几个关键点钉住。
+  assert.equal(dishOf(at(0)), '想吃夜宵')
+  assert.equal(dishOf(at(5)), '想吃夜宵')
+  assert.equal(dishOf(at(6)), '豆浆油条')
+  assert.equal(dishOf(at(11)), '快开饭了')
+  assert.equal(dishOf(at(12)), '大白饭')
+  assert.equal(dishOf(at(17)), '想吃晚饭')
+  assert.equal(dishOf(at(21)), '想吃宵夜')
+  assert.equal(dishOf(at(23)), '想吃宵夜')
+
+  // 同一时刻永远同一句：不靠随机数、不靠模块状态。
+  assert.equal(dishOf(at(15)), dishOf(at(15)))
+
+  // `whaleTraitOf` 只在给了时刻时替换主角行；另两行仍归情绪。
+  const withTime = whaleTraitOf('busy', at(12))
+  assert.equal(withTime[0], whaleTraitOf('busy')[0])
+  assert.equal(withTime[2], whaleTraitOf('busy')[2])
+  assert.equal(withTime[1], dishOf(at(12)))
+  // 不给时刻就沿用情绪那档的默认句子——预览与旧调用不受影响。
+  assert.deepEqual(whaleTraitOf('busy'), ['胃口特别大', '再来一碗', '偷吃 Token'])
+
+  // 泡泡页也真的用上了：人设页第二行等于那个时刻的菜。
+  const page = bubblePages(toUsageView({}), at(15), { mood: 'working' })
+    .find(item => item.id === 'whale')
+  assert.ok(page, '人设页应当在轮播里')
+  assert.equal(page.lines[1], dishOf(at(15)))
 })
 
 test('气泡配色不随情绪变化，所有情绪共用原图那一套', () => {
