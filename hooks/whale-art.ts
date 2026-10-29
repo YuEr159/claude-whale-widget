@@ -123,14 +123,15 @@ export function emblemOf(mood: WhaleMood): string {
  *
  *   - `idle`    睡觉：只有鼾声，`z` 一个字母一个字母地蹦出来（见
  *               `BAND_WHALE_FRAMES`）
- *   - `working` 干活：`>` 是鱼头，后面跟着她随手嘀咕的一句（摸鱼话）
- *   - `busy`    忙：同样是鱼头 + 一句，说的都是吃白饭那摊事
+ *   - `working` 干活：`>` 是鱼头，后面是她随口嘀咕的一句——**按星期几换**
+ *               （见 `WEEKDAY_FRAMES`）
+ *   - `busy`    忙：同样是鱼头 + 一句，同一天的第二句
  *
  * **不再画鲸鱼轮廓，也不再吐泡泡。** 早先每帧都带一个 `~)~` 当作鲸鱼，
  * 干活与忙则是 `>` 后面拖一串 `~` 当水花。那条子只有一行高：`~)~` 画出来
  * 是个静止的括号脸，既不像鲸鱼，又把鼾声挤到左边半格；`~` 水花则只是
  * 装饰，读者看不出它在表达什么。现在干活与忙把水花换成了**她自己说的话**
- * ——「工作间隙摸鱼」之类，一行高的一格里，文字比波浪更能说明"她在干嘛"。
+ * ——一行高的一格里，文字比波浪更能说明"她在干嘛"。
  */
 export type BandWhaleState = 'idle' | 'working' | 'busy'
 
@@ -146,8 +147,9 @@ export type BandWhaleState = 'idle' | 'working' | 'busy'
  * - **睡觉 `idle`**：只有鼾声，`z` **一个字母一个字母地蹦出来**——`z` →
  *   `zz` → … → 攒满整格，`（呼）` 呼出来，空一拍，再补一声 `呼`。攒字母
  *   那十六帧各 0.2 秒，看得见它是逐个长出来的；整轮 4.6 秒，接近一次呼吸。
- * - **干活 `working`**：`>` 是鱼头，后面是她嘀咕的一句「工作间隙摸鱼中」。
- * - **忙 `busy`**：同样是鱼头 + 一句，「猛吃大白饭中」「再来一碗」。
+ * - **干活 `working` / 忙 `busy`**：`>` 是鱼头，后面是她嘀咕的一句。
+ *   **实际文案来自 `WEEKDAY_FRAMES`**（按星期几取两组），这里的
+ *   `working` / `busy` 两帧只在拿不到日期时兜底。
  *
  * 后两档各两帧、每帧 2.4 秒，两句轮流说——一句话得停够时间才读得完。
  *
@@ -156,7 +158,7 @@ export type BandWhaleState = 'idle' | 'working' | 'busy'
  * 早先这两档是 `>` 后面拖一串 `~` 当水花（`~` 一多就像在吐泡泡），靠长短
  * 表现忙闲。问题是一行高的格里，`~` 只是装饰：读者看不出那一串在说什么，
  * 而这一格占着条子上宝贵的位置。换成她自己的话之后，同样的位置既能表示
- * 「在跑」，也顺带把这个梗说出来了——「工作间隙摸鱼」正是大肥鱼的日常。
+ * 「在跑」，也顺带把这个梗说出来了。
  *
  * ## 为什么睡觉那档不画鲸鱼
  *
@@ -200,7 +202,8 @@ export const BAND_WHALE_FRAMES: Readonly<Record<BandWhaleState, readonly string[
     '                ',
     '      呼        ',
   ],
-  // 干活：鱼头 `>` 后面是她嘀咕的话——**工作间隙摸鱼**，正是这个梗。
+  // 干活：鱼头 `>` 后面是她嘀咕的话。默认这两天说摸鱼；
+  // 真正的上屏文案由 `weekdayFrames` 按星期几覆盖，见 `WEEKDAY_FRAMES`。
   working: [
     '> 工作间隙摸鱼中',
     '> 悄悄摸鱼中    ',
@@ -213,10 +216,72 @@ export const BAND_WHALE_FRAMES: Readonly<Record<BandWhaleState, readonly string[
 }
 
 /**
+ * 一周七天各自的两句话。**索引 0 是周日**（与 `Date.getDay()` 一致）。
+ *
+ * ## 为什么是「一天一组」而不是「一周一组」
+ *
+ * 状态栏那一格是扫一眼的地方：同一句话在星期三出现、星期五又原样出现，
+ * 读者不会觉得「有梗」，只会觉得它没在变。按天换之后，一周之内不重复，
+ * 而 `working` / `busy` 两帧仍各停 2.4 秒，读得完。
+ *
+ * ## 文案来源
+ *
+ * 七天用的都是**中文互联网通行的日更梗**，不是为这个挂件现编的：
+ *
+ * - 周一「忙day」、周二「求死day」、周三「未死day」、周四「受死day」、
+ *   周五「福来day」、周六「洒脱day」、周日「伤day」——这套星期谐音从
+ *   2016 年就在传（搜狐《太形象了！周一"忙day"，周二"求死day"》），
+ *   是打工人语境里最稳的一层，**七天都有对应**，正好填满一周。
+ * - 周四另加一层：B 站 2026-10 集中出现「大肥鱼 × 疯狂星期四」二创
+ *   （《关于疯狂星期四，而大肥鱼被迫去打工这件事—动画MV［炸鸡快走开，
+ *   我要白米饭！］》《大肥鱼觉得疯狂星期四，不如大白饭》）。核心张力是
+ *   **炸鸡 vs 白米饭**——她被迫去打炸鸡的工，心里只想着白饭。所以周四
+ *   写「炸鸡换白饭」，而不是把「V我50」直接搬过来。
+ *
+ * ## 每条都必须放得进 16 列
+ *
+ * `BAND_WHALE_TEXT_COLS` 是硬约束（有测试逐帧验算）。这些句子都在 13–16
+ * 列之间，右侧补空格补齐；`displayWidth` 按 CJK 规则把汉字算 2 列。
+ *
+ * ## 语气
+ *
+ * 与状态栏原有那两句一致：**她自己在嘀咕**，不是对读者喊话。所以不写
+ * 「V我50」这类需要读者接梗的句式——那是营销号的口吻，不是她的。
+ */
+const WEEKDAY_FRAMES: readonly (readonly [string, string])[] = [
+  // 0 周日：伤day（Sunday 谐音）。明天就上班，收假的心情。
+  ['> 伤day，想明天 ', '> 伤day，不想动 '],
+  // 1 周一：忙day（Monday）。一周最重的一天，只想躺。
+  ['> 忙day，想躺平 ', '> 忙day，不想动 '],
+  // 2 周二：求死day（Tuesday）。刚认清这周才刚开始。
+  ['> 求死day，想吃 ', '> 求死day，好累 '],
+  // 3 周三：未死day（Wednesday）。分水岭，还能撑。
+  ['> 未死day，游着 ', '> 未死day，撑着 '],
+  // 4 周四：受死day + 疯狂星期四（KFC）。**炸鸡 vs 白饭**是这个二创的核心。
+  ['> 炸鸡换白饭    ', '> 疯狂周四，白饭'],
+  // 5 周五：福来day（Friday）。明天休息，加餐。
+  ['> 福来day，加餐 ', '> 福来day，加饭 '],
+  // 6 周六：洒脱day（Saturday）。唯一能睡饱的一天。
+  ['> 洒脱day，睡饱 ', '> 洒脱day，躺平 '],
+]
+
+/**
+ * 某个时刻该说的两句话：先看星期几，再按 `working` / `busy` 取其一。
+ *
+ * @param state 当前状态（`idle` 时不走这里，睡觉那档是 `z` 的动画）
+ * @param now   当前时刻，用**本地时区**取星期几与帧相位
+ */
+export function weekdayFrame(state: BandWhaleState, now: number): string {
+  const pair = WEEKDAY_FRAMES[new Date(now).getDay()] ?? WEEKDAY_FRAMES[1]!
+  return state === 'busy' ? pair[1] : pair[0]
+}
+
+/**
  * 状态栏那一格的固定宽度（列）。
  *
- * 从 10 列加宽到 16 列：干活与忙这两档不再吐 `~` 泡泡，改成她随口的一句话，
- * 最长的是「> 工作间隙摸鱼中」（2 列鱼头 + 7 个汉字 = 16 列）。睡觉那档
+ * 从 10 列加宽到 16 列：干活与忙这两档不再吐 `~` 泡泡，改成她随口的一句话。
+ * 16 列正好放得下「> 忙day，想躺平」这类句子（2 列鱼头 + 12 列文字），
+ * 一周七天的十四句都在 13–16 列之间，见 `WEEKDAY_FRAMES`。睡觉那档
  * 的 `z` 也跟着能攒到十六个，一路铺满整格。
  *
  * 代价是条子上少 6 列给摘要。摘要本来就靠 `flexGrow` 撑开，窄窗口下先收窄
@@ -312,9 +377,16 @@ export function bandWhaleFrameOf(state: BandWhaleState, now: number): number {
   return durations.length - 1
 }
 
-/** 用量条字符画的文字：当前状态 + 当前时刻对应的一帧。 */
+/**
+ * 用量条字符画的文字：当前状态 + 当前时刻对应的一帧。
+ *
+ * `idle`（睡觉）走 `BAND_WHALE_FRAMES` 那套逐字母动画；`working` / `busy`
+ * 走 `WEEKDAY_FRAMES`，按**本地日期**选当天的一组话。星期几与帧相位用同一
+ * 个 `now` 算，所以两者永远同步——不会出现「周三的日期配周二的话」。
+ */
 export function bandWhaleGlyph(state: BandWhaleState, now: number): string {
-  const frames = BAND_WHALE_FRAMES[state]
+  if (state !== 'idle') return weekdayFrame(state, now)
+  const frames = BAND_WHALE_FRAMES.idle
   return frames[bandWhaleFrameOf(state, now)] ?? frames[0]!
 }
 
