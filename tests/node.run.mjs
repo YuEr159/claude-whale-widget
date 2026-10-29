@@ -2367,10 +2367,11 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
 /**
  * 一周七天各说各的：`working` / `busy` 那两格按**本地日期**换文案。
  *
- * 用户要的是「周一二三四五六七，所有天数都可以有梗」。七天用的是中文互联网
- * 通行的星期谐音梗（忙day / 求死day / 未死day / 受死day / 福来day /
- * 洒脱day / 伤day，2016 年就在传），周四另加一层 B 站「大肥鱼 × 疯狂星期四」
- * 二创的核心张力：炸鸡 vs 白米饭。
+ * 格式统一成 `> 星期X，三字话`——早先试过打工人谐音梗（忙day / 求死day 等），
+ * 用户否掉了：英文夹在中文里要转一道弯，而状态栏是扫一眼的东西。现在一律
+ * 用中文「星期X」。
+ *
+ * 周四保留「炸鸡 / 白饭」那层，来自 B 站「大肥鱼 × 疯狂星期四」二创。
  *
  * 这条测试守四件事：**宽度**、**七天互不相同**、**日期映射正确**、
  * **同一天两帧也不相同**（否则「两句话轮换」就成了静止）。
@@ -2379,6 +2380,8 @@ test('状态栏文案一周七天各不同，每天都放得进 16 列', () => {
   // 2026-11-01 是周日，连着取七天正好覆盖 getDay() 的 0–6。
   const dayAt = (offset, hour = 12) =>
     new Date(2026, 10, 1 + offset, hour, 0, 0).getTime()
+  // 与 `WEEKDAY_FRAMES` 的索引同序：0 是周日。
+  const NAMES = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
   const seen = new Map()
   for (let offset = 0; offset < 7; offset += 1) {
@@ -2411,16 +2414,30 @@ test('状态栏文案一周七天各不同，每天都放得进 16 列', () => {
   assert.equal(new Set(busies).size, 7, `七天 busy 有重复：${busies.join(' / ')}`)
 
   // **日期映射点对点钉住**，防止 getDay() 的 0=周日 被写成 0=周一。
-  assert.ok(seen.get(1).working.includes('忙day'), `周一该说忙day：${seen.get(1).working}`)
-  assert.ok(seen.get(2).working.includes('求死'), `周二该说求死：${seen.get(2).working}`)
-  assert.ok(seen.get(3).working.includes('未死'), `周三该说未死：${seen.get(3).working}`)
-  assert.ok(seen.get(4).working.includes('炸鸡'), `周四该说炸鸡换白饭：${seen.get(4).working}`)
-  assert.ok(seen.get(5).working.includes('福来'), `周五该说福来：${seen.get(5).working}`)
-  assert.ok(seen.get(6).working.includes('洒脱'), `周六该说洒脱：${seen.get(6).working}`)
-  assert.ok(seen.get(0).working.includes('伤day'), `周日该说伤：${seen.get(0).working}`)
+  // 同时钉住「用中文星期，不用谐音梗」这条：每句都得含自己那天的中文名。
+  for (const [day, name] of NAMES.entries()) {
+    const { working, busy } = seen.get(day)
+    for (const text of [working, busy]) {
+      assert.ok(
+        text.includes(name),
+        `${name}那格该写「${name}」：${JSON.stringify(text)}`,
+      )
+      // 反过来：不该混进别的星期名。
+      for (const other of NAMES) {
+        if (other === name) continue
+        assert.ok(
+          !text.includes(other),
+          `${name}那格混进了「${other}」：${JSON.stringify(text)}`,
+        )
+      }
+    }
+    // 谐音梗已经去掉了——不许再出现 `day` 这种英文夹中文。
+    assert.ok(!/day/i.test(working), `${name}那格还在用谐音梗：${JSON.stringify(working)}`)
+  }
 
-  // 周四那档必须落到「白饭」上——这是那个二创的核心，不是随便一句炸鸡。
+  // 周四那档必须落到「炸鸡 / 白饭」上——这是那个二创的核心。
   const thursday = `${seen.get(4).working}${seen.get(4).busy}`
+  assert.ok(thursday.includes('鸡'), `周四该提到鸡：${thursday}`)
   assert.ok(thursday.includes('白饭'), `周四该提到白饭：${thursday}`)
 
   // **睡觉那档不受星期影响**：它讲的是鼾声，不是日程。
