@@ -421,7 +421,7 @@ test('同一天的不同钟点画出不同的人设台词', async ($, on) => {
       const source = String(findLastSvg(await ui.drawn())?.props?.source ?? '')
       const title = source.match(/>([^<>]+)<\/text>/)?.[1] ?? ''
       // 人设页的五档第一行是固定的这几句；命中即返回。
-      if (['探索未至之境', '内心 OS 很长', '胃口特别大', '我去吃饭了', 'DeepSleep'].includes(title)) {
+      if (['探索未至之境', '内心 OS 很长', '胃口特别大', '活没干完', 'DeepSleep'].includes(title)) {
         line = title
         break
       }
@@ -438,7 +438,7 @@ test('同一天的不同钟点画出不同的人设台词', async ($, on) => {
   expect(deepNight).toBe('DeepSleep')
   expect(morning).toBe('内心 OS 很长')
   expect(lunch).toBe('胃口特别大')
-  expect(evening).toBe('我去吃饭了')
+  expect(evening).toBe('活没干完')
 
   // 四句互不相同：这不是一个常数。
   expect(new Set([deepNight, morning, lunch, evening]).size).toBe(4)
