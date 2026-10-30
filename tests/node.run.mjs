@@ -24,7 +24,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { BAND_WHALE_FRAMES, BAND_WHALE_TEXT_COLS, WHALE_MAX_WIDTH, bandWhaleGlyph, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
+import { BAND_WHALE_FRAMES, BAND_WHALE_TEXT_COLS, WHALE_MAX_WIDTH, bandWhaleFramesOf, bandWhaleGlyph, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   canonicalModelName,
@@ -2221,14 +2221,20 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   for (const now of [0, 700, 1400, 5000, 1_000_000]) {
     assert.equal(bandWhaleStateOf(false, now), 'idle')
   }
-  // 运行中：按一轮 4.8 秒切状态（两帧 × 2.4 秒）。
+  // 运行中：按一轮 7.2 秒切状态（三帧 × 2.4 秒），换档时帧序从头开始。
   assert.equal(bandWhaleStateOf(true, 0), 'working')
-  assert.equal(bandWhaleStateOf(true, 4_800), 'busy')
-  assert.equal(bandWhaleStateOf(true, 9_600), 'working')
+  assert.equal(bandWhaleStateOf(true, 7_200), 'busy')
+  assert.equal(bandWhaleStateOf(true, 14_400), 'working')
 
-  /** 展开所有状态的每一帧，逐帧检查。 */
-  const allFrames = Object.entries(BAND_WHALE_FRAMES).flatMap(([state, frames]) =>
-    frames.map((frame, index) => ({ state, index, frame })),
+  /**
+   * 展开所有状态的**完整帧序**（`working` / `busy` 的第一帧是星期句，
+   * 由 `bandWhaleFramesOf` 现算；`idle` 就是原表），逐帧检查。
+   *
+   * 取 2026-11-04（周三）中午：星期句落在「星期三」那一格。
+   */
+  const probeNow = new Date(2026, 10, 4, 12, 0, 0).getTime()
+  const allFrames = Object.entries(BAND_WHALE_FRAMES).flatMap(([state]) =>
+    bandWhaleFramesOf(state, probeNow).map((frame, index) => ({ state, index, frame })),
   )
 
   // **每一帧都恰好 `BAND_WHALE_TEXT_COLS` 列。** 这是唯一硬性约束：
@@ -2244,7 +2250,9 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   // 干活与忙那两档每帧都要有鱼头 `>`，后面跟一句她自己的话。
   // （睡觉那档只剩 z，没有鱼头——它讲的是鼾声，见下面。）
   for (const state of ['working', 'busy']) {
-    for (const frame of BAND_WHALE_FRAMES[state]) {
+    const frames = bandWhaleFramesOf(state, probeNow)
+    assert.equal(frames.length, 3, `${state} 该是「星期句 + 两句老台词」共三帧`)
+    for (const frame of frames) {
       assert.ok(frame.startsWith('>'), `${state} 每帧该以鱼头开头：${JSON.stringify(frame)}`)
       // 鱼头后面必须真的有一句话，不能只有空格。
       assert.ok(
@@ -2252,7 +2260,16 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
         `${state} 每帧鱼头后面该有文字：${JSON.stringify(frame)}`,
       )
     }
+    // **老台词不丢**：去掉第一帧（星期句）之后的两帧必须原样等于常量表。
+    assert.deepEqual(
+      frames.slice(1),
+      BAND_WHALE_FRAMES[state],
+      `${state} 的老台词被星期句挤掉了`,
+    )
   }
+  // 两组老台词确实分别讲摸鱼与白饭——「保留运行时内容」是用户明确要的。
+  assert.ok(bandWhaleFramesOf('working', probeNow).join('|').includes('摸鱼'), 'working 该保留摸鱼')
+  assert.ok(bandWhaleFramesOf('busy', probeNow).join('|').includes('白饭'), 'busy 该保留白饭')
 
   // **泡泡（`~`）已经全部去掉了。** 它原来占着这一格当装饰，读者看不出
   // 那串波浪在说什么；现在同一位置换成了文字。
@@ -2268,28 +2285,30 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   // 西文字体里没有字形，fallback 字体未必与等宽数字同宽——一旦被画成 2 列，
   // 整条用量条就错位。
   //
-  // 汉字与全角括号由 `displayWidth` 按 CJK 规则各算 2 列，面板里本来就
-  // 通篇中文，字体必定覆盖。
-  const allowed = new Set([
-    '>', 'z', ' ',
-    '工', '作', '间', '隙', '摸', '鱼', '中', '悄',
-    '猛', '吃', '大', '白', '饭', '再', '来', '一', '碗',
-    '呼', '（', '）',
-  ])
+  // 白名单不再逐字列举：星期句按天变，逐字维护必然漏。规则改成「汉字 +
+  // 几个固定标点」——汉字与全角标点由 `displayWidth` 按 CJK 规则各算 2 列，
+  // 面板里本来就通篇中文，字体必定覆盖；`≋` `ᐟ` 这类符号仍被挡住。
+  const allowed = new Set(['>', 'z', ' ', '，', '（', '）', '呼'])
   for (const { state, index, frame } of allFrames) {
     for (const ch of frame) {
-      assert.ok(allowed.has(ch), `${state} 第 ${index} 帧用了非白名单字符 ${JSON.stringify(ch)}`)
+      assert.ok(
+        allowed.has(ch) || /\p{Script=Han}/u.test(ch),
+        `${state} 第 ${index} 帧用了非白名单字符 ${JSON.stringify(ch)}`,
+      )
     }
   }
 
   // **每个状态内部必须真的在动。** 一帧定格的「动画」等于没有动画。
-  for (const [state, frames] of Object.entries(BAND_WHALE_FRAMES)) {
+  for (const state of Object.keys(BAND_WHALE_FRAMES)) {
+    const frames = bandWhaleFramesOf(state, probeNow)
     assert.ok(frames.length > 1, `${state} 至少要有两帧才谈得上动画`)
     assert.ok(new Set(frames).size > 1, `${state} 的帧全一样，等于静止`)
   }
 
   // 三个状态的第一帧互不相同：状态一换，读者立刻看得出来。
-  const firsts = Object.values(BAND_WHALE_FRAMES).map(frames => frames[0])
+  const firsts = Object.keys(BAND_WHALE_FRAMES).map(
+    state => bandWhaleFramesOf(state, probeNow)[0],
+  )
   assert.equal(new Set(firsts).size, 3, '三个状态的起始帧应当各不相同')
 
   // **z 是一个字母一个字母长出来的。** 连着的十六拍，每拍比上一拍多一个 z，
@@ -2365,16 +2384,19 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
 })
 
 /**
- * 一周七天各说各的：`working` / `busy` 那两格按**本地日期**换文案。
+ * 一周七天各说各的：`working` / `busy` 那两格的**第一帧**按本地日期换文案。
  *
  * 格式统一成 `> 星期X，三字话`——早先试过打工人谐音梗（忙day / 求死day 等），
  * 用户否掉了：英文夹在中文里要转一道弯，而状态栏是扫一眼的东西。现在一律
  * 用中文「星期X」。
  *
+ * 星期句只占每档三帧里的第一帧，后两帧仍是「摸鱼」「白饭」的老台词——
+ * 用户要求「之前那些运行时的内容也不要丢掉」。
+ *
  * 周四保留「炸鸡 / 白饭」那层，来自 B 站「大肥鱼 × 疯狂星期四」二创。
  *
- * 这条测试守四件事：**宽度**、**七天互不相同**、**日期映射正确**、
- * **同一天两帧也不相同**（否则「两句话轮换」就成了静止）。
+ * 这条测试守五件事：**宽度**、**七天互不相同**、**日期映射正确**、
+ * **working / busy 的星期句不相同**、**老台词原样保留**。
  */
 test('状态栏文案一周七天各不同，每天都放得进 16 列', () => {
   // 2026-11-01 是周日，连着取七天正好覆盖 getDay() 的 0–6。
@@ -2386,8 +2408,10 @@ test('状态栏文案一周七天各不同，每天都放得进 16 列', () => {
   const seen = new Map()
   for (let offset = 0; offset < 7; offset += 1) {
     const day = new Date(2026, 10, 1 + offset).getDay()
-    const working = bandWhaleGlyph('working', dayAt(offset))
-    const busy = bandWhaleGlyph('busy', dayAt(offset, 13))
+    // 直接看帧序本身，不经过相位——`bandWhaleGlyph` 取哪一帧取决于时间戳
+    // 对 7.2 秒取模的结果，拿它测「星期句」会随采样点飘。
+    const working = bandWhaleFramesOf('working', dayAt(offset))[0]
+    const busy = bandWhaleFramesOf('busy', dayAt(offset, 13))[0]
 
     // 宽度：两条都必须恰好 `BAND_WHALE_TEXT_COLS` 列。
     for (const [label, text] of [['working', working], ['busy', busy]]) {
@@ -2401,7 +2425,7 @@ test('状态栏文案一周七天各不同，每天都放得进 16 列', () => {
       assert.ok(text.slice(1).trim().length > 0, `${offset} 日 ${label} 鱼头后面没字`)
     }
 
-    // 同一天的两帧必须不同——两句话轮换才有「在动」的感觉。
+    // 同一天的 working / busy 星期句不能一样——否则两档切来切去没有变化。
     assert.notEqual(working, busy, `${offset} 日 working 与 busy 说了同一句`)
 
     seen.set(day, { working, busy })

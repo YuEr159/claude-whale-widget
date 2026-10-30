@@ -604,8 +604,8 @@ export const register: Register = (on, options) => {
      *
      * 三种状态宽都是 `BAND_WHALE_TEXT_COLS` 列，所以状态切换时后面的摘要
      * 不会左右跳。空闲时她在睡觉，`z` 一个字母一个字母地蹦出来，攒满整格
-     * 再「呼」一口气；跑对话时鱼头 `>` 后面跟着她嘀咕的话——干活时说摸鱼，
-     * 忙时说吃白饭。
+     * 再「呼」一口气；跑对话时鱼头 `>` 后面跟着她嘀咕的话——三帧一轮：先
+     * 说今天星期几，再念叨两句「摸鱼」「白饭」的老台词。
      */
     const bandState = bandWhaleStateOf(isSessionRunning, now)
     // **宽度固定成字形宽度 + 1 列右缝**，不跟着摘要长度算——
