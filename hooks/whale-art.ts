@@ -123,9 +123,9 @@ export function emblemOf(mood: WhaleMood): string {
  *
  *   - `idle`    睡觉：只有鼾声，`z` 一个字母一个字母地蹦出来（见
  *               `BAND_WHALE_FRAMES`）
- *   - `working` 干活：`>` 是鱼头，后面是她随口嘀咕的一句——**按星期几换**
- *               （见 `WEEKDAY_FRAMES`）
- *   - `busy`    忙：同样是鱼头 + 一句，同一天的第二句
+ *   - `working` 干活：`>` 是鱼头，后面是她随口嘀咕的一句——先说今天星期几
+ *               （见 `WEEKDAY_FRAMES`），再念叨两句摸鱼的旧台词
+ *   - `busy`    忙：同样是鱼头 + 三句，第一句是星期几，后两句是吃白饭的旧台词
  *
  * **不再画鲸鱼轮廓，也不再吐泡泡。** 早先每帧都带一个 `~)~` 当作鲸鱼，
  * 干活与忙则是 `>` 后面拖一串 `~` 当水花。那条子只有一行高：`~)~` 画出来
@@ -148,10 +148,11 @@ export type BandWhaleState = 'idle' | 'working' | 'busy'
  *   `zz` → … → 攒满整格，`（呼）` 呼出来，空一拍，再补一声 `呼`。攒字母
  *   那十六帧各 0.2 秒，看得见它是逐个长出来的；整轮 4.6 秒，接近一次呼吸。
  * - **干活 `working` / 忙 `busy`**：`>` 是鱼头，后面是她嘀咕的一句。
- *   **实际文案来自 `WEEKDAY_FRAMES`**（按星期几取两组），这里的
- *   `working` / `busy` 两帧只在拿不到日期时兜底。
+ *   每一档三帧：**帧 0 说今天星期几**（文案来自 `WEEKDAY_FRAMES`），
+ *   **帧 1、2 说手头在干什么**（就是下面这两组「摸鱼」「白饭」的句子）。
  *
- * 后两档各两帧、每帧 2.4 秒，两句轮流说——一句话得停够时间才读得完。
+ * 后两档各三帧、每帧 2.4 秒，「星期几」与两句「在干嘛」轮着说——一句话得
+ * 停够时间才读得完。
  *
  * ## 为什么干活与忙不再吐泡泡
  *
@@ -202,8 +203,9 @@ export const BAND_WHALE_FRAMES: Readonly<Record<BandWhaleState, readonly string[
     '                ',
     '      呼        ',
   ],
-  // 干活：鱼头 `>` 后面是她嘀咕的话。默认这两天说摸鱼；
-  // 真正的上屏文案由 `weekdayFrames` 按星期几覆盖，见 `WEEKDAY_FRAMES`。
+  // 干活：鱼头 `>` 后面是她嘀咕的话。这两句**不随日期变**，是周期里的
+  // 第 2、3 帧；第一帧是「今天星期几」，由 `weekdayFrame` 现算——
+  // 它按天变，进不了常量表。完整帧序见 `bandWhaleFramesOf`。
   working: [
     '> 工作间隙摸鱼中',
     '> 悄悄摸鱼中    ',
@@ -221,8 +223,11 @@ export const BAND_WHALE_FRAMES: Readonly<Record<BandWhaleState, readonly string[
  * ## 为什么是「一天一组」
  *
  * 状态栏那一格是扫一眼的地方：同一句话在星期三出现、星期五又原样出现，
- * 读者不会觉得它在说话，只会觉得它没在变。按天换之后，一周之内不重复，
- * 而 `working` / `busy` 两帧仍各停 2.4 秒，读得完。
+ * 读者不会觉得它在说话，只会觉得它没在变。按天换之后，一周之内不重复。
+ *
+ * 星期句只占每档三帧里的第一帧（2.4 秒），后两帧仍是「摸鱼」「白饭」那套
+ * 老台词——**那几句不丢**：它们说的是「手头在干什么」，星期句说的是「今天
+ * 哪天」，两件事都要讲，轮着说。
  *
  * ## 为什么用「星期X」而不是谐音梗
  *
@@ -268,7 +273,9 @@ const WEEKDAY_FRAMES: readonly (readonly [string, string])[] = [
 ]
 
 /**
- * 某个时刻该说的两句话：先看星期几，再按 `working` / `busy` 取其一。
+ * 某个时刻的星期句：先看星期几，再按 `working` / `busy` 取其一。
+ *
+ * 它是每档三帧里的**第一帧**，后两帧是 `BAND_WHALE_FRAMES` 里固定的老台词。
  *
  * @param state 当前状态（`idle` 时不走这里，睡觉那档是 `z` 的动画）
  * @param now   当前时刻，用**本地时区**取星期几与帧相位
@@ -276,6 +283,22 @@ const WEEKDAY_FRAMES: readonly (readonly [string, string])[] = [
 export function weekdayFrame(state: BandWhaleState, now: number): string {
   const pair = WEEKDAY_FRAMES[new Date(now).getDay()] ?? WEEKDAY_FRAMES[1]!
   return state === 'busy' ? pair[1] : pair[0]
+}
+
+/**
+ * 某个状态下完整的帧序：**星期句在前，老台词在后**。
+ *
+ * 分开存放的原因：星期句按天变、进不了常量表；「摸鱼」「白饭」那几句不随
+ * 日期变，留在 `BAND_WHALE_FRAMES` 里当固定帧。合成在这里一处做，`idle`
+ * 直接返回原表。
+ */
+export function bandWhaleFramesOf(
+  state: BandWhaleState,
+  now: number,
+): readonly string[] {
+  const fixed = BAND_WHALE_FRAMES[state]
+  if (state === 'idle') return fixed
+  return [weekdayFrame(state, now), ...fixed]
 }
 
 /**
@@ -316,7 +339,8 @@ export const BAND_TICK_MS = 200
  * 出来的），呼气之后还要停一拍再补第二声。匀速播出来像机器在打鼾，不像睡着
  * 的东西。所以改成逐帧给时长。
  *
- * 数组长度必须与 `BAND_WHALE_FRAMES[state]` 一致，测试钉住这一点。
+ * 数组长度必须与 `bandWhaleFramesOf(state, now)` 一致（`idle` 是原表，其余
+ * 是原表前面多一帧星期句），测试钉住这一点。
  */
 const BAND_FRAME_MS: Readonly<Record<BandWhaleState, readonly number[]>> = {
   // 一轮 4.6 秒：十六个字母各 0.2 秒（看得见逐个长出来），呼 0.6，停 0.5，
@@ -326,9 +350,9 @@ const BAND_FRAME_MS: Readonly<Record<BandWhaleState, readonly number[]>> = {
     200, 200, 200, 200, 200, 200, 200, 200,
     600, 500, 500,
   ],
-  // 干活与忙：两句话各停一拍，慢一点才读得完。
-  working: [2400, 2400],
-  busy: [2400, 2400],
+  // 干活与忙：星期句 + 两句老台词，各停一拍，慢一点才读得完。
+  working: [2400, 2400, 2400],
+  busy: [2400, 2400, 2400],
 }
 
 /**
@@ -345,11 +369,12 @@ export function bandWhaleStateOf(isRunning: boolean, now: number): BandWhaleStat
   if (!isRunning) return 'idle'
   // 运行中轮流说两类话：干活时嘀咕摸鱼，忙时念叨吃白饭。
   //
-  // **切换周期必须等于一轮的长度**（两帧 × 2.4 秒 = 4.8 秒）。早先每 700ms
-  // 切一次，那时每帧只有 0.3–0.4 秒、切的是两幅水花，肉眼看着像在划水；
-  // 现在每帧是一整句话，2.4 秒才读得完——若还 700ms 切一次状态，句子根本
-  // 没等看清就被另一句顶掉，整格变成闪烁。
-  return Math.floor(now / 4_800) % 2 === 0 ? 'working' : 'busy'
+  // **切换周期必须等于一轮的长度**（三帧 × 2.4 秒 = 7.2 秒），这样状态一换
+  // 正好落回帧 0（星期句），帧序与状态永远对齐，不会出现「切到 busy 却从
+  // 帧 1 接着播」。早先每 700ms 切一次，那时每帧只有 0.3–0.4 秒、切的是
+  // 两幅水花，肉眼看着像在划水；现在每帧是一整句话，2.4 秒才读得完——若还
+  // 700ms 切一次状态，句子根本没等看清就被另一句顶掉，整格变成闪烁。
+  return Math.floor(now / 7_200) % 2 === 0 ? 'working' : 'busy'
 }
 
 /**
@@ -383,12 +408,12 @@ export function bandWhaleFrameOf(state: BandWhaleState, now: number): number {
  * 用量条字符画的文字：当前状态 + 当前时刻对应的一帧。
  *
  * `idle`（睡觉）走 `BAND_WHALE_FRAMES` 那套逐字母动画；`working` / `busy`
- * 走 `WEEKDAY_FRAMES`，按**本地日期**选当天的一组话。星期几与帧相位用同一
- * 个 `now` 算，所以两者永远同步——不会出现「周三的日期配周二的话」。
+ * 走 `bandWhaleFramesOf`：**帧 0 是当天的星期句，帧 1、2 是固定的老台词**
+ * （摸鱼 / 白饭）。星期几与帧相位用同一个 `now` 算，所以两者永远同步——
+ * 不会出现「周三的日期配周二的话」。
  */
 export function bandWhaleGlyph(state: BandWhaleState, now: number): string {
-  if (state !== 'idle') return weekdayFrame(state, now)
-  const frames = BAND_WHALE_FRAMES.idle
+  const frames = bandWhaleFramesOf(state, now)
   return frames[bandWhaleFrameOf(state, now)] ?? frames[0]!
 }
 
