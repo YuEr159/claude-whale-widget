@@ -71,7 +71,7 @@ import {
   toContextDetail,
   EMPTY_TOTALS,
 } from './usage-detail.ts'
-import { BAND_TICK_MS, WHALE_ASPECT, bandWhaleGlyph, bandWhaleStateOf, BAND_WHALE_TEXT_COLS, emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
+import { BAND_TICK_MS, WHALE_ASPECT, bandWhaleGlyph, bandWhaleStateOf, BAND_WHALE_TEXT_COLS, COMPACTING_HOLD_MS, emblemOf, moodOf, whaleSizeFor, whaleSvg } from './whale-art.ts'
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
@@ -167,6 +167,26 @@ let isCompactPending = false
  * 最坏情况是把「正在跑」显示成「空闲」，不影响任何数字。
  */
 let isSessionRunning = false
+
+/**
+ * 最近一次生命周期分界的时刻（毫秒）：`turn.start` 或 `turn.complete` /
+ * `turn.abort` 各写一次。用量条靠它区分「刚起头还在想」与「已经跑起来了」，
+ * 以及「刚答完在等你」与「走开去发呆了」。
+ *
+ * 与 `isSessionRunning` 一样只活在模块内存里。`null` 表示插件加载后还没见过
+ * 任何一轮——此时按静息算，宁可少说一句，也不要凭空宣称"在等你"。
+ */
+let turnBoundaryAt: number | null = null
+
+/**
+ * 压缩状态的截止时刻（毫秒）；`0` 表示没有正在压缩。
+ *
+ * `session.compact` 是一次同步调用，钩子在它开始时被通知，但**没有完成回调**。
+ * 所以压缩档靠一个时间窗表达：收到通知后 `COMPACTING_HOLD_MS` 之内显示
+ * 「正在压缩」，之后自动落回原来的档。这也顺带处理了「压缩被拒 / 什么也没
+ * 发生」的情形——最多多显示三秒，不会卡住。
+ */
+let compactHoldUntil = 0
 
 /**
  * 圆角框的底色，第一次读 `/config` 后缓存。
@@ -359,7 +379,13 @@ export const register: Register = (on, options) => {
   // `.catch`——统计标记出任何岔子都不该拦住压缩本身。
   on('session.compact', async ($, e, next) => {
     // 子代理/分支的压缩不进主会话的图。
-    if (!e.agentId) isCompactPending = true
+    if (!e.agentId) {
+      isCompactPending = true
+      // 时间窗：三秒内用量条显示「正在压缩」。用引擎时钟，不用 `Date.now()`——
+      // 测试宿主会把时钟接管成一个可控的值。
+      const at = await $.clock.now().catch(() => Date.now())
+      compactHoldUntil = at + COMPACTING_HOLD_MS
+    }
     return next(e)
   }).catch(async ($, e, next) => next(e))
 
@@ -384,8 +410,9 @@ export const register: Register = (on, options) => {
    * 但那边只负责落回静止——最坏情况是子代理起轮时条子划一会儿水，
    * 无害。
    */
-  on('turn.start', async (_$, e, next) => {
+  on('turn.start', async ($, e, next) => {
     isSessionRunning = true
+    turnBoundaryAt = await $.clock.now().catch(() => Date.now())
     return next(e)
   })
 
@@ -395,14 +422,19 @@ export const register: Register = (on, options) => {
    * 用户按 Esc 停掉回答是常见操作，`turn.complete` 不会再来一次。
    * 输入同样只有 `turnId`。
    */
-  on('turn.abort', async (_$, e, next) => {
+  on('turn.abort', async ($, e, next) => {
     isSessionRunning = false
+    // 被打断也算「刚结束」——她还在等你，只是这一次没答完。
+    turnBoundaryAt = await $.clock.now().catch(() => Date.now())
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     // 主会话这一轮结束：鲸鱼落回静止。子代理的完成不影响主条子。
-    if (!e.agentId) isSessionRunning = false
+    if (!e.agentId) {
+      isSessionRunning = false
+      turnBoundaryAt = await $.clock.now().catch(() => Date.now())
+    }
     const usage = e.usage
     if (usage && !e.agentId) {
       const cost = costOf(usage.model, {
@@ -607,7 +639,12 @@ export const register: Register = (on, options) => {
      * 再「呼」一口气；跑对话时鱼头 `>` 后面跟着她嘀咕的话——三帧一轮：先
      * 说今天星期几，再念叨两句「摸鱼」「白饭」的老台词。
      */
-    const bandState = bandWhaleStateOf(isSessionRunning, now)
+    const bandState = bandWhaleStateOf(
+      isSessionRunning,
+      now,
+      turnBoundaryAt,
+      now < compactHoldUntil,
+    )
     // **宽度固定成字形宽度 + 1 列右缝**，不跟着摘要长度算——
     // `summary` 随额度、倒计时、花费随时变长变短，按剩余宽度算的代码估错
     // 一个字符就会换行、把条子变成两行高。窄窗口里引擎按 flexShrink 收窄，
@@ -641,7 +678,7 @@ export const register: Register = (on, options) => {
             设计规则只用于「增加的行数」——挪来当装饰会让读者在条子上看到
             同一个颜色表达两件事。状态差异由字形承担（见 `BAND_WHALE_FRAMES`）。 */}
         <Box key="whale-band-whale" width={BAND_WHALE_COLS}>
-          <Text>{bandWhaleGlyph(bandState, now)}</Text>
+          <Text>{bandWhaleGlyph(bandState, now, turnBoundaryAt)}</Text>
         </Box>
         <Box key="whale-band-spacer" flexGrow={1} />
         <Text dimColor>{summary}</Text>

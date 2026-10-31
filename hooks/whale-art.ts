@@ -99,6 +99,42 @@ export function moodOf(now: number): WhaleMood {
   return 'tired'
 }
 
+/**
+ * 一天里的几个时段，**只用来挑状态栏的台词**，不参与情绪判定。
+ *
+ * 与 `DAY_SCHEDULE` 是两件事：那张表回答「她此刻是什么情绪」（睡着 / 摸鱼 /
+ * 吃撑），这张表回答「现在几点」（深夜 / 清晨 / …）。同一个 `morning` 既可能
+ * 是 `idle`（还没开工）也可能是 `working`（正在跑），而 `idle` 在深夜与清晨
+ * 说的话不该一样。
+ *
+ * 五档而不是七档：状态栏是扫一眼的地方，台词按时段换得太密反而看不出规律。
+ * 五个段落各覆盖几个小时，读者能感觉到「早上和晚上说的话不一样」。
+ */
+export type DayPart = 'deepnight' | 'dawn' | 'morning' | 'afternoon' | 'evening' | 'night'
+
+/** 时段边界，左闭右开，与 `DAY_SCHEDULE` 同一个约定，用本地钟点。 */
+const DAYPART_BOUNDS: ReadonlyArray<{ before: number; part: DayPart }> = [
+  { before: 6, part: 'deepnight' }, // 00:00–05:59 深夜，该睡了
+  { before: 9, part: 'dawn' }, // 06:00–08:59 清晨，刚醒
+  { before: 12, part: 'morning' }, // 09:00–11:59 上午，开工
+  { before: 18, part: 'afternoon' }, // 12:00–17:59 白天，最长的一段
+  { before: 22, part: 'evening' }, // 18:00–21:59 傍晚，收工
+  { before: 24, part: 'night' }, // 22:00–23:59 夜里，困了
+]
+
+/**
+ * 当前时刻属于哪个时段。
+ *
+ * @param now 毫秒级 Unix 时间戳，按**本地时区**取钟点
+ */
+export function dayPartOf(now: number): DayPart {
+  const hour = new Date(now).getHours()
+  for (const slot of DAYPART_BOUNDS) {
+    if (hour < slot.before) return slot.part
+  }
+  return 'night'
+}
+
 /** 没有图形元素时（终端 surface）用的文字鲸鱼。 */
 export function emblemOf(mood: WhaleMood): string {
   switch (mood) {
@@ -118,22 +154,39 @@ export function emblemOf(mood: WhaleMood): string {
  * 尺寸就顶到 52px——塞进去要么被裁掉一半，要么把条子撑高。字符画按字符格
  * 布局，与条子上的摘要文字同一套度量，不会撑高，也不会在 DPI 变化时错位。
  *
- * 三个状态各有一套帧，宽都是 `BAND_WHALE_TEXT_COLS` 列，所以状态切换时
- * 后面的摘要文字不会左右跳：
+ * 每一档各有一套帧，宽都是 `BAND_WHALE_TEXT_COLS` 列，所以状态切换时
+ * 后面的摘要文字不会左右跳。状态不是「动的装饰」，而是**会话此刻处在哪个
+ * 阶段**——读者扫一眼就知道她在等你、在想、在跑、在压缩，还是已经睡了：
  *
- *   - `idle`    睡觉：只有鼾声，`z` 一个字母一个字母地蹦出来（见
- *               `BAND_WHALE_FRAMES`）
- *   - `working` 干活：`>` 是鱼头，后面是她随口嘀咕的一句——先说今天星期几
- *               （见 `WEEKDAY_FRAMES`），再念叨两句摸鱼的旧台词
- *   - `busy`    忙：同样是鱼头 + 三句，第一句是星期几，后两句是吃白饭的旧台词
+ *   - `idle`       静息：没有轮次，且上一轮答完已超过 `WAITING_HOLD_MS`。
+ *                  `z` 一个字母一个字母地蹦出来，攒满整格呼一口气，末尾
+ *                  补两句按钟点的闲话（见 `IDLE_LINES`）
+ *   - `waiting`    等你：刚答完、你还没开口的那几分钟，按钟点说一句
+ *                  （见 `WAITING_LINES`）
+ *   - `thinking`   想：轮次刚起、模型还没出字的头两秒
+ *   - `working`    干活：正常跑着。第一帧报今天星期几，后两帧是摸鱼的老台词
+ *   - `busy`       忙：同一轮里的另一半，吃白饭那一套
+ *   - `compacting` 压缩：引擎正在把对话折起来（`session.compact`）
+ *
+ * 「等」与「静息」的分界靠**时间**：刚答完的那几分钟她还看着你，超过
+ * `WAITING_HOLD_MS` 就自己去发呆。「想」与「干活」的分界同样靠时间——
+ * 引擎没有「首个 token 到达」的事件（`turn.step` 是流式钩子，为一行字符画
+ * 挂上去不值得），`THINKING_HOLD_MS` 是从 `turn.start` 起的一个近似窗口：
+ * 宁可早一点说「在干活」，也不要一直卡在「正在想」。
  *
  * **不再画鲸鱼轮廓，也不再吐泡泡。** 早先每帧都带一个 `~)~` 当作鲸鱼，
  * 干活与忙则是 `>` 后面拖一串 `~` 当水花。那条子只有一行高：`~)~` 画出来
  * 是个静止的括号脸，既不像鲸鱼，又把鼾声挤到左边半格；`~` 水花则只是
- * 装饰，读者看不出它在表达什么。现在干活与忙把水花换成了**她自己说的话**
+ * 装饰，读者看不出它在表达什么。现在每一档把水花换成了**她自己说的话**
  * ——一行高的一格里，文字比波浪更能说明"她在干嘛"。
  */
-export type BandWhaleState = 'idle' | 'working' | 'busy'
+export type BandWhaleState =
+  | 'idle'
+  | 'waiting'
+  | 'thinking'
+  | 'working'
+  | 'busy'
+  | 'compacting'
 
 /**
  * 用量条字符画的帧。**每一帧都恰好 `BAND_WHALE_TEXT_COLS` 列**——状态切换、
@@ -215,6 +268,32 @@ export const BAND_WHALE_FRAMES: Readonly<Record<BandWhaleState, readonly string[
     '> 猛吃大白饭中  ',
     '> 再来一碗      ',
   ],
+  // 想：轮次刚起、模型还没出字的头两秒。
+  //
+  // 这两句都有出处：
+  //   - 「内心 OS 很长」来自萌娘百科原文「能够"深度思考"，对于每个现实人类的
+  //     要求都会思考再三，有着长长的内心OS」
+  //   - 「已深度思考」是 DeepSeek 官方 chat UI 的原话（`messageThinkDuration`：
+  //     `"已思考（用时 X 秒）"`），B 站热评里被改成「已深度思考（用时 半年）」
+  //     用来玩梗。取前四个字，正好和「内心 OS 很长」一样长。
+  thinking: [
+    '> 内心 OS 很长  ',
+    '> 已深度思考    ',
+  ],
+  // 等你：答完了，你还没开口。按钟点说一句，见 `WAITING_LINES`。
+  waiting: [
+    '> 等你敲键盘    ',
+    '> 我在听        ',
+  ],
+  // 压缩：引擎把对话折起来的那一刻，两三秒就过去了。
+  //
+  // 「记住要紧的」说的是压缩本身在做什么（保留摘要、丢掉细节），不是卖萌。
+  // 早先这里是「打包进行李箱」，画面感好但与压缩没有语义对应；换成这句之后
+  // 读者能把它和面板里那条「压缩」虚线对上。
+  compacting: [
+    '> 记住要紧的    ',
+    '> 把对话折起来  ',
+  ],
 }
 
 /**
@@ -273,6 +352,74 @@ const WEEKDAY_FRAMES: readonly (readonly [string, string])[] = [
 ]
 
 /**
+ * 「等你」那档按钟点说的话。**索引是 `DayPart`。**
+ *
+ * 这一档说的是「我答完了，在听你说」，不是「我很闲」——语气要像一个人
+ * 说完话之后等着，而不是机器报「READY」。所以每句都是短促的、带一点
+ * 催促或撒娇的口吻，且都在 16 列的框里。
+ *
+ * ## 写作约束
+ *
+ * 每句必须是 `> ` 开头、总宽恰好 `BAND_WHALE_TEXT_COLS`（16）列。汉字算 2 列，
+ * 所以「`> `」占 2 列 + 最多 7 个汉字 14 列。**七个汉字就是上限**，标点也算
+ * 一个汉字宽（全角）。
+ *
+ * ## 时段差异为什么重要
+ *
+ * 同一个「我在听」，早上说和深夜说不是一回事：早上是「早，说吧」，深夜是
+ * 「还醒着？那你说」。读者在小屏幕上看到这一句，能立刻确认「她还在，而且
+ * 现在是几点」——这比一个不变的「等待输入」有用得多。
+ */
+const WAITING_LINES: Readonly<Record<DayPart, readonly [string, string]>> = {
+  // 深夜：她其实该睡了，但还撑着听你说。
+  // 「你只在半夜十二点后找我」出自 B 站原创歌曲《已深度想你》的歌词
+  // （UP 主失心，BV1JaJo6jEqH，63.7 万播放），原句比这里长，取前七个字。
+  deepnight: ['> 你半夜才找我  ', '> 我陪你熬着    '],
+  // 清晨：刚醒，还没完全进入状态。
+  dawn: ['> 早，说吧      ', '> 刚醒，听着呢  '],
+  // 上午：一天里精神最好的一段。
+  // 「怪服务器别怪鱼」出自 B 站评论原话「实在慢的话，怪服务器，别怪鱼🐳」
+  morning: ['> 等着呢        ', '> 慢就怪服务器  '],
+  // 白天：最长的一段，语气最平。
+  // 「在呢，别催」出自 B 站评论「在呢，别催，鱼也要喘口气」（BV1JaJo6jEqH），
+  // 那是用户催她时她的回应——放在"答完了在等你"这一档正合适。
+  afternoon: ['> 在呢，别催    ', '> 等你敲键盘    '],
+  // 傍晚：快收工了，有一点松。
+  evening: ['> 收工前说吧    ', '> 还听着呢      '],
+  // 夜里：眼皮在打架。
+  night: ['> 还没睡呀      ', '> 我快睡着了    '],
+}
+
+/**
+ * 静息那档按钟点补的一句闲话：**夹在呼吸动画的两轮之间**，说完接着打鼾。
+ *
+ * ## 为什么单独一张表，不并进 `WAITING_LINES`
+ *
+ * `waiting` 说的是「我在听你说」，`idle` 说的是「我睡着了 / 自己待着」。
+ * 两者都是静止状态，但语气完全不同：一个朝向读者，一个朝向自己。并进
+ * 一张表就会被写成同一种腔调。
+ *
+ * ## 为什么只在夜里与傍晚说
+ *
+ * 静息档的主体是 `z` 的呼吸动画——那是挂件最常被看到的样子，不该被话
+ * 占满。只在两轮呼吸之间插一句，且只挑**她真的该有点反应**的时段：
+ * 深夜还在亮着的屏幕、傍晚该收工的时候。上午与白天她不说，就安安静静地睡。
+ *
+ * `undefined` 表示这一档不插话，直接走呼吸动画。
+ */
+const IDLE_LINES: Readonly<Partial<Record<DayPart, readonly [string, string]>>> = {
+  // 深夜：屏幕还亮着，她半梦半醒地嘟囔。
+  // 「要休眠了」呼应萌娘百科的「打瞌睡（运作 sleep 命令）DeepSleep」——
+  // 她把休眠当成真的睡觉，所以用"休眠"而不是"关机"。
+  deepnight: ['> 还亮着灯呢    ', '> 我要休眠了    '],
+  // 夜里：眼皮在打架。
+  night: ['> 困了          ', '> 明天还来吗    '],
+  // 傍晚：一天快结束。第二句用「DeepSleep」——萌百原文的写法，
+  // 六个字母 6 列，加上「梦里吃白饭」正好凑成她睡前最后一句。
+  evening: ['> 先睡一会      ', '> 梦里吃白饭    '],
+}
+
+/**
  * 某个时刻的星期句：先看星期几，再按 `working` / `busy` 取其一。
  *
  * 它是每档三帧里的**第一帧**，后两帧是 `BAND_WHALE_FRAMES` 里固定的老台词。
@@ -286,18 +433,31 @@ export function weekdayFrame(state: BandWhaleState, now: number): string {
 }
 
 /**
- * 某个状态下完整的帧序：**星期句在前，老台词在后**。
+ * 某个状态下完整的帧序。
  *
- * 分开存放的原因：星期句按天变、进不了常量表；「摸鱼」「白饭」那几句不随
- * 日期变，留在 `BAND_WHALE_FRAMES` 里当固定帧。合成在这里一处做，`idle`
- * 直接返回原表。
+ * 三档动态内容各有一处来源：
+ *
+ *   - `working` / `busy`：**帧 0 是星期句**（`WEEKDAY_FRAMES`，按天变），
+ *     帧 1、2 是固定老台词（摸鱼 / 白饭）
+ *   - `waiting`：两句都按时段换（`WAITING_LINES`）——早上说「早，说吧」，
+ *     深夜说「还醒着？那你说」，同一个状态在不同钟点不是一回事
+ *   - `thinking` / `compacting`：短命状态（一两秒），只说固定那两句，
+ *     来不及换时段
+ *   - `idle`：主体的逐字母呼吸动画走 `BAND_WHALE_FRAMES` 原表，**每两轮
+ *     呼吸之间**插一句时段闲话（`IDLE_LINES`，只挑深夜 / 夜里 / 傍晚）。
+ *     插话不改变呼吸的帧长，只是换掉某一轮的内容——见 `bandWhaleGlyph`。
+ *
+ * **只有 `working` / `busy` 才加星期句**：那两档讲的是「一天里的工作」，
+ * 星期几是它的上下文。其余几档讲的是「这一瞬间在做什么」（在等你、在想、
+ * 在压缩），塞一句星期几进去会把它真正要说的话挤掉。
  */
 export function bandWhaleFramesOf(
   state: BandWhaleState,
   now: number,
 ): readonly string[] {
+  if (state === 'waiting') return WAITING_LINES[dayPartOf(now)]
   const fixed = BAND_WHALE_FRAMES[state]
-  if (state === 'idle') return fixed
+  if (state !== 'working' && state !== 'busy') return fixed
   return [weekdayFrame(state, now), ...fixed]
 }
 
@@ -353,28 +513,87 @@ const BAND_FRAME_MS: Readonly<Record<BandWhaleState, readonly number[]>> = {
   // 干活与忙：星期句 + 两句老台词，各停一拍，慢一点才读得完。
   working: [2400, 2400, 2400],
   busy: [2400, 2400, 2400],
+  // 想：只活两秒（`THINKING_HOLD_MS`），两帧各停一秒，正好各说一遍。
+  thinking: [1000, 1000],
+  // 等你：两句话慢一点说。这一档要挂三分钟，4.8 秒一句才不至于像在催命。
+  waiting: [4800, 4800],
+  // 压缩：两三秒的事，每帧停一拍刚好。
+  compacting: [1600, 1600],
 }
 
 /**
- * 会话是否在运行 → 用量条鲸鱼的状态。
+ * 「刚答完」算「在等你」多久（毫秒）。
  *
- * `isRunning` 由 `turn.start` 置真、`turn.complete` / `turn.abort` 置假
- * （见 `register.tsx` 的 `sessionRunning` 状态）。未开始时按 `idle`。
- *
- * @param isRunning 引擎是否正在跑一轮对话
- * @param now       当前时刻，用来在 `working` / `busy` 之间轮换——同一状态
- *                  停着不动会让人以为卡住了
+ * 引擎没有「用户开始打字」的事件，只有 `turn.complete`。答完之后那一小段
+ * 她还看着屏幕的时候，说「等你敲键盘」比立刻缩回去睡觉更贴切；再久一点，
+ * 人就真的走开了，该让位给静息的鼾声。三分钟是个折中：去泡杯茶回来
+ * 还看得见她在等，离开一小时就不会一直是那句「我在听」。
  */
-export function bandWhaleStateOf(isRunning: boolean, now: number): BandWhaleState {
-  if (!isRunning) return 'idle'
-  // 运行中轮流说两类话：干活时嘀咕摸鱼，忙时念叨吃白饭。
-  //
-  // **切换周期必须等于一轮的长度**（三帧 × 2.4 秒 = 7.2 秒），这样状态一换
-  // 正好落回帧 0（星期句），帧序与状态永远对齐，不会出现「切到 busy 却从
-  // 帧 1 接着播」。早先每 700ms 切一次，那时每帧只有 0.3–0.4 秒、切的是
-  // 两幅水花，肉眼看着像在划水；现在每帧是一整句话，2.4 秒才读得完——若还
-  // 700ms 切一次状态，句子根本没等看清就被另一句顶掉，整格变成闪烁。
-  return Math.floor(now / 7_200) % 2 === 0 ? 'working' : 'busy'
+export const WAITING_HOLD_MS = 3 * 60_000
+
+/**
+ * 轮次刚起的头多久算「正在想」（毫秒）。
+ *
+ * 引擎没有「首个 token 到达」的稳定事件（要拿它得挂 `turn.step` 流式钩子，
+ * 为一行字符画挂一条流式管道不值得）。这里用一个**近似窗口**：`turn.start`
+ * 之后这段时间里她还在组织语言，之后按「正在跑」算。宁可早一点说「在干活」，
+ * 也不要一直卡在「正在想」——读者看到的字比后台的真实阶段更重要。
+ *
+ * 取两秒：模型的第一个 token 通常在 1～3 秒内到，两秒是这段分布的中位数附近。
+ */
+export const THINKING_HOLD_MS = 2_000
+
+/**
+ * 压缩标记保留多久（毫秒）。
+ *
+ * `session.compact` 是一次同步调用，钩子在它开始时就被通知，但它没有
+ * 「完成」的回调。所以压缩状态靠一个**时间窗**表达：从收到通知起这段时间
+ * 里显示 `compacting`，之后自动落回上一档。压缩本身通常一两秒完成，
+ * 这里给三秒，留一点尾巴。
+ */
+export const COMPACTING_HOLD_MS = 3_000
+
+/**
+ * 会话此刻处在哪个阶段（毫秒级时间戳驱动）。
+ *
+ * @param since 最近一次生命周期的分界点（`null` = 从未有过）
+ *   - `turn.start` 的时刻：正在跑一轮
+ *   - `turn.complete` / `turn.abort` 的时刻：刚结束（可能在「等你」）
+ * @param isRunning 引擎是否正在跑一轮
+ * @param now       当前时刻，用来在「等你」窗口内判边界、在 `working` /
+ *                  `busy` 之间轮换
+ */
+export function bandWhaleStateOf(
+  isRunning: boolean,
+  now: number,
+  boundaryAt?: number | null,
+  isCompacting?: boolean,
+): BandWhaleState {
+  // 压缩优先：它发生在两轮之间，可能与轮次无关，但读者最该看到这档。
+  if (isCompacting) return 'compacting'
+
+  if (isRunning) {
+    // 刚起头那两秒算「正在想」——她还没开始说话，只是在心里组织。
+    const sinceStart = boundaryAt != null ? now - boundaryAt : now
+    if (sinceStart < THINKING_HOLD_MS) return 'thinking'
+    // 运行中轮流说两类话：干活时嘀咕摸鱼，忙时念叨吃白饭。
+    //
+    // **从 `turn.start` 起算，不从绝对时间起算。** 用绝对时间（`now % 周期`）
+    // 的话，每轮开头落进哪一档是随机的——有时刚起头就在「猛吃大白饭」，
+    // 读者看不出「这一轮刚开始」。改成相对轮次起点后，每一轮都是
+    // 「想两秒 → 干活七秒 → 忙七秒 → 干活…」，开头永远是那句星期句。
+    //
+    // **切换周期必须等于一轮的长度**（三帧 × 2.4 秒 = 7.2 秒），这样状态一换
+    // 正好落回帧 0（星期句），帧序与状态永远对齐，不会出现「切到 busy 却从
+    // 帧 1 接着播」。早先每 700ms 切一次，那时每帧只有 0.3–0.4 秒、切的是
+    // 两幅水花，肉眼看着像在划水；现在每帧是一整句话，2.4 秒才读得完——若还
+    // 700ms 切一次状态，句子根本没等看清就被另一句顶掉，整格变成闪烁。
+    return Math.floor(sinceStart / 7_200) % 2 === 0 ? 'working' : 'busy'
+  }
+
+  // 没在跑：刚答完的几分钟里她在等你，之后自己去发呆。
+  if (boundaryAt != null && now - boundaryAt < WAITING_HOLD_MS) return 'waiting'
+  return 'idle'
 }
 
 /**
@@ -392,11 +611,23 @@ export function bandWhaleStateOf(isRunning: boolean, now: number): BandWhaleStat
  * @param now   当前时刻（毫秒）
  * @returns 该状态下的第几帧（从 0 起）
  */
-export function bandWhaleFrameOf(state: BandWhaleState, now: number): number {
+export function bandWhaleFrameOf(
+  state: BandWhaleState,
+  now: number,
+  since?: number | null,
+): number {
   const durations = BAND_FRAME_MS[state]
   const period = durations.reduce((sum, ms) => sum + ms, 0)
+  // 轮次内的状态（想 / 干活 / 忙）从 `since`（`turn.start` 的时刻）起算，
+  // 与 `bandWhaleStateOf` 的状态相位同一个基准——否则状态切回 `working` 时，
+  // 帧相位可能停在帧 1 上，第一帧该说的星期句就被跳过了。
+  //
+  // `idle` 的呼吸动画不受轮次影响，始终按绝对时间走。
+  const inTurn = state === 'thinking' || state === 'working' || state === 'busy'
+  const base = inTurn && since != null ? since : 0
+  const elapsed = now - base
   // 负时刻不该发生，但取模会给出负数，夹一下比画出一个不存在的帧好。
-  let rest = ((now % period) + period) % period
+  let rest = ((elapsed % period) + period) % period
   for (let index = 0; index < durations.length; index += 1) {
     rest -= durations[index]!
     if (rest < 0) return index
@@ -407,14 +638,42 @@ export function bandWhaleFrameOf(state: BandWhaleState, now: number): number {
 /**
  * 用量条字符画的文字：当前状态 + 当前时刻对应的一帧。
  *
- * `idle`（睡觉）走 `BAND_WHALE_FRAMES` 那套逐字母动画；`working` / `busy`
- * 走 `bandWhaleFramesOf`：**帧 0 是当天的星期句，帧 1、2 是固定的老台词**
- * （摸鱼 / 白饭）。星期几与帧相位用同一个 `now` 算，所以两者永远同步——
- * 不会出现「周三的日期配周二的话」。
+ * `working` / `busy` 走 `bandWhaleFramesOf`：**帧 0 是当天的星期句，帧 1、2
+ * 是固定的老台词**（摸鱼 / 白饭）。其余几档（在等你、在想、在压缩）都是两句
+ * 固定的话。
+ *
+ * ## 静息档的闲话插在哪
+ *
+ * `idle` 的主线是 4.6 秒一轮的呼吸动画（见 `BAND_FRAME_MS.idle`）。如果
+ * 深夜 / 夜里 / 傍晚有闲话可说（`IDLE_LINES`），就**每轮呼吸的最后 0.5 秒
+ * 换成一句闲话**——呼吸照常进行，只在末尾那声 `呼` 的位置开口说一句。
+ *
+ * 早先试过「偶数轮说话、奇数轮呼吸」，问题是闲话整段占掉一轮，屏幕上
+ * 每 9.2 秒才见一次字，而且那一轮看不到任何呼吸动作，读者会以为卡住了。
+ * 现在做成呼吸里的一拍，两者都不缺。
+ *
+ * @param since 轮次起点（`turn.start` 的时刻）；`thinking` / `working` / `busy`
+ *   都从这一刻起算帧相位，与 `bandWhaleStateOf` 的状态相位对齐。
  */
-export function bandWhaleGlyph(state: BandWhaleState, now: number): string {
+export function bandWhaleGlyph(
+  state: BandWhaleState,
+  now: number,
+  since?: number | null,
+): string {
+  if (state === 'idle') {
+    const lines = IDLE_LINES[dayPartOf(now)]
+    if (lines) {
+      const frame = bandWhaleFrameOf(state, now, since)
+      const total = BAND_FRAME_MS.idle.length
+      // 只在最后一帧（那声 `呼`）的位置说话，其余帧照常呼吸。
+      if (frame === total - 1) {
+        const round = Math.floor(now / BAND_FRAME_MS.idle.reduce((s, ms) => s + ms, 0))
+        return lines[((round % 2) + 2) % 2] ?? lines[0]!
+      }
+    }
+  }
   const frames = bandWhaleFramesOf(state, now)
-  return frames[bandWhaleFrameOf(state, now)] ?? frames[0]!
+  return frames[bandWhaleFrameOf(state, now, since)] ?? frames[0]!
 }
 
 /**
