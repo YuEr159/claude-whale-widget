@@ -24,7 +24,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { BAND_WHALE_FRAMES, BAND_WHALE_TEXT_COLS, WHALE_MAX_WIDTH, bandWhaleFramesOf, bandWhaleGlyph, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
+import { BAND_WHALE_FRAMES, BAND_WHALE_TEXT_COLS, THINKING_HOLD_MS, WAITING_HOLD_MS, WHALE_MAX_WIDTH, bandWhaleFramesOf, bandWhaleGlyph, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   canonicalModelName,
@@ -2216,15 +2216,28 @@ test('设置页：口径芯片整行宽度守住 70 列预算', () => {
  * 睡觉一档按读给的完整节奏走：`z` → `zz` → … → 攒满整格，`（呼）` 呼出来，
  * 空一拍，再补一声 `呼`。干活与忙那两档各说两句话，不再吐 `~` 泡泡。
  */
-test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
-  // 空闲：不管时钟走到哪儿都是 idle。
+test('用量条字符画：六种状态各有动画，全部帧等宽', () => {
+  // 静息：没有轮次、也没有最近的分界点。
   for (const now of [0, 700, 1400, 5000, 1_000_000]) {
     assert.equal(bandWhaleStateOf(false, now), 'idle')
+    assert.equal(bandWhaleStateOf(false, now, null), 'idle')
   }
-  // 运行中：按一轮 7.2 秒切状态（三帧 × 2.4 秒），换档时帧序从头开始。
-  assert.equal(bandWhaleStateOf(true, 0), 'working')
-  assert.equal(bandWhaleStateOf(true, 7_200), 'busy')
-  assert.equal(bandWhaleStateOf(true, 14_400), 'working')
+  // 运行中：刚起头两秒算「正在想」，之后按一轮 7.2 秒切干活 / 忙。
+  const T0 = 1_000_000
+  assert.equal(bandWhaleStateOf(true, T0 + 0, T0), 'thinking')
+  assert.equal(bandWhaleStateOf(true, T0 + 1_999, T0), 'thinking')
+  assert.equal(bandWhaleStateOf(true, T0 + 2_000, T0), 'working')
+  assert.equal(bandWhaleStateOf(true, T0 + 9_200, T0), 'busy')
+  assert.equal(bandWhaleStateOf(true, T0 + 16_400, T0), 'working')
+
+  // 等你：刚答完的三分钟里，之后才是静息。
+  assert.equal(bandWhaleStateOf(false, T0 + 1, T0), 'waiting')
+  assert.equal(bandWhaleStateOf(false, T0 + WAITING_HOLD_MS - 1, T0), 'waiting')
+  assert.equal(bandWhaleStateOf(false, T0 + WAITING_HOLD_MS, T0), 'idle')
+
+  // 压缩：压过一切，管它有没有在跑。
+  assert.equal(bandWhaleStateOf(true, T0, T0, true), 'compacting')
+  assert.equal(bandWhaleStateOf(false, T0 + WAITING_HOLD_MS * 5, T0, true), 'compacting')
 
   /**
    * 展开所有状态的**完整帧序**（`working` / `busy` 的第一帧是星期句，
@@ -2286,13 +2299,14 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
   // 整条用量条就错位。
   //
   // 白名单不再逐字列举：星期句按天变，逐字维护必然漏。规则改成「汉字 +
-  // 几个固定标点」——汉字与全角标点由 `displayWidth` 按 CJK 规则各算 2 列，
-  // 面板里本来就通篇中文，字体必定覆盖；`≋` `ᐟ` 这类符号仍被挡住。
+  // 几个固定标点 + 拉丁字母」——汉字与全角标点由 `displayWidth` 按 CJK 规则
+  // 各算 2 列，面板里本来就通篇中文，字体必定覆盖；`≋` `ᐟ` 这类符号仍被挡住，
+  // 宽字符也会让上面的列数断言立刻失败。
   const allowed = new Set(['>', 'z', ' ', '，', '（', '）', '呼'])
   for (const { state, index, frame } of allFrames) {
     for (const ch of frame) {
       assert.ok(
-        allowed.has(ch) || /\p{Script=Han}/u.test(ch),
+        allowed.has(ch) || /\p{Script=Han}/u.test(ch) || /[A-Za-z]/.test(ch),
         `${state} 第 ${index} 帧用了非白名单字符 ${JSON.stringify(ch)}`,
       )
     }
@@ -2305,11 +2319,12 @@ test('用量条字符画：三种状态各有动画，全部帧等宽', () => {
     assert.ok(new Set(frames).size > 1, `${state} 的帧全一样，等于静止`)
   }
 
-  // 三个状态的第一帧互不相同：状态一换，读者立刻看得出来。
+  // 六个状态的第一帧互不相同：状态一换，读者立刻看得出来。
+  // 这是唯一能靠「扫一眼」分辨六档的机制——颜色按设计不参与。
   const firsts = Object.keys(BAND_WHALE_FRAMES).map(
     state => bandWhaleFramesOf(state, probeNow)[0],
   )
-  assert.equal(new Set(firsts).size, 3, '三个状态的起始帧应当各不相同')
+  assert.equal(new Set(firsts).size, 6, `六个状态的起始帧应当各不相同：${firsts.join(' / ')}`)
 
   // **z 是一个字母一个字母长出来的。** 连着的十六拍，每拍比上一拍多一个 z，
   // 且都在行首——读者看到的是字母从左边一个个冒出来，而不是整串换个长度。
@@ -2469,6 +2484,101 @@ test('状态栏文案一周七天各不同，每天都放得进 16 列', () => {
     bandWhaleGlyph('idle', dayAt(1)).includes('z'),
     'idle 那档仍该是 z 的动画',
   )
+})
+
+/**
+ * 会话生命周期 → 状态栏台词。这是「从白天到黑夜、从运行到压缩到静息到
+ * 等待回复」那条需求的落点。
+ *
+ * 六个阶段各守一件事：**该出现的时候出现**、**只说自己的话**（不许把别的
+ * 阶段的台词串进来）、**宽度都对**。
+ */
+test('生命周期六档：想在起头、干活在中段、等你三分钟、压缩随时插', () => {
+  const T0 = 1_000_000
+
+  // 1. 起头两秒是「正在想」，不是「在干活」。
+  assert.equal(bandWhaleStateOf(true, T0, T0), 'thinking')
+  assert.equal(bandWhaleStateOf(true, T0 + THINKING_HOLD_MS - 1, T0), 'thinking')
+  assert.equal(bandWhaleStateOf(true, T0 + THINKING_HOLD_MS, T0), 'working')
+
+  // 2. 「想」那档两句都要说完——只活两秒，两帧各一秒（1000ms 是第二帧的起点）。
+  const thinking = []
+  for (const at of [T0, T0 + 1000]) thinking.push(bandWhaleGlyph('thinking', at, T0))
+  assert.equal(new Set(thinking).size, 2, `想那两秒该轮换两句：${thinking.join(' / ')}`)
+
+  // 3. 答完之后的三分钟里是「等你」，超出才是静息。
+  assert.equal(bandWhaleStateOf(false, T0 + 1, T0), 'waiting')
+  assert.equal(bandWhaleStateOf(false, T0 + WAITING_HOLD_MS, T0), 'idle')
+
+  // 4. 「等你」按钟点换：同一天里六个时段，六组话互不相同。
+  const at = hour => new Date(2026, 10, 4, hour, 0, 0).getTime()
+  const parts = [2, 7, 10, 15, 19, 23].map(hour => bandWhaleFramesOf('waiting', at(hour)))
+  const firsts = parts.map(pair => pair[0])
+  assert.equal(new Set(firsts).size, 6, `六个时段的等待台词应各不相同：${firsts.join(' / ')}`)
+  // 同组两句也要不同，否则「轮换」是假的。
+  for (const pair of parts) assert.notEqual(pair[0], pair[1], `等待那组两句重了：${pair.join(' / ')}`)
+
+  // 5. 压缩压过一切：哪怕正在跑、哪怕刚答完，只要在压缩窗口里就显示压缩。
+  assert.equal(bandWhaleStateOf(true, T0 + 5000, T0, true), 'compacting')
+  assert.equal(bandWhaleStateOf(false, T0 + 1, T0, true), 'compacting')
+
+  // 6. 六个阶段的第一帧（或等待的第一句）互不相同——颜色不参与区分，
+  //    全靠字形，这是唯一能一眼认出来的机制。
+  const seen = new Set([
+    bandWhaleFramesOf('thinking', at(10))[0],
+    bandWhaleFramesOf('working', at(10))[0],
+    bandWhaleFramesOf('busy', at(10))[0],
+    bandWhaleFramesOf('waiting', at(10))[0],
+    bandWhaleFramesOf('compacting', at(10))[0],
+    bandWhaleFramesOf('idle', at(10))[0],
+  ])
+  assert.equal(seen.size, 6, `六个阶段的首句应各不相同：${[...seen].join(' / ')}`)
+
+  // 7. 所有新台词都是恰好 16 列，且都以鱼头开头（静息的 z 动画除外）。
+  const samples = []
+  for (const hour of [2, 7, 10, 15, 19, 23]) {
+    samples.push(...bandWhaleFramesOf('waiting', at(hour)))
+    const idleGlyph = bandWhaleGlyph('idle', at(hour))
+    if (idleGlyph.trim().startsWith('>')) samples.push(idleGlyph)
+  }
+  samples.push(...bandWhaleFramesOf('thinking', at(10)))
+  samples.push(...bandWhaleFramesOf('compacting', at(10)))
+  for (const text of samples) {
+    assert.equal(
+      displayWidth(text),
+      BAND_WHALE_TEXT_COLS,
+      `台词宽度该是 ${BAND_WHALE_TEXT_COLS} 列：「${text}」量得 ${displayWidth(text)}`,
+    )
+  }
+
+  // 8. **静息档的呼吸不被闲话打断**：白天的静息永远是 z 的动画。
+  for (const hour of [9, 10, 11, 13, 15, 16]) {
+    const glyph = bandWhaleGlyph('idle', at(hour))
+    assert.ok(
+      /^z*\s*(（呼）|呼)?\s*$/.test(glyph) || glyph.trim() === '',
+      `${hour} 点不该插闲话，实际是「${glyph}」`,
+    )
+  }
+
+  // 9. **但傍晚 / 夜里 / 深夜的静息真的会说一句**——只验证「白天不说」的话，
+  //    把闲话整段删掉测试也照样过，那就等于没测。
+  for (const hour of [2, 19, 23]) {
+    const period = 4_600 // 一轮呼吸的长度（见 `BAND_FRAME_MS.idle`）
+    const spoken = []
+    // 看四轮呼吸，至少该听到一次闲话。
+    for (let round = 0; round < 4; round += 1) {
+      spoken.push(bandWhaleGlyph('idle', at(hour) + round * period + 100))
+    }
+    assert.ok(
+      spoken.some(text => text.trim().startsWith('>')),
+      `${hour} 点的静息该说一句闲话，实际四轮全是：${spoken.join(' | ')}`,
+    )
+    // 也不能整段都在说话——呼吸仍是主体。
+    assert.ok(
+      spoken.some(text => !text.trim().startsWith('>')),
+      `${hour} 点的静息被闲话占满了：${spoken.join(' | ')}`,
+    )
+  }
 })
 
 /**
