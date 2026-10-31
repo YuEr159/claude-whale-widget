@@ -838,7 +838,8 @@ export function contextParts(rows: ReadonlyArray<{ name: string; tokens: number;
  * 而且同一张图在桌面端（SVG，十六进制）与终端（主题键）会读出不同含义。
  * 两边共用这一套固定色值，跨表面、跨主题都一致。
  *
- * 与 `chart-art.ts` 的 `PART_COLORS` 必须逐项相同。
+ * 与 `panel-fill.ts` 的 `CHART_PALETTES.*.parts` 必须逐项相同——
+ * `tests/node.run.mjs` 有一条测试逐项比对。
  */
 /**
  * 上下文分类的配色。

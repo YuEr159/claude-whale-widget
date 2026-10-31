@@ -372,8 +372,10 @@ test('设置页的开关都按真实状态亮灭，不写死', async ($, on) => 
   await ui.press({ key: 'whale-turn-cost' })
   expect((await textProps('whale-turn-cost')).bold).toBe(true)
 
-  // 口径按钮同样按真实状态亮灭：默认只开「额度窗口」。
-  expect((await textProps('whale-metric-window')).bold).toBe(true)
+  // 口径按钮同样按真实状态亮灭：这份 mock 没有额度窗口，所以环境自适应
+  // 选中的默认口径是「上下文占用」，其余几项都是灭的。
+  expect((await textProps('whale-metric-cost')).bold).toBe(true)
+  expect((await textProps('whale-metric-window')).bold).toBe(false)
   expect((await textProps('whale-metric-diff')).bold).toBe(false)
 
   await ui.unmount()
@@ -439,17 +441,21 @@ test('点用量条口径给出开/关提示', async ($, on) => {
   })
   await ui.press({ key: 'whale-tab-settings' })
 
-  // 默认只开着「额度窗口」；再点它会被拒绝（至少留一项），那是另一条提示。
-  await ui.press({ key: 'whale-metric-cost' })
-  expect(toasts.some(text => text.includes('上下文占用') && text.includes('已开启'))).toBe(true)
-
-  // 再点一次关掉它，提示要说「已关闭」而不是又说一遍「已开启」。
-  await ui.press({ key: 'whale-metric-cost' })
-  expect(toasts.some(text => text.includes('上下文占用') && text.includes('已关闭'))).toBe(true)
-
-  // 每个口径都走同一条路：挑一个还没碰过的再验一次。
+  // 默认口径是**按环境自适应的**：这份 mock 没有额度窗口，所以条子上此刻
+  // 显示的是「上下文占用」（`DEFAULT_PREFS.bandMetrics` 为空时的兜底）。
+  // 先点一个没开的，验证「已开启」。
   await ui.press({ key: 'whale-metric-session' })
   expect(toasts.some(text => text.includes('本会话花费') && text.includes('已开启'))).toBe(true)
+
+  // 再点一次关掉它，提示要说「已关闭」而不是又说一遍「已开启」。
+  await ui.press({ key: 'whale-metric-session' })
+  expect(toasts.some(text => text.includes('会话花费') && text.includes('已关闭'))).toBe(true)
+
+  // 「上下文占用」是当前默认开着的那一项：再开一个别的之后，点它才能关掉
+  // ——只剩最后一项时点是拒绝，那是另一条测试守的。
+  await ui.press({ key: 'whale-metric-window' })
+  await ui.press({ key: 'whale-metric-cost' })
+  expect(toasts.some(text => text.includes('上下文占用') && text.includes('已关闭'))).toBe(true)
 
   await ui.unmount()
 })
@@ -528,11 +534,12 @@ test('取消最后一个口径时给出提示，而不是静默无视', async ($
     return kids.find((kid: any) => kid && typeof kid === 'object')?.props
   }
 
-  // 默认只有「额度窗口」一个口径开着；再点它就是要取消到 0 项。
-  expect((await textProps('whale-metric-window')).bold).toBe(true)
-  await ui.press({ key: 'whale-metric-window' })
+  // 默认口径是环境自适应的：这份 mock 没有额度窗口，条子上显示的是
+  // 「上下文占用」——所以此刻只有它一个亮着，点它就是要取消到 0 项。
+  expect((await textProps('whale-metric-cost')).bold).toBe(true)
+  await ui.press({ key: 'whale-metric-cost' })
   // 它必须仍然亮着——点击被拒绝了。
-  expect((await textProps('whale-metric-window')).bold).toBe(true)
+  expect((await textProps('whale-metric-cost')).bold).toBe(true)
   // 而且要说一声，不能静默。
   expect(toasts.some(text => text.includes('至少要留一项'))).toBe(true)
 
@@ -587,6 +594,17 @@ test('输入框上方用量条：摘要在右，左侧是字符画小鲸鱼', as
   expect(glyph).not.toContain('~')
 
   expect(await ui.find({ key: 'whale-band-spacer' })).toBeDefined()
+
+  // **没有额度窗口时，默认口径自动换成「上下文占用」。**
+  //
+  // 这份 mock 的 `view: {}` 正是网关环境的形状：订阅额度那套字段全空。
+  // 早先 `DEFAULT_PREFS.bandMetrics` 写死 `['window']`，兜底永远走不到，
+  // 条子上只剩一句「无额度窗口」——读者看到的是条什么都没说的条子，会以为
+  // 插件坏了。现在默认值是空的，由环境决定：没有额度就报上下文占用。
+  const band = JSON.stringify(await ui.find({ key: 'whale-band' }))
+  expect(band).toContain('上下文')
+  // 反过来：不该再是那句说的「无额度窗口」。
+  expect(band).not.toContain('无额度窗口')
 
   await ui.unmount()
 })

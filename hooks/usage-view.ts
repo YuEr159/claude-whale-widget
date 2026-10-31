@@ -192,9 +192,18 @@ export function bandSummary(
   const five = pct(view.fiveHour?.percentUsed)
   const seven = pct(view.sevenDay?.percentUsed)
   const hasLimits = Boolean(view.fiveHour || view.sevenDay)
-  // `window` 已经写出了 5h 那一半，`context` 若照常输出就会把 `5h 24%`
-  // 连着印两遍。所以两条都选时让 `context` 只补 7d 这一半。
-  const windowShowsFive = metrics.includes('window') && hasLimits
+  // `window` 实际会画出哪几个窗口：有 5h 就画 5h（带倒计时），有 7d 就画 7d。
+  // `context` 只补 `window` 没画的那一半，两处都从这个判断出发，才不会各算各的。
+  //
+  // 早先的判据是 `hasLimits`（任一窗口存在），这在只有单边窗口时全错：
+  //
+  //   - 只有 7d：`window` 走 `5h — · 7d 70%`（5h 明明没有却印出来），
+  //     `context` 又补一遍 7d → `5h — · 7d 70% · 7d 70%`
+  //   - 只有 5h：`context` 补 `7d —`，一个不存在的窗口被画成破折号
+  //
+  // 现在两个分支共用同一组「`window` 画了什么」的事实。
+  const windowDrawsFive = metrics.includes('window') && Boolean(view.fiveHour)
+  const windowDrawsSeven = metrics.includes('window') && Boolean(view.sevenDay)
 
   const one = (metric: BandMetric): string => {
     switch (metric) {
@@ -202,7 +211,7 @@ export function bandSummary(
         return `本会话 ${usdEstimate(sessionCost ?? view.costUsd)}`
       case 'cost':
         return `上下文 ${pct(view.contextPercent)}`
-      case 'context':
+      case 'context': {
         // 没有额度窗口时**什么都不说**，而不是跟着写「无额度窗口」。
         //
         // 那句话是「额度窗口」这一项的消息。以前两项都返回它，靠后面的
@@ -210,13 +219,26 @@ export function bandSummary(
         // 说出同一句话，读者点了开关条子毫无变化，以为开关坏了。
         // 没有数据就不该替这一项发言；`window` 那句已经把情况说清楚。
         if (!hasLimits) return ''
-        return windowShowsFive ? `7d ${seven}` : `5h ${five} · 7d ${seven}`
-      default:
+        // `window` 已经画过的那半边不再重复，另一半照常补上。
+        const halves: string[] = []
+        if (view.fiveHour && !windowDrawsFive) halves.push(`5h ${five}`)
+        if (view.sevenDay && !windowDrawsSeven) halves.push(`7d ${seven}`)
+        return halves.join(' · ')
+      }
+      default: {
         // `window`：点了「额度窗口」，条子上就该是额度窗口的消息。
         if (!hasLimits) return NO_LIMITS
-        return view.fiveHour
-          ? `5h ${five} · ${countdown(view.fiveHour.resetsAt, now)} 后重置`
-          : `5h ${five} · 7d ${seven}`
+        const halves: string[] = []
+        if (view.fiveHour) {
+          // 倒计时那一截**只在真拿到 `resetsAt` 时才拼**。引擎把它定成可选
+          // 字段，缺的时候 `countdown` 返回空串，早先外层照旧拼「后重置」，
+          // 条子上会出现 `5h 40% ·  后重置`（两个空格夹一个残句）。
+          const left = countdown(view.fiveHour.resetsAt, now)
+          halves.push(left.length > 0 ? `5h ${five} · ${left} 后重置` : `5h ${five}`)
+        }
+        if (view.sevenDay) halves.push(`7d ${seven}`)
+        return halves.join(' · ')
+      }
     }
   }
 

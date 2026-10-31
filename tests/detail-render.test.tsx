@@ -98,7 +98,7 @@ test('面板画出原生 /usage 的额度窗口与金额', async ($, on) => {
 
 test('面板只有一种形态：请求 breakdown、画出额度与估算金额', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.env(on, { HOME: 'C:/Users/test' })
   // 测试的 hook 不能写 `$.state`（宿主规则只允许插件的 hooks 模块写），
   // 也不能靠 hook `state.get` 预置——引擎会把那样的应答丢掉。
   const calls: unknown[] = []

@@ -20,8 +20,8 @@ export const WHALE_ASPECT = WHALE_CANVAS.height / WHALE_CANVAS.width
 /**
  * 鲸鱼位图在画布里的位置与边长。
  *
- * 单独提出来是为了**镜像**：`bandWhaleSvg` 要绕鲸鱼自己的中线翻，得知道
- * 她占哪一段；写死两份迟早对不上。改这里，绘制与镜像一起跟着变。
+ * 单独提出来是为了**绘制**：`whaleSvg` 里 image 的 `x`/`y` 与画布总宽
+ * 都由它推出来，写死两份迟早对不上。
  */
 const WHALE_GROUP_X = 318
 const WHALE_GROUP_Y = 16
@@ -107,8 +107,8 @@ export function moodOf(now: number): WhaleMood {
  * 是 `idle`（还没开工）也可能是 `working`（正在跑），而 `idle` 在深夜与清晨
  * 说的话不该一样。
  *
- * 五档而不是七档：状态栏是扫一眼的地方，台词按时段换得太密反而看不出规律。
- * 五个段落各覆盖几个小时，读者能感觉到「早上和晚上说的话不一样」。
+ * 六档而不是更细：状态栏是扫一眼的地方，台词按时段换得太密反而看不出规律。
+ * 六个段落各覆盖几个小时，读者能感觉到「早上和晚上说的话不一样」。
  */
 export type DayPart = 'deepnight' | 'dawn' | 'morning' | 'afternoon' | 'evening' | 'night'
 
@@ -199,7 +199,7 @@ export type BandWhaleState =
  *
  * - **睡觉 `idle`**：只有鼾声，`z` **一个字母一个字母地蹦出来**——`z` →
  *   `zz` → … → 攒满整格，`（呼）` 呼出来，空一拍，再补一声 `呼`。攒字母
- *   那十六帧各 0.2 秒，看得见它是逐个长出来的；整轮 4.6 秒，接近一次呼吸。
+ *   那十六帧各 0.2 秒，看得见它是逐个长出来的；整轮 4.8 秒，接近一次呼吸。
  * - **干活 `working` / 忙 `busy`**：`>` 是鱼头，后面是她嘀咕的一句。
  *   每一档三帧：**帧 0 说今天星期几**（文案来自 `WEEKDAY_FRAMES`），
  *   **帧 1、2 说手头在干什么**（就是下面这两组「摸鱼」「白饭」的句子）。
@@ -367,7 +367,7 @@ const WEEKDAY_FRAMES: readonly (readonly [string, string])[] = [
  * ## 时段差异为什么重要
  *
  * 同一个「我在听」，早上说和深夜说不是一回事：早上是「早，说吧」，深夜是
- * 「还醒着？那你说」。读者在小屏幕上看到这一句，能立刻确认「她还在，而且
+ * 「你半夜才找我」。读者在小屏幕上看到这一句，能立刻确认「她还在，而且
  * 现在是几点」——这比一个不变的「等待输入」有用得多。
  */
 const WAITING_LINES: Readonly<Record<DayPart, readonly [string, string]>> = {
@@ -403,8 +403,7 @@ const WAITING_LINES: Readonly<Record<DayPart, readonly [string, string]>> = {
  *
  * 静息档的主体是 `z` 的呼吸动画——那是挂件最常被看到的样子，不该被话
  * 占满。只在两轮呼吸之间插一句，且只挑**她真的该有点反应**的时段：
- * 深夜还在亮着的屏幕、傍晚该收工的时候。白天六个时段里她不说，就安安静静
- * 地睡。
+ * 深夜还在亮着的屏幕、傍晚该收工的时候；白天则换成一声鲸叫（见下）。
  *
  * ## 白天那档为什么是「哦鲸鲸」
  *
@@ -463,7 +462,7 @@ export function weekdayFrame(state: BandWhaleState, now: number): string {
  *   - `working` / `busy`：**帧 0 是星期句**（`WEEKDAY_FRAMES`，按天变），
  *     帧 1、2 是固定老台词（摸鱼 / 白饭）
  *   - `waiting`：两句都按时段换（`WAITING_LINES`）——早上说「早，说吧」，
- *     深夜说「还醒着？那你说」，同一个状态在不同钟点不是一回事
+ *     深夜说「你半夜才找我」，同一个状态在不同钟点不是一回事
  *   - `thinking` / `compacting`：短命状态（一两秒），只说固定那两句，
  *     来不及换时段
  *   - `idle`：主体的逐字母呼吸动画走 `BAND_WHALE_FRAMES` 原表，**每两轮
@@ -495,7 +494,8 @@ export function bandWhaleFramesOf(
  * 代价是条子上少 6 列给摘要。摘要本来就靠 `flexGrow` 撑开，窄窗口下先收窄
  * 的是它；这一格宽度固定、不会被压变形，也不会因为摘要变长变短而左右跳。
  * 摘要最长的一档（`5h 100% · 23h59m 后重置`）是 23 列，加上这一格 16 列、
- * 「面板」按钮 6 列与两个间隔，总共 47 列——60 列面板的页内还放得下。
+ * 「面板」按钮占 4 列（` 面板 ` = 2 个西文空格 + 2 个汉字）与两个间隔，
+ * 总共 45 列——60 列面板的页内还放得下。
  */
 export const BAND_WHALE_TEXT_COLS = 16
 
@@ -508,9 +508,9 @@ export const BAND_WHALE_TEXT_COLS = 16
  *
  * 代价是每秒 5 次 `$.ui.invalidate`。桌面端上限每秒十次，余量一半；重绘的
  * 是**一行高的小树**，且 `session.usage()` 在引擎侧有缓存（`session.measure`
- * 才推新值），不会每次都打一次 IPC。巡游时代那条 1.2 秒的拍子只需要推进
- * 一个三角波的相位，所以能慢；现在动画本身就在讲「一个个长出来」，只能
- * 按帧刷新。
+ * 才推新值），不会每次都打一次 IPC。早先巡游时代那条 1.2 秒的拍子只需
+ * 推进一个相位，所以能慢；现在动画本身就在讲「一个个长出来」，只能按帧
+ * 刷新。
  */
 export const BAND_TICK_MS = 200
 
@@ -522,11 +522,12 @@ export const BAND_TICK_MS = 200
  * 出来的），呼气之后还要停一拍再补第二声。匀速播出来像机器在打鼾，不像睡着
  * 的东西。所以改成逐帧给时长。
  *
- * 数组长度必须与 `bandWhaleFramesOf(state, now)` 一致（`idle` 是原表，其余
- * 是原表前面多一帧星期句），测试钉住这一点。
+ * 数组长度必须与 `bandWhaleFramesOf(state, now)` 返回的帧数一致：`idle` 是
+ * 原表，`working` / `busy` 是「星期句 + 两句老台词」共三帧，`waiting` 是
+ * 时段表里的那一对。测试逐帧采样钉住这一点。
  */
 const BAND_FRAME_MS: Readonly<Record<BandWhaleState, readonly number[]>> = {
-  // 一轮 4.6 秒：十六个字母各 0.2 秒（看得见逐个长出来），呼 0.6，停 0.5，
+  // 一轮 4.8 秒：十六个字母各 0.2 秒（看得见逐个长出来），呼 0.6，停 0.5，
   // 再呼 0.5。字母那十六拍若也放慢，整轮会拉到六七秒，读起来像卡住了。
   idle: [
     200, 200, 200, 200, 200, 200, 200, 200,
@@ -608,10 +609,10 @@ export function bandWhaleStateOf(
     //
     // **切换周期必须等于一轮的长度**（三帧 × 2.4 秒 = 7.2 秒），这样状态一换
     // 正好落回帧 0（星期句），帧序与状态永远对齐，不会出现「切到 busy 却从
-    // 帧 1 接着播」。早先每 700ms 切一次，那时每帧只有 0.3–0.4 秒、切的是
-    // 两幅水花，肉眼看着像在划水；现在每帧是一整句话，2.4 秒才读得完——若还
-    // 700ms 切一次状态，句子根本没等看清就被另一句顶掉，整格变成闪烁。
-    return Math.floor(sinceStart / 7_200) % 2 === 0 ? 'working' : 'busy'
+    // 帧 1 接着播」。周期从帧时长表**推导**，不写字面量——早先这里是硬编码的
+    // `7_200`，改帧长时两处必须同时改，漏一处就会悄悄错位。
+    const turnPeriod = BAND_FRAME_MS.working.reduce((sum, ms) => sum + ms, 0)
+    return Math.floor(sinceStart / turnPeriod) % 2 === 0 ? 'working' : 'busy'
   }
 
   // 没在跑：刚答完的几分钟里她在等你，之后自己去发呆。
@@ -623,8 +624,8 @@ export function bandWhaleStateOf(
  * 当前该画哪一帧。
  *
  * 帧序列按 `now` 取模，不记任何状态：面板开在哪一刻，就从序列的哪一刻
- * 接着走；关掉再开不会跳回第一帧。这与 `swimOffsetFor` 的相位算法同一个
- * 思路——时间本身就是唯一的状态。
+ * 接着走；关掉再开不会跳回第一帧。时间本身就是唯一的状态，不记任何
+ * 「上次画到哪」的变量。
  *
  * 帧时长可以各不相等（睡觉的呼噜要吸得慢、呼得快），所以先把每帧的时长
  * 累加成一轮的总长，再按 `now % 总长` 落进哪一段来定帧号。全部帧等长时，
@@ -649,8 +650,13 @@ export function bandWhaleFrameOf(
   const inTurn = state === 'thinking' || state === 'working' || state === 'busy'
   const base = inTurn && since != null ? since : 0
   const elapsed = now - base
-  // 负时刻不该发生，但取模会给出负数，夹一下比画出一个不存在的帧好。
-  let rest = ((elapsed % period) + period) % period
+  // **负数说明时钟回拨了**（`since` 落在未来），不是「一小时前的某一帧」。
+  // 早先这里用 `((x % p) + p) % p` 把负数绕回正区间，结果 `working` 会落到
+  // 帧 1——刚切回「干活」就直接说「摸鱼」，把该说的星期句跳过去了，而状态机
+  // 那边算出来的是新一轮（`sinceStart < 0 < 7_200`）。两边不同步。
+  // 夹到 0 之后，状态与帧相位都从这一轮的起点重新开始。
+  const elapsedSafe = elapsed > 0 ? elapsed : 0
+  let rest = elapsedSafe % period
   for (let index = 0; index < durations.length; index += 1) {
     rest -= durations[index]!
     if (rest < 0) return index
@@ -667,7 +673,7 @@ export function bandWhaleFrameOf(
  *
  * ## 静息档的闲话插在哪
  *
- * `idle` 的主线是 4.6 秒一轮的呼吸动画（见 `BAND_FRAME_MS.idle`）。如果
+ * `idle` 的主线是 4.8 秒一轮的呼吸动画（见 `BAND_FRAME_MS.idle`）。如果
  * 有闲话可说（`IDLE_LINES`），就**每三轮呼吸里的最后一轮、最后那一拍**
  * 换成一句闲话——呼吸照常进行，只是偶尔开口。
  *
@@ -675,10 +681,10 @@ export function bandWhaleFrameOf(
  *
  *   - 「偶数轮整轮说话」：屏幕上每 9.2 秒才见一次字，而说话那一整轮看不到
  *     任何呼吸动作，读者会以为卡住了；
- *   - 「每轮最后一拍说话」：每 4.6 秒就一句，静息档变成一直念叨，
+ *   - 「每轮最后一拍说话」：每 4.8 秒就一句，静息档变成一直念叨，
  *     反而比纯呼吸更吵。
  *
- * 现在 13.8 秒说一次：呼吸是主体，话是点缀。
+ * 现在 14.4 秒说一次（三帧呼吸 4.8 秒 × 3）：呼吸是主体，话是点缀。
  *
  * @param since 轮次起点（`turn.start` 的时刻）；`thinking` / `working` / `busy`
  *   都从这一刻起算帧相位，与 `bandWhaleStateOf` 的状态相位对齐。
@@ -804,183 +810,13 @@ function bubbleSvg(
   )
 }
 
-/** 浮动的周期（毫秒）与幅度（CSS 像素）。 */
+/**
+ * 浮动的周期（毫秒）。
+ *
+ * 只被 `whaleSvg` 的负 `begin` 相位计算用——面板鲸鱼现在不浮动，但那条
+ * 机制还在（见 `whaleSvg` 里 `isAnimating` 的说明）。
+ */
 export const WHALE_FLOAT_PERIOD_MS = 3_600
-export const WHALE_FLOAT_AMPLITUDE = 4
-
-/**
- * 巡游一步的时长（毫秒）——与泡泡换页共用同一个 6 秒节奏。
- *
- * 为什么一步是 6 秒而不是更快：桌面端 `$.ui.invalidate` 的上限是每秒十次，
- * 而重绘才是位移的唯一来源（`Svg` 不传 `isInteractive` 时 SMIL 不跑，
- * 传了又画不出内嵌位图——见 `register.tsx`）。6 秒一步换来的是**零新增
- * 定时器、零额外重绘**：鲸鱼每挪一步恰好和翻页落在同一帧里。
- * 「低频巡游」就是对这个物理限制的顺势利用——快不起来，那就慢得有节奏。
- */
-export const SWIM_STEP_MS = 6_000
-
-/** 一步游多少列（一列约 8px）。3 列 = 每步 24px，肉眼一定看得见。 */
-export const SWIM_STEP_COLS = 3
-
-/**
- * 用量条上的巡游一步只用 2 列（16px）。
- *
- * 条子里的小鲸鱼只有 6 列宽：按面板的 3 列一步，等于每步挪掉自身宽度的
- * 一半，在窗口顶边看着像闪烁而不是游。挪小一点更像滑行。
- */
-export const BAND_SWIM_STEP_COLS = 2
-
-/**
- * 用量条的巡游时钟：一步 1.2 秒。
- *
- * 比面板快五倍，因为条子里的位移本来就小（一步 16px）：跟面板同拍时
- * 每分钟只挪 20 列，看久了像静止。1.2 秒一步 ≈ 每秒 13px，是真在游。
- *
- * 代价：面板那条 6 秒时钟之外多一条 1.2 秒的。`$.ui.invalidate` 桌面端
- * 上限每秒十次，1.2 秒一步远在限内；重绘的是**一行高的小树**，且
- * `session.usage()` 在引擎侧有缓存（`session.measure` 事件才推新值），
- * 不会每次重绘都打一次 IPC。
- */
-export const BAND_SWIM_STEP_MS = 1_200
-
-/**
- * 巡游轨迹：等步长的三角波，右端出发、触左端折返。
- *
- * @param now 当前时刻（毫秒，epoch）
- * @param freeCols 鲸鱼可以挪动的列数 = 可用列数 − 立绘占的列数。
- *   不满一步（`freeCols < stepCols`）就不游——挪不动的地方硬摆，像抖动不像巡游。
- * @param stepCols 一步几列：面板用 3，用量条用 `BAND_SWIM_STEP_COLS`。
- * @param stepMs 一步几毫秒：默认 6 秒（与泡泡翻页同拍）。
- * @returns 立绘这一行要向左让出的列数（0 = 贴右端，即没有巡游时的样子）。
- *
- * 相位直接由墙钟取模，不记任何状态：面板开在哪一刻，就从轨迹的哪一刻接着
- * 走；关掉再开不会跳回起点。单程步数取 `floor(freeCols / stepCols)`，右端
- * 可能留不出整步的余量——两个折返点各只停留一步，相邻两步的位移恒等，没有
- * 「到头愣一下」的顿挫。
- *
- * 100 列面板余量约 48 列：单程 16 步 ≈ 1.6 分钟，一趟来回约 3.2 分钟；越宽游得越久。
- */
-export function swimOffsetFor(
-  now: number,
-  freeCols: number,
-  stepCols: number = SWIM_STEP_COLS,
-  stepMs: number = SWIM_STEP_MS,
-): number {
-  const steps = Math.floor(freeCols / stepCols)
-  if (steps < 1) return 0
-  const t = Math.floor(now / stepMs) % (steps * 2)
-  const step = t <= steps ? t : steps * 2 - t
-  return step * stepCols
-}
-
-/**
- * 用量条的小鲸鱼：只画鲸鱼本体，不画气泡。
- *
- * 气泡是三行 21–46px 字号的文字，最小可读尺寸就顶到 150px 高——塞进
- * 一行高的条子里只会糊成一团色块。条子的职责是「一眼知道有没有活、点得开
- * 面板」，数字本来就在那行的摘要文字里，鲸鱼只负责证明挂件活着。
- * `isBubbleOpen: false` 走的是 `whaleSvg` 里为「无气泡导出图」保留的分支，
- * 配 `isCompact` 用小图（约 48k 字符，够 6×2 字符格的框里显示清楚）。
- */
-/**
- * 条形鲸鱼的朝向：向右游时镜像，向左游时保持原样（原素材头朝左）。
- *
- * 逐像素扫过 `WHALE_ASSETS.small` 的 alpha 轮廓：头顶与喷水在左上
- * （y≈5–20）、尾鳍在左下（y≈100–110 处向左伸出），所以原图头朝左。
- * 向右游不镜像就是倒着游。
- */
-export function bandWhaleFacingRight(now: number, freeCols: number): boolean {
-  const steps = Math.floor(freeCols / BAND_SWIM_STEP_COLS)
-  if (steps < 1) return false // 不游的时候按原素材朝左站着
-  const t = Math.floor(now / BAND_SWIM_STEP_MS) % (steps * 2)
-  return t < steps // 前半程向右，后半程向左
-}
-
-export function bandWhaleSvg(mood: WhaleMood, now: number, epoch: number, isFacingRight: boolean): string {
-  const svg = whaleSvg(mood, [], {
-    isCompact: true,
-    isBubbleOpen: false,
-    isAnimating: false,
-    now,
-    epoch,
-  })
-  // **镜像要包一层 `<g>`，不能写成根 `<svg transform=...>`。**
-  // 实测：把 `transform` 加在根元素上，整份文档渲染出来是**全透明**的
-  // （浏览器 canvas 取样 opaque = 0）——SVG 根的 `transform` 不在规范里，
-  // 各家处理不一致。包一层 `<g transform>` 则是标准做法。
-  //
-  // ## 为什么绕鲸鱼自己的中线翻，而不是绕画布中线
-  //
-  // 鲸鱼钉在画布**右半边**（`translate(318 16)`，占 x 318–618）。绕画布中线
-  // 翻（`translate(620 0) scale(-1 1)`）会把她整条搬到**左半边**——实测
-  // 肤色像素的 span 从 318–618 变成 2–302，看着像换了个位置，不是换了个朝向。
-  //
-  // 正确做法是绕她自己包围盒的中线翻：先把 x 移到 0，翻，再移回去。
-  // `translate(2a) scale(-1 1)` = 关于 x=a 的镜像，这里 a 取鲸鱼框内中线。
-  const open = svg.indexOf('>') + 1
-  const body = svg.slice(open, svg.lastIndexOf('</svg>'))
-  const bubbles = trailBubblesSvg(now, isFacingRight)
-  // 鲸鱼框的中线：`translate` 的 318 加上 image 宽 300 的一半。
-  const whaleMidX = WHALE_GROUP_X + WHALE_IMAGE_W / 2
-  const whale = isFacingRight
-    ? `<g transform="translate(${whaleMidX * 2} 0) scale(-1 1)">${body}</g>`
-    : `<g>${body}</g>`
-  return svg.slice(0, open) + bubbles + whale + '</svg>'
-}
-
-/**
- * 鲸鱼身后的三颗小水泡。
- *
- * 颜色取素材自带的蓝紫 `rgb(86,108,174)`（逐像素统计里除肤色外的第一主色）：
- * 白点在浅色主题下看不见，而这是原图自己的水色，深浅两种主题都读得出「水」。
- *
- * ## 位置：永远在**空着的那一半**
- *
- * 鲸鱼钉在画布右半边（x 318–618），左半边是空的。所以：
- * - 朝左游（不镜像）→ 她朝左，前方是左边那片空白，气泡放 x 142–236；
- * - 朝右游（镜像，她仍占据 318–618 那段像素位置）→ 气泡放她**右边**
- *   那片空的 532–620 一侧。
- *
- * **踩过的坑**：先写成「镜像时把 x 也按 620−x 翻」，结果 620−236=384 正好
- * 落在她身上（实测取样点的 alpha 全是 255、底色是肤色，气泡被盖住）。
- * 镜像只翻鲸鱼那一层，气泡层不翻，所以它的坐标要按「空白在哪边」直接给。
- *
- * 三颗泡从下往上冒、依次变小变淡。全部由 `now` 算出，不依赖 SMIL——
- * 桌面端不传 `isInteractive` 时动画不跑。
- */
-function trailBubblesSvg(now: number, isFacingRight: boolean): string {
-  const phase = (Math.floor(now / BAND_SWIM_STEP_MS) % 3) / 3
-  // 朝左站时的 (x, y, r)：越靠上一颗越小（离她越远、越淡）。
-  // 半径按画布 620 宽的尺度给：显示到 52px 时缩 12 倍，8 只能显示成不到 1px。
-  const whenLeft = [
-    { x: 236, y: 252, r: 15 },
-    { x: 186, y: 206, r: 11 },
-    { x: 142, y: 166, r: 7 },
-  ]
-  // 朝右时整体挪到画布右侧那段空白里：`620 − x` 会落回她身上，所以是
-  // 关于画布中线之外的一个偏移——直接把左半边的三个 x 平移 `560` 太大，
-  // 用「贴右侧边、由下往上收」的一组独立坐标。
-  // 朝右（镜像后）时她仍占据 332–532 这段像素位置（实测肤色 span），
-  // 空白只有 532–620 那一窄条。三颗泡都要落在里面：x 取 545 / 580 / 605。
-  const whenRight = [
-    { x: 600, y: 252, r: 13 },
-    { x: 572, y: 206, r: 9 },
-    { x: 548, y: 166, r: 6 },
-  ]
-  const base = isFacingRight ? whenRight : whenLeft
-  const fill = '#566CAE'
-  const bubbles = base
-    .map((b, i) => {
-      // 每颗泡错开 1/3 周期：依次上浮、渐隐、回到起点。
-      const local = (phase + i / 3) % 1
-      // 淡一些：50% 不透明已经能在深浅两种底色上都看出来，再浓就成了色块。
-      const opacity = (0.32 * (1 - local)).toFixed(2)
-      const rise = local * 34
-      return `<circle cx="${b.x}" cy="${(b.y - rise).toFixed(1)}" r="${b.r}" fill="${fill}" opacity="${opacity}"/>`
-    })
-    .join('')
-  return `<g>${bubbles}</g>`
-}
 
 /**
  * 生成整幅 SVG：左边气泡 + 右下原图鲸鱼。

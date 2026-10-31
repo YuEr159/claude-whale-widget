@@ -75,15 +75,20 @@ import { BAND_TICK_MS, WHALE_ASPECT, bandWhaleGlyph, bandWhaleStateOf, BAND_WHAL
 import { themeColorsFor } from './panel-fill.ts'
 import type { ThemeColors } from './panel-fill.ts'
 
-const PLUGIN = 'whale-usage' as const
 const PANE = 'whale'
 
 
 const DEFAULT_PREFS: Prefs = {
   isBandVisible: true,
-  bandMetrics: ['window'],
+  // **空数组表示「读者还没选过」。** 条子按环境自己挑一个口径（见下面
+  // 用量条那处的注释）；面板设置页里显示成「额度」那一档。
+  //
+  // 早先这里写的是 `['window']`，于是「网关环境自动换成上下文占用」那条
+  // 兜底**永远走不到**——`bandMetricsOf` 只在值为空时才用 fallback，而
+  // 默认值本身非空。结果是网关新用户的条子上只有一句「无额度窗口」。
+  bandMetrics: [],
   historyDays: 30,
-  // 每轮都弹会打断阅读，默认关；想要的人可以在面板里打开。
+  // 每轮都弹会打断阅读默认关；想要的人可以在面板里打开。
   isTurnCostOn: false,
   // 本地日志聚合要读几十上百 MB，5 分钟一次足够。
   scanIntervalMs: 5 * 60_000,
@@ -339,8 +344,8 @@ export const register: Register = (on, options) => {
     })
 
     // 用量条的字符画按帧刷新：睡觉攒字母每拍 0.2 秒，节拍比它慢就会跳帧，
-    // 「一个字母一个字母蹦出来」会变成「一次蹦两三个」。干活 0.4 秒、忙
-    // 0.3 秒也都落在这条节拍的采样精度里。
+    // 「一个字母一个字母蹦出来」会变成「一次蹦两三个」。干活与忙每帧 2.4 秒，
+    // 落在这条节拍上只是多绘几次同一句话。
     //
     // 这条只驱动**一行高的小树**；`session.usage()` 在引擎侧是缓存值
     // （新数字由 `session.measure` 推），所以多出来的重绘很便宜。桌面端
@@ -745,10 +750,17 @@ export const register: Register = (on, options) => {
     const sessionCostOfPrices = sessionCostOf(byModel)
     const heldContextTurns = await $.state.get({ plugin: 'whale-usage', key: 'contextTurns' } as const)
     const liveContextTurns = heldContextTurns.value ?? []
-    // 用量条口径：与用量条那一侧共用 `bandMetricsOf`，两处不会再分叉。
-    const metrics = bandMetricsOf(prefsNow, DEFAULT_PREFS.bandMetrics)
+    // 用量条口径：与用量条那一侧**同一套兜底**，两处不会再分叉。
+    //
+    // 设置页那几颗芯片亮的是「条子上此刻真在显示」的几项，所以这里必须
+    // 和 `AbovePrompt` 那段算出完全一样的结果——否则读者在面板里看到
+    // 「额度」亮着，条子上却是上下文占用。
+    const metrics = bandMetricsOf(
+      prefsNow,
+      view.fiveHour || view.sevenDay ? DEFAULT_PREFS.bandMetrics : ['cost'],
+    )
     // 圆角框的底色跟着主题走。主题在一次会话里基本不变，而面板打开时会
-    // 每 30 秒重绘一次——每次都问一遍 `/config` 只是白花一次 IPC，所以
+    // 每 6 秒重绘一次——每次都问一遍 `/config` 只是白花一次 IPC，所以
     // 第一次读到后就记在模块里。`$` 不能传进辅助函数（校验器的约束），
     // 读写缓存只能是这段内联代码。
     if (themeCache === null) {
@@ -841,7 +853,6 @@ export const register: Register = (on, options) => {
     // 面板只有一种形态：全部信息都画出来。曾经有「简洁 / 详细」两档，
     // 但简洁那一档只是把同样几行压成摘要，少掉的正是最该看的明细，
     // 没有存在的必要——想看少一点的人可以把面板关掉。
-    const contextDetail = toContextDetail(view.breakdown)
 
     // 额度窗口：按原生 /usage 的写法逐条列——标题、百分比、重置倒计时、进度条。
     const windows =
@@ -1670,7 +1681,7 @@ export const register: Register = (on, options) => {
             把要看的数字画出来，读者连点都不用点。
 
             **不再巡游。** 曾经这里按 `swimOffsetFor` 做三角波，每 6 秒向内
-            挪三列、到头折返。问题是面板每 30 秒自动重绘一次，读者看到的是
+            挪三列、到头折返。问题是面板每 6 秒自动重绘一次，读者看到的是
             「鲸鱼每次刷新都往中间走一点、位置回不去」——一个本该固定在右下角
             的立绘变成了会漂移的东西。巡游的收益只是「看起来活着」，而这个
             挂件本来就靠数据刷新证明自己活着；代价是位置不可预期。所以改回

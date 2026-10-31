@@ -24,7 +24,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail.ts'
-import { BAND_WHALE_FRAMES, BAND_WHALE_TEXT_COLS, THINKING_HOLD_MS, WAITING_HOLD_MS, WHALE_MAX_WIDTH, bandWhaleFramesOf, bandWhaleGlyph, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
+import { BAND_WHALE_FRAMES, BAND_WHALE_TEXT_COLS, THINKING_HOLD_MS, WAITING_HOLD_MS, WHALE_MAX_WIDTH, bandWhaleFrameOf, bandWhaleFramesOf, bandWhaleGlyph, bandWhaleStateOf, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art.ts'
 import {
   barText,
   canonicalModelName,
@@ -73,7 +73,7 @@ import {
   turnHeatSvg,
 } from '../hooks/chart-art.ts'
 import { UNPRICED, usdEstimate } from '../hooks/provenance.ts'
-import { CHART_PALETTES, FILLS, isLightTheme, panelFillFor, themeColorsFor } from '../hooks/panel-fill.ts'
+import { CHART_PALETTES, isLightTheme, panelFillFor, themeColorsFor } from '../hooks/panel-fill.ts'
 
 test('价格表：官方模型按 1.25x / 0.1x 缓存计，DeepSeek Flash 单独一套', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -2360,7 +2360,7 @@ test('用量条字符画：六种状态各有动画，全部帧等宽', () => {
   assert.ok(idleFrames.size > 1, '睡觉状态也该在动（打呼噜）')
 
   // 帧时长可以逐帧不同，所以周期是各帧时长之和；走满一轮回到第一帧。
-  // 睡觉这一轮 4.6 秒，接近一次呼吸。
+  // 睡觉这一轮 4.8 秒，接近一次呼吸。
   const period = BAND_WHALE_TEXT_COLS * 200 + 600 + 500 + 500
   assert.equal(bandWhaleGlyph('idle', period), bandWhaleGlyph('idle', 0))
   assert.equal(
@@ -2542,12 +2542,21 @@ test('生命周期六档：想在起头、干活在中段、等你三分钟、�
   ])
   assert.equal(seen.size, 6, `六个阶段的首句应各不相同：${[...seen].join(' / ')}`)
 
-  // 7. 所有新台词都是恰好 16 列，且都以鱼头开头（静息的 z 动画除外）。
+  // 7. 所有台词都是恰好 16 列。
+  //
+  // **静息档必须从「会说话的那一拍」取。** 早先这里用 `bandWhaleGlyph('idle', at(hour))`
+  // ——整点恰好落在 `round % 3 === 0` 的呼吸轮，永远返回 z 动画，`if (…startsWith('>'))`
+  // 从不成立，`IDLE_LINES` 那十二句（含「哦鲸鲸……」）**从来没被宽度断言碰过**。
+  // 现在显式取每轮最后一拍，且只收真正会说话的轮。
   const samples = []
+  const breathPeriod = BAND_WHALE_TEXT_COLS * 200 + 600 + 500 + 500
   for (const hour of [2, 7, 10, 15, 19, 23]) {
     samples.push(...bandWhaleFramesOf('waiting', at(hour)))
-    const idleGlyph = bandWhaleGlyph('idle', at(hour))
-    if (idleGlyph.trim().startsWith('>')) samples.push(idleGlyph)
+    const origin = Math.floor(at(hour) / breathPeriod) * breathPeriod
+    for (let round = 0; round < 9; round += 1) {
+      const beat = bandWhaleGlyph('idle', origin + (round + 1) * breathPeriod - 100)
+      if (beat.trim().startsWith('>')) samples.push(beat)
+    }
   }
   samples.push(...bandWhaleFramesOf('thinking', at(10)))
   samples.push(...bandWhaleFramesOf('compacting', at(10)))
@@ -2558,6 +2567,12 @@ test('生命周期六档：想在起头、干活在中段、等你三分钟、�
       `台词宽度该是 ${BAND_WHALE_TEXT_COLS} 列：「${text}」量得 ${displayWidth(text)}`,
     )
   }
+  // 采集本身也要被验证：六个时段一共只有一部分会说话，但绝不能一句都没采到
+  // ——否则上面那个循环是空转，宽度断言等于没写。
+  assert.ok(
+    samples.filter(text => text.trim().startsWith('>')).length >= 20,
+    `可检查的台词太少（${samples.length} 条），宽度断言可能没真正覆盖`,
+  )
 
   // 8. **呼吸仍是静息档的主体**：任何时段，连续九轮里既有呼吸也有说话，
   //    且说话只占一小部分。采样对齐到轮次原点、取每轮最后一拍。
@@ -2598,7 +2613,7 @@ test('生命周期六档：想在起头、干活在中段、等你三分钟、�
     assert.ok(said.size >= 2, `${hour} 点只说过一句：${[...said].join(' / ')}`)
   }
 
-  // 9b. **静息档不许每轮都说。** 试过「每轮最后一拍说一句」，结果每 4.6 秒
+  // 9b. **静息档不许每轮都说。** 试过「每轮最后一拍说一句」，结果每 4.8 秒
   //     重复一次，静息比纯呼吸还吵。现在每三轮说一次——九轮里说话的那三拍
   //     占三分之一，且它们互不相邻。
   {
@@ -2642,6 +2657,105 @@ test('生命周期六档：想在起头、干活在中段、等你三分钟、�
       )
     }
   }
+})
+
+/**
+ * 时钟回拨：`turn.start` 记下的时刻落在**未来**（NTP 同步、用户改系统时间、
+ * 跨时区恢复会话都可能造成）。
+ *
+ * 早先帧相位对负数取模绕回正区间，`working` 会落到帧 1——刚切回「干活」就
+ * 直接说「摸鱼」，把该说的星期句跳过去了；而状态机那边认为这是新一轮
+ * （`sinceStart < 0 < 周期`）。两边不同步，读者看到的是「新一轮开头说了
+ * 半路的话」。
+ */
+test('时钟回拨时，状态与帧相位都从轮次起点重新开始', () => {
+  const now = 1_000_000
+  const future = now + 10_000 // since 在未来
+  // 状态机：负数必然小于 `THINKING_HOLD_MS`，所以落「想」——这是对的，
+  // 那一刻确实「刚开始」。
+  assert.equal(bandWhaleStateOf(true, now, future), 'thinking')
+  // 帧相位：必须停在帧 0，不能绕到帧 1 去。
+  for (const state of ['thinking', 'working', 'busy']) {
+    assert.equal(
+      bandWhaleFrameOf(state, now, future),
+      0,
+      `${state} 在时钟回拨时该停在帧 0，实际 ${bandWhaleFrameOf(state, now, future)}`,
+    )
+  }
+  // 具体到画面：`working` 的帧 0 是星期句，不是「摸鱼」。
+  const glyph = bandWhaleGlyph('working', now, future)
+  assert.ok(
+    glyph.includes('星期'),
+    `时钟回拨时 working 该说星期句，实际「${glyph}」`,
+  )
+  assert.ok(!glyph.includes('摸鱼'), `时钟回拨时不该直接说「摸鱼」：「${glyph}」`)
+
+  // 正常路径不受影响：正数相位照旧按时长表推进。
+  assert.equal(bandWhaleFrameOf('working', now + 4_800, now), 2)
+  assert.equal(bandWhaleFrameOf('working', now + 7_200, now), 0)
+})
+
+/**
+ * 用量条摘要：**只有单边窗口**、**缺 `resetsAt`** 这两类输入。
+ *
+ * 引擎的类型允许它们真实发生：`resetsAt` 是可选字段；网关与订阅之外的
+ * 环境常常只有 `seven_day` 而没有 `five_hour`。早先的判据是 `hasLimits`
+ * （任一窗口存在），于是
+ *
+ *   - 只有 7d：`5h — · 7d 70% · 7d 70%`（不存在的 5h 被印出来，7d 印两遍）
+ *   - 只有 5h：末尾多一个 `7d —`（不存在的窗口被画成破折号）
+ *   - 缺 `resetsAt`：`5h 40% ·  后重置`（两个空格夹一句残话）
+ *
+ * 这三条都是读者真会看到的，不是理论边界。
+ */
+test('用量条摘要：单边窗口与缺重置时间都不出残句', () => {
+  const now = 1_700_000_000_000
+  const twoHoursLater = new Date(now + 7_200_000).toISOString()
+  const both = {
+    limits: [],
+    fiveHour: { kind: 'five_hour', percentUsed: 40, resetsAt: twoHoursLater },
+    sevenDay: { kind: 'seven_day', percentUsed: 70 },
+  }
+  const onlySeven = { limits: [], sevenDay: { kind: 'seven_day', percentUsed: 70 } }
+  const onlyFive = { limits: [], fiveHour: { kind: 'five_hour', percentUsed: 40, resetsAt: twoHoursLater } }
+  const noReset = { limits: [], fiveHour: { kind: 'five_hour', percentUsed: 40 } }
+  const none = { limits: [] }
+
+  // 两边齐全：5h 带倒计时，7d 各出现一次。
+  assert.equal(
+    bandSummary(both, ['window'], now),
+    '5h 40% · 2h00m 后重置 · 7d 70%',
+  )
+  assert.equal(bandSummary(both, ['window', 'context'], now), '5h 40% · 2h00m 后重置 · 7d 70%')
+
+  // 只有 7d：不许出现 5h，7d 只说一遍。
+  for (const metrics of [['window'], ['context'], ['window', 'context']]) {
+    const text = bandSummary(onlySeven, metrics, now)
+    assert.equal(text, '7d 70%', `${metrics.join('+')} 该只说 7d：「${text}」`)
+    assert.ok(!text.includes('5h'), `不该出现不存在的 5h：「${text}」`)
+    assert.equal(
+      text.split('7d').length - 1,
+      1,
+      `7d 印了不止一遍：「${text}」`,
+    )
+  }
+
+  // 只有 5h：不许出现 7d，也不许出现破折号。
+  for (const metrics of [['window'], ['context'], ['window', 'context']]) {
+    const text = bandSummary(onlyFive, metrics, now)
+    assert.ok(!text.includes('7d'), `不该出现不存在的 7d：「${text}」`)
+    assert.ok(!text.includes('—'), `不该出现破折号：「${text}」`)
+  }
+
+  // 缺 `resetsAt`：只说百分比，不拼「后重置」。
+  const noResetText = bandSummary(noReset, ['window'], now)
+  assert.equal(noResetText, '5h 40%')
+  assert.ok(!noResetText.includes('后重置'), `缺时间时不该说「后重置」：「${noResetText}」`)
+  assert.ok(!/\s{2}/.test(noResetText), `不该出现连续空格：「${noResetText}」`)
+
+  // 完全没有窗口：只保留那一句「无额度窗口」，其余不替它发言。
+  assert.equal(bandSummary(none, ['window'], now), '无额度窗口')
+  assert.equal(bandSummary(none, ['window', 'context'], now), '无额度窗口')
 })
 
 /**

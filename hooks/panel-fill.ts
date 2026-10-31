@@ -304,12 +304,3 @@ export function panelFillFor(
   return { backgroundColor, borderColor }
 }
 
-/** 三档的大框底色与边框，测试里引用。 */
-export const FILLS = { dark: SURFACE_FILL, light: SURFACE_FILL, auto: SURFACE_FILL } as const
-
-/** 页签激活态的底色，测试里引用。 */
-export const TAB_ACTIVE_FILLS = {
-  dark: TAB_ACTIVE_FILL,
-  light: TAB_ACTIVE_FILL,
-  auto: TAB_ACTIVE_FILL,
-} as const

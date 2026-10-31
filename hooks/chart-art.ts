@@ -75,16 +75,6 @@ function strokeOf(color: string, opacity: number): string {
  *   agents（自定义 agent）用深青，压在中间一档。
  *   other 是中性灰兜底，不与任何分类撞色。
  */
-export const PART_KINDS = [
-  'messages',
-  'system',
-  'tools',
-  'memory',
-  'mcp',
-  'agents',
-  'other',
-] as const
-
 /**
  * 一段的填充写法，直接进 SVG 的 `rect` 属性串。
  *

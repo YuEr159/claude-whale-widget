@@ -715,7 +715,7 @@ test('视觉纪律：界面文字不出现纯装饰色', async ($, on) => {
  */
 test('概览卡片框比外层大框暗一档', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
 
   const ui = await $.ui.mount({
@@ -782,7 +782,7 @@ const SCAN_FIXTURE = {
 
 test('模型页与上下文页的分组框都比外层大框暗一档', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.env(on, { HOME: 'C:/Users/test' })
   on('state.get', { plugin: 'whale-usage', key: 'scan' }, async (_$, e, next) => {
     void next
     return { value: { value: SCAN_FIXTURE, version: 1 } }
@@ -852,7 +852,7 @@ test('模型页与上下文页的分组框都比外层大框暗一档', async ($
  */
 test('模型页没有图例行，颜色映射交给明细表的色块列', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.env(on, { HOME: 'C:/Users/test' })
   on('state.get', { plugin: 'whale-usage', key: 'scan' }, async (_$, e, next) => {
     void next
     return { value: { value: SCAN_FIXTURE, version: 1 } }
@@ -891,7 +891,7 @@ test('模型页没有图例行，颜色映射交给明细表的色块列', async
  */
 test('上下文页在屏幕上给出读数：最近一轮占比、构成明细、图注', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
   on('state.get', { plugin: 'whale-usage', key: 'contextTurns' }, async (_$, e, next) => {
     void next
@@ -982,7 +982,7 @@ test('上下文页在屏幕上给出读数：最近一轮占比、构成明细�
  */
 test('上下文页：老记录没有构成数据也能正常出图', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
   on('state.get', { plugin: 'whale-usage', key: 'contextTurns' }, async (_$, e, next) => {
     void next
@@ -1124,7 +1124,7 @@ test('设置页：三组标签列等宽，芯片起点对齐', async ($, on) => 
  */
 test('设置页：三组各有一个压暗的圆角分组框', async ($, on) => {
   mock.clock(on, { now: Date.parse('2026-10-20T12:00:00Z') })
-  mock.env(on, { HOME: 'C:/Users/Yuxiao/test' })
+  mock.env(on, { HOME: 'C:/Users/test' })
   mock.store(on, {})
 
   const ui = await $.ui.mount({
