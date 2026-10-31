@@ -391,7 +391,7 @@ const WAITING_LINES: Readonly<Record<DayPart, readonly [string, string]>> = {
 }
 
 /**
- * 静息那档按钟点补的一句闲话：**夹在呼吸动画的两轮之间**，说完接着打鼾。
+ * 静息那档按钟点补的一句闲话：**夹在呼吸动画的一拍里**，说完接着打鼾。
  *
  * ## 为什么单独一张表，不并进 `WAITING_LINES`
  *
@@ -403,15 +403,38 @@ const WAITING_LINES: Readonly<Record<DayPart, readonly [string, string]>> = {
  *
  * 静息档的主体是 `z` 的呼吸动画——那是挂件最常被看到的样子，不该被话
  * 占满。只在两轮呼吸之间插一句，且只挑**她真的该有点反应**的时段：
- * 深夜还在亮着的屏幕、傍晚该收工的时候。上午与白天她不说，就安安静静地睡。
+ * 深夜还在亮着的屏幕、傍晚该收工的时候。白天六个时段里她不说，就安安静静
+ * 地睡。
  *
- * `undefined` 表示这一档不插话，直接走呼吸动画。
+ * ## 白天那档为什么是「哦鲸鲸」
+ *
+ * 白天不睡也不等你，屏幕上最安静的那段——这里放一声**鲸叫**。
+ *
+ * 「哦鲸鲸」的考据（2026-11-01 调研，详见 README）：
+ *
+ *   - 萌娘百科把它列进「DeepSeek 娘」的别名栏，**但加了删除线、套了
+ *     「只为博君一笑，不必照单全收」的玩笑模板**；
+ *   - B 站从 2026-08 起有 1000+ 条结果拿它当标题或 ID，最早的公开记录是
+ *     贴吧 2026-08-23「发梗图给她，她会一直哦鲸鲸」——是**互动现象**，
+ *     不是设定里的口头禅；
+ *   - 它同时是日语 おちんちん 的空耳，pixiv 标签与 GitHub 同名仓库都指向
+ *     那一层，社区里也有一派明确表示「以为是可爱才这么叫」。
+ *
+ * **所以它在这里只当拟声用**：一声鲸叫，不写成口癖、不在别的档重复出现。
+ * 读者读出哪一层都不影响这一格要说的「她待着呢」。这一条是用户明确选定的
+ * 方案——他接受风险，并要求在 README 里注明它没有一手出处。
  */
 const IDLE_LINES: Readonly<Partial<Record<DayPart, readonly [string, string]>>> = {
   // 深夜：屏幕还亮着，她半梦半醒地嘟囔。
   // 「要休眠了」呼应萌娘百科的「打瞌睡（运作 sleep 命令）DeepSleep」——
   // 她把休眠当成真的睡觉，所以用"休眠"而不是"关机"。
   deepnight: ['> 还亮着灯呢    ', '> 我要休眠了    '],
+  // 清晨：还没开工，也还没睡。
+  dawn: ['> 哦鲸鲸        ', '> 哦鲸鲸……      '],
+  // 上午：白天最前面的一段。
+  morning: ['> 哦鲸鲸        ', '> 哦鲸鲸……      '],
+  // 白天：一天里最长、最安静的那段。
+  afternoon: ['> 哦鲸鲸        ', '> 哦鲸鲸……      '],
   // 夜里：眼皮在打架。
   night: ['> 困了          ', '> 明天还来吗    '],
   // 傍晚：一天快结束。第二句用「DeepSleep」——萌百原文的写法，
@@ -645,12 +668,17 @@ export function bandWhaleFrameOf(
  * ## 静息档的闲话插在哪
  *
  * `idle` 的主线是 4.6 秒一轮的呼吸动画（见 `BAND_FRAME_MS.idle`）。如果
- * 深夜 / 夜里 / 傍晚有闲话可说（`IDLE_LINES`），就**每轮呼吸的最后 0.5 秒
- * 换成一句闲话**——呼吸照常进行，只在末尾那声 `呼` 的位置开口说一句。
+ * 有闲话可说（`IDLE_LINES`），就**每三轮呼吸里的最后一轮、最后那一拍**
+ * 换成一句闲话——呼吸照常进行，只是偶尔开口。
  *
- * 早先试过「偶数轮说话、奇数轮呼吸」，问题是闲话整段占掉一轮，屏幕上
- * 每 9.2 秒才见一次字，而且那一轮看不到任何呼吸动作，读者会以为卡住了。
- * 现在做成呼吸里的一拍，两者都不缺。
+ * 试过两个更密的版本，都被否掉了：
+ *
+ *   - 「偶数轮整轮说话」：屏幕上每 9.2 秒才见一次字，而说话那一整轮看不到
+ *     任何呼吸动作，读者会以为卡住了；
+ *   - 「每轮最后一拍说话」：每 4.6 秒就一句，静息档变成一直念叨，
+ *     反而比纯呼吸更吵。
+ *
+ * 现在 13.8 秒说一次：呼吸是主体，话是点缀。
  *
  * @param since 轮次起点（`turn.start` 的时刻）；`thinking` / `working` / `busy`
  *   都从这一刻起算帧相位，与 `bandWhaleStateOf` 的状态相位对齐。
@@ -665,10 +693,14 @@ export function bandWhaleGlyph(
     if (lines) {
       const frame = bandWhaleFrameOf(state, now, since)
       const total = BAND_FRAME_MS.idle.length
-      // 只在最后一帧（那声 `呼`）的位置说话，其余帧照常呼吸。
-      if (frame === total - 1) {
-        const round = Math.floor(now / BAND_FRAME_MS.idle.reduce((s, ms) => s + ms, 0))
-        return lines[((round % 2) + 2) % 2] ?? lines[0]!
+      const breathPeriod = BAND_FRAME_MS.idle.reduce((s, ms) => s + ms, 0)
+      const round = Math.floor(now / breathPeriod)
+      // 每三轮里的最后一轮，且只在最后一拍（那声 `呼` 的位置）说话。
+      const isSpeakingRound = ((round % 3) + 3) % 3 === 2
+      if (isSpeakingRound && frame === total - 1) {
+        // 两句轮着说，否则同样的字会一直重复。
+        const pairIndex = ((Math.floor(round / 3) % 2) + 2) % 2
+        return lines[pairIndex] ?? lines[0]!
       }
     }
   }
