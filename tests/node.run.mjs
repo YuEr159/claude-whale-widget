@@ -2372,10 +2372,18 @@ test('用量条字符画：六种状态各有动画，全部帧等宽', () => {
   // **帧的切换点逐个钉住。** 逐毫秒采样，记下「帧变了」的那些时刻——
   // 这同时验证了三件事：帧的先后次序、每一拍的实际时长、以及时长表与
   // 帧表一样长（多一节会让某帧永远画不到，少一节会让最后一帧多停一截）。
+  //
+  // **采样起点要对齐到「不说话的那一轮」的轮次原点。** 静息档每三轮里的
+  // 最后一轮（`round % 3 === 2`）、最后那一拍会换成一句闲话（见
+  // `IDLE_LINES`），帧内容就变了。所以把起点落到最近一个 `round % 3 === 0`
+  // 的轮次开头——那一轮一定不说话，连采满一整轮 `period` 都不会碰到闲话。
+  const breathPeriod = BAND_WHALE_TEXT_COLS * 200 + 600 + 500 + 500
+  const probeRound = Math.floor(probeNow / breathPeriod)
+  const quietStart = (probeRound - (probeRound % 3)) * breathPeriod
   const switches = []
-  let last = bandWhaleGlyph('idle', 0)
+  let last = bandWhaleGlyph('idle', quietStart)
   for (let now = 1; now <= period; now += 1) {
-    const glyph = bandWhaleGlyph('idle', now)
+    const glyph = bandWhaleGlyph('idle', quietStart + now)
     if (glyph !== last) {
       switches.push({ at: now, glyph })
       last = glyph
@@ -2551,33 +2559,88 @@ test('生命周期六档：想在起头、干活在中段、等你三分钟、�
     )
   }
 
-  // 8. **静息档的呼吸不被闲话打断**：白天的静息永远是 z 的动画。
-  for (const hour of [9, 10, 11, 13, 15, 16]) {
-    const glyph = bandWhaleGlyph('idle', at(hour))
+  // 8. **呼吸仍是静息档的主体**：任何时段，连续九轮里既有呼吸也有说话，
+  //    且说话只占一小部分。采样对齐到轮次原点、取每轮最后一拍。
+  const period = BAND_WHALE_TEXT_COLS * 200 + 600 + 500 + 500 // 一轮呼吸 4.8 秒
+  for (const hour of [2, 7, 10, 15, 19, 23]) {
+    const origin = Math.floor(at(hour) / period) * period
+    const seen = []
+    for (let round = 0; round < 9; round += 1) {
+      seen.push(bandWhaleGlyph('idle', origin + (round + 1) * period - 100))
+    }
+    const spoken = seen.filter(text => text.trim().startsWith('>'))
+    assert.ok(spoken.length > 0, `${hour} 点的静息九轮里一句都没说：${seen.join(' | ')}`)
     assert.ok(
-      /^z*\s*(（呼）|呼)?\s*$/.test(glyph) || glyph.trim() === '',
-      `${hour} 点不该插闲话，实际是「${glyph}」`,
+      spoken.length <= 4,
+      `${hour} 点的静息话说得太多（九轮里 ${spoken.length} 次）：${spoken.join(' | ')}`,
+    )
+    assert.ok(
+      seen.length - spoken.length >= 5,
+      `${hour} 点的静息被闲话占满了：${seen.join(' | ')}`,
     )
   }
 
-  // 9. **但傍晚 / 夜里 / 深夜的静息真的会说一句**——只验证「白天不说」的话，
-  //    把闲话整段删掉测试也照样过，那就等于没测。
-  for (const hour of [2, 19, 23]) {
-    const period = 4_600 // 一轮呼吸的长度（见 `BAND_FRAME_MS.idle`）
-    const spoken = []
-    // 看四轮呼吸，至少该听到一次闲话。
-    for (let round = 0; round < 4; round += 1) {
-      spoken.push(bandWhaleGlyph('idle', at(hour) + round * period + 100))
+  // 9. **白天那档是鲸叫「哦鲸鲸」**——用户选定的方案。只验证「有台词」的话，
+  //    把它换成别的句子测试也照样过，那就等于没测。采样同样对齐轮次原点。
+  for (const hour of [7, 10, 15]) {
+    const origin = Math.floor(at(hour) / period) * period
+    const said = new Set()
+    for (let round = 0; round < 9; round += 1) {
+      const text = bandWhaleGlyph('idle', origin + (round + 1) * period - 100)
+      if (text.trim().startsWith('>')) said.add(text)
     }
+    assert.ok(said.size > 0, `${hour} 点一句都没说`)
     assert.ok(
-      spoken.some(text => text.trim().startsWith('>')),
-      `${hour} 点的静息该说一句闲话，实际四轮全是：${spoken.join(' | ')}`,
+      [...said].every(text => text.includes('哦鲸鲸')),
+      `${hour} 点的静息该是「哦鲸鲸」，实际：${[...said].join(' / ')}`,
     )
-    // 也不能整段都在说话——呼吸仍是主体。
-    assert.ok(
-      spoken.some(text => !text.trim().startsWith('>')),
-      `${hour} 点的静息被闲话占满了：${spoken.join(' | ')}`,
+    // 两句轮着说，不许九轮里永远是同一句。
+    assert.ok(said.size >= 2, `${hour} 点只说过一句：${[...said].join(' / ')}`)
+  }
+
+  // 9b. **静息档不许每轮都说。** 试过「每轮最后一拍说一句」，结果每 4.6 秒
+  //     重复一次，静息比纯呼吸还吵。现在每三轮说一次——九轮里说话的那三拍
+  //     占三分之一，且它们互不相邻。
+  {
+    // 从**轮次原点**起算：`at(hour)` 是整点，不在呼吸周期边界上；不先对齐的
+    // 话采样点会跨轮，说话那一拍就测不到了。
+    const origin = Math.floor(at(15) / period) * period
+    const spokenRounds = []
+    for (let round = 0; round < 9; round += 1) {
+      // 每轮最后一拍（`period` 末尾的 0.5 秒段）：下一轮开头前 100ms。
+      const beat = origin + (round + 1) * period - 100
+      if (bandWhaleGlyph('idle', beat).trim().startsWith('>')) spokenRounds.push(round)
+    }
+    assert.equal(
+      spokenRounds.length,
+      3,
+      `九轮里该只说三次，实际说了 ${spokenRounds.length} 次（第 ${spokenRounds.join('、')} 轮）`,
     )
+    // 说话的三轮必须是 round % 3 === 2 那一档，且隔三轮一次。
+    assert.deepEqual(
+      spokenRounds,
+      [2, 5, 8],
+      `说话轮次该是每三轮的最后一次，实际：${spokenRounds.join('、')}`,
+    )
+  }
+
+  // 10. **「哦鲸鲸」只当拟声用，不许变成口癖**：它只能出现在静息档，
+  //     不能渗进等你 / 干活 / 忙 / 想 / 压缩。
+  for (const state of ['thinking', 'working', 'busy', 'compacting']) {
+    for (const frame of bandWhaleFramesOf(state, at(15))) {
+      assert.ok(
+        !frame.includes('哦鲸鲸'),
+        `${state} 档不该出现「哦鲸鲸」：${JSON.stringify(frame)}`,
+      )
+    }
+  }
+  for (const hour of [2, 7, 10, 15, 19, 23]) {
+    for (const frame of bandWhaleFramesOf('waiting', at(hour))) {
+      assert.ok(
+        !frame.includes('哦鲸鲸'),
+        `等你档不该出现「哦鲸鲸」：${JSON.stringify(frame)}`,
+      )
+    }
   }
 })
 
