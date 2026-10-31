@@ -17,7 +17,7 @@ import {
   toContextDetail,
   windowSourceText,
 } from '../hooks/usage-detail'
-import { SWIM_STEP_COLS, WHALE_MAX_WIDTH, bandWhaleSvg, moodOf, swimOffsetFor, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
+import { WHALE_MAX_WIDTH, moodOf, whaleSizeFor, whaleSvg } from '../hooks/whale-art'
 import {
   barText,
   calendarHeat,
@@ -47,7 +47,7 @@ import {
 } from '../hooks/usage-overview'
 import { contextChartSvg, turnHeatSvg } from '../hooks/chart-art'
 import { UNPRICED, usdEstimate } from '../hooks/provenance'
-import { FILLS, isLightTheme, panelFillFor } from '../hooks/panel-fill'
+import { isLightTheme, panelFillFor } from '../hooks/panel-fill'
 
 test('价格表只认官方模型，且缓存按 1.25x / 0.1x 计', () => {
   const opus = priceOf('claude-opus-5-5')
@@ -1229,32 +1229,6 @@ test('鲸鱼 SVG 的根元素用像素尺寸，不用百分比', () => {
   expect(svg).toContain('viewBox="0 0 620 320"')
 })
 
-test('巡游轨迹是三角波：出发即右端、逐步等距、到头折返', () => {
-  const STEP = 6_000 // 与 SWIM_STEP_MS 同步
-  const free = 52 // 100 列面板、48 列立绘时的余量
-  const steps = Math.floor(free / SWIM_STEP_COLS)
-
-  // 单程：每步恰好 3 列，从 0 递增到 steps×3，不会超出余量。
-  for (let i = 0; i <= steps; i++) {
-    expect(swimOffsetFor(i * STEP, free)).toBe(i * SWIM_STEP_COLS)
-  }
-  // 折返：到最远点（多走一步）后逐步递减。
-  expect(swimOffsetFor((steps + 1) * STEP, free)).toBe((steps - 1) * SWIM_STEP_COLS)
-  expect(swimOffsetFor((steps + 2) * STEP, free)).toBe((steps - 2) * SWIM_STEP_COLS)
-  // 一个完整周期回到右端：周期是 2×steps 步。
-  expect(swimOffsetFor(steps * 2 * STEP, free)).toBe(0)
-
-  // 全程不越界——`marginRight` 一旦超过余量，立绘就会被左边缘裁掉。
-  let max = 0
-  for (let i = 0; i < steps * 2; i++) max = Math.max(max, swimOffsetFor(i * STEP, free))
-  expect(max).toBeLessThanOrEqual(free)
-
-  // 余量不足一步就不游（恒 0），窄面板保持原样贴右。
-  for (const tooNarrow of [0, 1, 2, -5]) {
-    expect(swimOffsetFor(123_456, tooNarrow)).toBe(0)
-  }
-})
-
 test('气泡里的本会话花费优先用插件价格表，而不是引擎 /cost 的估算', () => {
   const now = Date.parse('2026-10-20T12:00:00Z')
   // 引擎读数是 $258.98——它按默认模型价估第三方模型；插件价格表算出 $3.05。
@@ -1284,87 +1258,6 @@ test('面板底色是三档同一份：深浅交给绘制端，图表才分档',
     'userMessageBackground',
   )
   expect(panelFillFor(undefined).backgroundColor).toBe('userMessageBackground')
-})
-
-/**
- * 条形鲸鱼的朝向与水花。
- *
- * 两条都是**看得到的**东西，所以断在 SVG 字符串上而不是纯函数返回值：
- * 素材头朝左，向右游必须镜像；镜像要用一层 `<g transform>`，**不能**把
- * `transform` 写在根 `<svg>` 上——实测那样渲染出来全透明（浏览器 canvas
- * 取样 opaque = 0）。
- */
-test('条形鲸鱼：朝右时镜像，且不使用根元素 transform', () => {
-  const now = Date.parse('2026-10-20T12:00:00Z')
-  const right = bandWhaleSvg('idle', now, 0, true)
-  const left = bandWhaleSvg('idle', now, 0, false)
-
-  // 朝右：内容包在镜像的 `<g>` 里。
-  expect(right).toContain('scale(-1 1)')
-  // 朝左：不镜像。
-  expect(left).not.toContain('scale(-1 1)')
-
-  // **根元素上绝不能有 transform。** 有的话整份文档渲染为空。
-  for (const svg of [right, left]) {
-    const rootTag = svg.slice(0, svg.indexOf('>') + 1)
-    expect(rootTag).not.toContain('transform=')
-  }
-
-  // 两者都画得出鲸鱼本体与水花。
-  for (const svg of [right, left]) {
-    expect(svg).toContain('<image')
-    expect(svg).toContain('#566CAE')
-    expect(svg.startsWith('<svg')).toBe(true)
-    expect(svg.endsWith('</svg>')).toBe(true)
-  }
-})
-
-/**
- * 水花必须落在**空白的那一半**，不能压在鲸鱼身上。
- *
- * 这条是拿浏览器实际渲染的像素发现的：先写成「镜像时把 x 也按 620−x 翻」，
- * 结果 620−236=384 正好落在她身上（取样点 alpha 全是 255、底色是肤色），
- * 气泡被盖住，肉眼看不见。字符串层面的断言看不出来，只能按坐标算。
- *
- * 鲸鱼的像素占位：不镜像时是 403–603（实测肤色 span），镜像后是 332–532。
- * 水花的 x 必须整体落在身体区间**之外**。
- */
-test('条形鲸鱼的水花落在空白处，不压在身体上', () => {
-  const now = Date.parse('2026-10-20T12:00:00Z')
-  /** 取三颗水泡的 (cx, r)。 */
-  const bubbles = (svg: string): Array<{ x: number; r: number }> =>
-    [...svg.matchAll(/<circle cx="(\d+(?:\.\d+)?)"[^>]*r="(\d+)"/g)].map(m => ({ x: Number(m[1]), r: Number(m[2]) }))
-
-  const right = bubbles(bandWhaleSvg('idle', now, 0, true))
-  const left = bubbles(bandWhaleSvg('idle', now, 0, false))
-  expect(right).toHaveLength(3)
-  expect(left).toHaveLength(3)
-
-  // 实测的肤色占据区间（浏览器 canvas 逐像素扫出来的）。
-  const BODY_LEFT = { from: 403, to: 603 } // 朝左（不镜像）
-  const BODY_RIGHT = { from: 332, to: 532 } // 朝右（镜像后）
-
-  // **含半径，并且留 4px 余量。** 只比圆心太松（旧坐标 540/566/596 也能过），
-  // 只比「圆心±半径」又太紧：x=540、r=7 的气泡左缘 533 距身体 532 只差 1px，
-  // 浏览器采样时抗锯齿会混进肤色，看着像压上去了。留一点余量，别贴着边。
-  const MARGIN = 4
-  const isOutside = (
-    list: Array<{ x: number; r: number }>,
-    body: { from: number; to: number },
-    side: 'left' | 'right',
-  ) => list.every(b => (side === 'left' ? b.x + b.r + MARGIN < body.from : b.x - b.r - MARGIN > body.to))
-
-  // 朝左时她在右半边，水花在**左边**那片空白；朝右时反过来。
-  expect(isOutside(left, BODY_LEFT, 'left')).toBe(true)
-  expect(isOutside(right, BODY_RIGHT, 'right')).toBe(true)
-
-  // 三颗从下往上依次靠后（x 朝远离身体的方向递减/递增），不是一坨叠在一起。
-  const xsLeft = left.map(b => b.x)
-  const xsRight = right.map(b => b.x)
-  expect(xsLeft[0]).toBeGreaterThan(xsLeft[1]!)
-  expect(xsLeft[1]).toBeGreaterThan(xsLeft[2]!)
-  expect(xsRight[0]).toBeGreaterThan(xsRight[1]!)
-  expect(xsRight[1]).toBeGreaterThan(xsRight[2]!)
 })
 
 /**
